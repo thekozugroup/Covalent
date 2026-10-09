@@ -137,6 +137,7 @@ fi
 # and handed to the credentialed promotion job only with checksums and its
 # locally reconstructed index digest.
 container_workflow=.github/workflows/container-supply-chain.yml
+./scripts/test-container-build-repair.sh
 ./scripts/test-container-index.sh
 grep -q 'outputs: type=docker,dest=${{ runner.temp }}/covalent-' "$container_workflow"
 grep -Fq "'\${{ steps.private-images.outputs.amd64_image_id }}'" "$container_workflow"

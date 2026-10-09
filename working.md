@@ -22,7 +22,21 @@ Bitmask grouping is now explicit, the unused instrumentation variable is removed
 and Wi-Fi tracking uses callback-observed networks instead of the deprecated list.
 Three singleton equality findings (#17, #18, #25) were reviewed against javap output
 and dismissed as compiler-generated false positives. The repository-wide zero-open
-CodeQL gate remains unchanged; default-branch analysis must confirm closure.
+CodeQL gate remains unchanged; default-branch analysis confirms zero open findings.
+
+All source gates passed at `7bb83c27ed56d2b78517845db7bdf1757b80fbe1`.
+The exact signed minified APK passes startup, restart and navigation on API 36.
+Hosted API 37 passes 86 baseline tests and the complete SAF journey. Its first
+attempt's emulator window-focus failure remains recorded; the same-source retry
+passed. The signed v0.2.12 tag is pushed and eleven Android assets are attached
+to draft release 408349077.
+
+Docker Hub rate-limited three container publication attempts before any promotion.
+The build repair uses Google's mirror with the same pinned image hashes and
+checks out the immutable runtime into a separate source directory. A dedicated
+signed repair tag is accepted only for v0.2.12 and its exact checked runtime SHA.
+All scan, signing, attestation and promotion gates remain required. CLI and macOS
+publication continue against the original runtime tag.
 
 Acceptance gates:
 

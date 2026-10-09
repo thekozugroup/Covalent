@@ -267,6 +267,10 @@ jobs:
       - name: Enable and prove KVM acceleration
         run: ./scripts/require-kvm-acceleration.sh
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+        with:
+          buildkitd-config-inline: |
+            [registry."docker.io"]
+              mirrors = ["mirror.gcr.io"]
       - name: Compute the exact Docker source fingerprint
         id: android-docker-source
         run: |
@@ -696,6 +700,10 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+        with:
+          buildkitd-config-inline: |
+            [registry."docker.io"]
+              mirrors = ["mirror.gcr.io"]
       # The six gates below used to run after a `--platform linux/arm64` build in
       # this same job. That build is QEMU-emulated and is the slowest step in the
       # workflow, so across 27 runs on main it consumed the job and none of these
@@ -785,6 +793,10 @@ jobs:
       # No setup-qemu-action: the runner is already arm64, so linux/arm64 is
       # this machine's native platform and there is nothing left to emulate.
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+        with:
+          buildkitd-config-inline: |
+            [registry."docker.io"]
+              mirrors = ["mirror.gcr.io"]
       - name: Compute the exact Docker source fingerprint
         id: docker-source
         run: |

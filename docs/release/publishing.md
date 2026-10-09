@@ -70,6 +70,37 @@ The verified v0.2.1 container digest is
 `sha256:393f8a0dafa7f17d8ad964d501f3d33668d547889dc493080e042489ee3e1677`;
 use the matching `covalent-container-digest.txt` when completing step 11.
 
+## v0.2.12 registry build repair
+
+The signed runtime tag `v0.2.12` remains at
+`7bb83c27ed56d2b78517845db7bdf1757b80fbe1`. All eleven source gates passed,
+including 202 Android unit tests and the 87-test API 37 suite. Its first
+container publication attempts failed on Docker Hub HTTP 429 responses before
+any public image promotion.
+
+The separate signed `release-tools-v0.2.12-container` tag repairs only the build
+and publication process. Dispatch `container-supply-chain.yml` from that tag
+with `version=v0.2.12` and no `artifact_run_id`. The repair gate accepts only
+this runtime SHA, version and annotated signed repair tag; it also verifies the
+repair commit's signature. Other releases continue to use their normal signed
+version tag. The historical v0.2.1 archive-recovery exception stays unchanged.
+
+The builder checks out the original runtime into `release-source`, fingerprints
+it before and after the build, and labels both images with that runtime SHA.
+BuildKit uses [Docker's documented mirror configuration](https://docs.docker.com/build/ci/github-actions/configure-builder/#registry-mirror).
+The original Go, Rust and Alpine image digests remain pinned. Google's mirror
+returned the exact index hashes for all three. The temporary registry has a
+fallback to the same pinned digest on the mirror. Both architecture scans,
+checksummed handoff, signatures, exact SBOM attestations and immutable promotion
+rules remain required.
+
+The container's exact GitHub OIDC identity is
+`https://github.com/thekozugroup/Covalent/.github/workflows/container-supply-chain.yml@refs/tags/release-tools-v0.2.12-container`,
+with issuer `https://token.actions.githubusercontent.com`. CLI artifacts retain
+their normal `refs/tags/v0.2.12` identity. Do not replace either with a branch or
+an identity regular expression. The completed container digest receipt records
+its runtime commit and the repair signing identity separately.
+
 ## The version of record
 
 `Cargo.toml` `[workspace.package] version` is the single source of truth.
