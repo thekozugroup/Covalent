@@ -62,9 +62,23 @@ jobs:
       - uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2
-        with:
-          command: check advisories bans licenses sources
+      # The Docker-based action fetched its Rust image before any job step and
+      # hit Docker Hub rate limits. Use the same checker version and arguments
+      # from its checksum-pinned upstream native release instead.
+      - name: Check Rust advisories, bans, licenses and sources
+        run: |
+          set -euo pipefail
+          deny_version=0.20.2
+          deny_platform=x86_64-unknown-linux-musl
+          deny_archive="${RUNNER_TEMP}/cargo-deny-${deny_version}-${deny_platform}.tar.gz"
+          curl --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 \
+            --retry 3 --output "${deny_archive}" \
+            "https://github.com/EmbarkStudios/cargo-deny/releases/download/${deny_version}/cargo-deny-${deny_version}-${deny_platform}.tar.gz"
+          printf '%s  %s\n' 9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f "${deny_archive}" | sha256sum --check --strict
+          tar -xzf "${deny_archive}" -C "${RUNNER_TEMP}" "cargo-deny-${deny_version}-${deny_platform}/cargo-deny"
+          deny_binary="${RUNNER_TEMP}/cargo-deny-${deny_version}-${deny_platform}/cargo-deny"
+          test "$("${deny_binary}" --version)" = "cargo-deny ${deny_version}"
+          "${deny_binary}" --log-level warn --manifest-path ./Cargo.toml --all-features check advisories bans licenses sources
       - run: cargo build --locked --release -p covalent-node -p covalent-cli
       - run: ./scripts/check-artifact-budgets.sh
       - uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0

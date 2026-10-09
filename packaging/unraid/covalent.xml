@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <Container version="2">
   <Name>Covalent</Name>
-  <Repository>ghcr.io/thekozugroup/covalent:stable</Repository>
+  <Repository>ghcr.io/thekozugroup/covalent@sha256:13c4af3464fe5cc92f8ebdf3b613dd3677b63bf983ef99edbcab28325bfa8de7</Repository>
   <Registry>https://github.com/thekozugroup/Covalent/pkgs/container/covalent</Registry>
   <TemplateURL>https://raw.githubusercontent.com/thekozugroup/Covalent/main/packaging/unraid/covalent.xml</TemplateURL>
   <Network>bridge</Network>
@@ -23,7 +23,7 @@
 
 KEK_DIR=/mnt/user/system/covalent-secrets
 install -d -o 99 -g 100 -m 700 "$KEK_DIR"
-docker run --rm --user 99:100 -v "$KEK_DIR:/secrets:rw" ghcr.io/thekozugroup/covalent:stable provision-key --key-file /secrets/key-encryption-key
+docker run --rm --user 99:100 -v "$KEK_DIR:/secrets:rw" ghcr.io/thekozugroup/covalent@sha256:13c4af3464fe5cc92f8ebdf3b613dd3677b63bf983ef99edbcab28325bfa8de7 provision-key --key-file /secrets/key-encryption-key
 
 Do not put this KEK in /data or /config. The command creates the key as the same fixed non-root UID/GID (`99:100`) used by this template, so its `0600` mode remains readable without broadening permissions. Keep its file mode 0600 and KEK version 1. Copying appdata without the separate KEK remains locked, and a backup must never contain both the encrypted state and its only KEK. Covalent never silently creates or replaces it.
 

@@ -54,10 +54,7 @@ open with other apps. No hosted Covalent account or subscription is required.
 Start with [Create your first one-way link][first-link]. Pairing alone shares
 no files; the receiving device must accept each share.
 
-The current public native packages are **v0.2.1**, for personal use. The Mac app
-is ad-hoc signed and not notarized; the Android APK is debug-signed. Follow the
-platform guide to verify and install the correct package. Newer draft releases
-are not public downloads.
+The current public packages are **[v0.2.12](https://github.com/thekozugroup/Covalent/releases/tag/v0.2.12)**, for personal use. The Mac app is ad-hoc signed and not notarized; the Android APK is minified, non-debuggable and signed with the personal release certificate. Android installations from v0.2.1 use a different certificate and require a planned migration. Follow the platform guide before updating.
 
 <details>
 <summary>Installing on a server</summary>
@@ -87,8 +84,7 @@ and deletion settings; its owner chooses where the files belong.
 <img alt="The Music share with Laptop selected in the inline Add recipient form" src="docs/website/screenshots/03-add-recipient.jpg" width="100%">
 
 *Current server interface with example devices and data. These are web-console
-captures; native apps have their own interfaces. The pictured console is newer
-than the v0.2.1 native packages.*
+captures; native apps have their own interfaces.*
 
 The [product preview pack](docs/website/mockups/README.md) includes the latest
 desktop hero, a real native Android setup capture in a Pixel 6 frame, and previews
@@ -141,8 +137,7 @@ Read the [link behavior and safety guide][link-behavior] before enabling deletio
 | Unraid | Docker web console | [Unraid guide][unraid-setup] |
 | Linux Docker · amd64 / arm64 | Responsive web console | [Docker guide][docker-setup] |
 
-Android release evidence uses an Android 17 / API 37 emulator. The manifest
-allows API 26+, but older versions and physical phones are not release-tested.
+Android 17 / API 37 covers the hosted sync journey. The exact signed v0.2.12 APK also passes startup, restart and navigation on an Android 16 / API 36 emulator. Earlier physical-phone evidence is identified separately in the release receipt. The manifest allows API 26+; other versions are not covered by this release.
 Unraid has an importable template; a Community Applications listing is not yet
 available. Intel Mac, iOS, and Windows clients are unsupported.
 
@@ -219,7 +214,7 @@ For vulnerabilities, follow [SECURITY.md](SECURITY.md) and report privately.
 [requirements]: https://github.com/thekozugroup/Covalent/blob/9088b50416f686d533d75e27b8d89804dab51139/docs/product/requirements.md
 [design]: https://github.com/thekozugroup/Covalent/blob/9088b50416f686d533d75e27b8d89804dab51139/DESIGN.md
 [troubleshooting]: https://github.com/thekozugroup/Covalent/blob/9088b50416f686d533d75e27b8d89804dab51139/docs/troubleshooting.md
-[release-notes]: https://github.com/thekozugroup/Covalent/tree/9088b50416f686d533d75e27b8d89804dab51139/docs/release/notes
-[release-evidence]: https://github.com/thekozugroup/Covalent/blob/9088b50416f686d533d75e27b8d89804dab51139/docs/release/completion-progress.md
+[release-notes]: https://github.com/thekozugroup/Covalent/blob/7bb83c27ed56d2b78517845db7bdf1757b80fbe1/docs/release/notes/v0.2.12.md
+[release-evidence]: docs/release/0.2.12-status.md
 [website-pack]: docs/website/HANDOFF.md
 [legacy-backups]: https://github.com/thekozugroup/Covalent/blob/9088b50416f686d533d75e27b8d89804dab51139/docs/getting-started.md

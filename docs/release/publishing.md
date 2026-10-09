@@ -10,9 +10,9 @@ GitHub Release for the tag.
 | macOS, unsigned | `apple-unsigned-release.yml` | `push` tag `v*` | none |
 | Trusted CLI | `cli-release.yml` | `push` tag `v*` | GitHub OIDC keyless signing |
 
-The installable debug-signed Android APK is built through the personal-use setup
+The installable signed Android APK is built through the personal-use setup
 path, tested, and attached to the same draft release with its checksum and build
-evidence. Android production signing is deferred. The Apple
+evidence. v0.2.12 uses the minified, non-debuggable personal release certificate; include its upgrade note for older debug-signed installations. Android production signing is deferred. The Apple
 Developer ID/notarization workflow is outside this release scope and must not
 be run.
 
@@ -100,6 +100,13 @@ with issuer `https://token.actions.githubusercontent.com`. CLI artifacts retain
 their normal `refs/tags/v0.2.12` identity. Do not replace either with a branch or
 an identity regular expression. The completed container digest receipt records
 its runtime commit and the repair signing identity separately.
+
+The first mirror repair still timed out while the Docker daemon fetched BuildKit
+from Docker Hub, before the configured mirror could run. The second immutable
+repair tag pins the BuildKit multi-platform image from the mirror at
+`sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea`.
+The first repair tag remains unchanged. The signed runtime tag and its Docker
+source inputs remain unchanged.
 
 ## The version of record
 
@@ -261,9 +268,9 @@ Confirm with an unauthenticated pull by digest:
 ```sh
 docker logout ghcr.io
 # Use the digest file from the completed, verified release lane.
-digest=$(cat covalent-container-digest.txt)
-printf '%s\n' "$digest" | grep -Eq '^sha256:[0-9a-f]{64}$' || exit 1
-docker pull "ghcr.io/thekozugroup/covalent@$digest"
+digest=$(sed -n 's/^digest: //p' covalent-container-digest.txt)
+printf '%s\n' "$digest" | grep -Eq '^ghcr\.io/thekozugroup/covalent@sha256:[0-9a-f]{64}$' || exit 1
+docker pull "$digest"
 ```
 
 ### macOS personal-use package
@@ -280,10 +287,3 @@ in [the macOS setup guide](../platform/macos.md).
 After the GHCR package is public, submit `packaging/unraid/covalent.xml` to the
 Community Applications template feed. That is a human review cycle, not an
 automatable step.
-
-The first mirror repair still timed out while the Docker daemon fetched BuildKit
-from Docker Hub, before the configured mirror could run. The second immutable
-repair tag pins the BuildKit multi-platform image from the mirror at
-`sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea`.
-The first repair tag remains unchanged. The signed runtime tag and its Docker
-source inputs remain unchanged.

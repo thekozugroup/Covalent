@@ -71,7 +71,7 @@ grep -Fq 'require_mode /run/secrets/covalent-kek ro' scripts/validate-unraid-tem
 historical_image_digest='sha256:8b8b96bdea7437fecf6d9c3297c248fd9de7eeb25fe7d701aa6f0a5b633cf8a6'
 current_image_digest='sha256:393f8a0dafa7f17d8ad964d501f3d33668d547889dc493080e042489ee3e1677'
 image_digest=$(sed -n 's|^[[:space:]]*<Repository>.*@\(sha256:[0-9a-f]*\)</Repository>[[:space:]]*$|\1|p' packaging/unraid/covalent.xml)
-grep -Fq '<Repository>ghcr.io/thekozugroup/covalent:stable</Repository>' packaging/unraid/covalent.xml
+grep -Eq '^[[:space:]]*<Repository>ghcr\.io/thekozugroup/covalent(:stable|@sha256:[0-9a-f]{64})</Repository>[[:space:]]*$' packaging/unraid/covalent.xml
 grep -Fq "$historical_image_digest" docs/release/notes/v0.1.0.md
 grep -Fq "$historical_image_digest" docs/platform/atlas-tailscale.md
 grep -Eq '^\[docker-setup\]: https://github.com/thekozugroup/Covalent/blob/[a-f0-9]{40}/packaging/docker/README.md$' README.md
@@ -426,11 +426,11 @@ grep -q 'must be an annotated tag' scripts/verify-release-commit-signature.sh
 grep -q 'git tag -s' scripts/verify-release-commit-signature.sh
 grep -q 'historical unsigned annotated tag is grandfathered' scripts/verify-release-commit-signature.sh
 grep -Fq 'No Android artifact is published in this release.' docs/release/notes/v0.1.0.md
-grep -Fq 'public native packages are **v0.2.1**, for personal use' README.md
+grep -Fq 'public packages are **[v0.2.12](https://github.com/thekozugroup/Covalent/releases/tag/v0.2.12)**' README.md
 grep -Fq 'https://github.com/thekozugroup/Covalent/releases/latest' README.md
 grep -Fq 'ad-hoc signed and not notarized' README.md
-grep -Fq 'Android APK is debug-signed' README.md
-grep -Fq 'published v0.2.1 CLI archives' docs/release/cli-install.md
+grep -Fq 'Android APK is minified, non-debuggable and signed with the personal release certificate' README.md
+grep -Fq 'published v0.2.12 CLI archives' docs/release/cli-install.md
 if grep -q 'no active deployable release for the current KEK and trusted-claim' README.md; then
   echo "README must describe current release availability" >&2
   exit 1

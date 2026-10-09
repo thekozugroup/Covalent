@@ -2,57 +2,28 @@
 
 Updated: 2026-10-09
 
-The owner authorized merging Covalent into main and publishing a new release.
-PR 45 is merged at adafa5375f9a14ec3fecbc4641b2dbcb13c1f432. Its exact-source
-CI and CodeQL passed, including 86 API 37 baseline tests and the full SAF journey.
+Merged into main and published [v0.2.12](https://github.com/thekozugroup/Covalent/releases/tag/v0.2.12) with all 36 assets
+verified. Runtime is `7bb83c27ed56d2b78517845db7bdf1757b80fbe1`; its signed tag remains immutable. PRs 45/46
+contain the integration and removal/startup correction. PRs 48/49 contain
+source-bound publishing repairs.
 
-The additional local arm64 journey exposed a real interrupted-removal gap:
-preparing a removal can restart the local service, leaving the durable tombstone
-unreplayed on startup. The source remained running and its removal stayed pending.
-The v0.2.11 tag remains immutable; its draft is not published and its container
-lane was cancelled before promotion. Final release advances to v0.2.12.
+[The release record](docs/release/0.2.12-status.md) contains exact source/tag
+identities, CI and publication runs, APK hash/certificates, container digest,
+verification scope and retained failure evidence.
 
-The correction replays exact saved removals with the fresh runtime, retains
-tombstones until acknowledgement is durable, and serializes startup/interactive
-capability changes. Three new regression tests fail on the previous code and pass after correction;
-the existing capability-repair and lifecycle tests also pass.
+Completed: 202 Android unit tests, 86 hosted API 37 baseline tests and the full
+SAF journey; exact signed minified APK startup/restart/navigation on API 36;
+CLI workflow signatures/SBOM attestations; strict ad-hoc Mac app verification;
+all container source, private-scan, signature, SBOM and promotion checks; all
+asset checksums. Install guides now target the published release and the
+Unraid template pins its verified immutable image digest.
 
-The default-branch CodeQL scan exposed nine actionable warnings after integration.
-Bitmask grouping is now explicit, the unused instrumentation variable is removed,
-and Wi-Fi tracking uses callback-observed networks instead of the deprecated list.
-Three singleton equality findings (#17, #18, #25) were reviewed against javap output
-and dismissed as compiler-generated false positives. The repository-wide zero-open
-CodeQL gate remains unchanged; default-branch analysis confirms zero open findings.
+Future CI uses the same cargo-deny 0.20.2 checker and all-feature policy through
+a checksum-pinned native archive, avoiding the Docker-based action's startup
+rate limit. The publishing repair pins BuildKit from a verified mirror; all
+scan and signing requirements remain enabled.
 
-All source gates passed at `7bb83c27ed56d2b78517845db7bdf1757b80fbe1`.
-The exact signed minified APK passes startup, restart and navigation on API 36.
-Hosted API 37 passes 86 baseline tests and the complete SAF journey. Its first
-attempt's emulator window-focus failure remains recorded; the same-source retry
-passed. The signed v0.2.12 tag is pushed and eleven Android assets are attached
-to draft release 408349077.
-
-Docker Hub rate-limited three container publication attempts before any promotion.
-The build repair uses Google's mirror with the same pinned image hashes and
-checks out the immutable runtime into a separate source directory. A dedicated
-signed repair tag is accepted only for v0.2.12 and its exact checked runtime SHA.
-All scan, signing, attestation and promotion gates remain required. CLI and macOS
-publication continue against the original runtime tag.
-
-Acceptance gates:
-
-1. Corrected source passes unit/lint/package checks, targeted persisted-removal
-   recovery on the owned API 37 arm64 emulator, and the complete hosted suite.
-2. Merge the signed checked correction into main preserving the owner identity.
-3. Create a signed immutable v0.2.12 tag and complete CLI, macOS and container lanes.
-4. Rebuild and test the exact signed minified APK, verify every draft asset and
-   signature, then publish the complete release. Record exact-source evidence.
-5. Pin the verified published container digest and commit final release status.
-
-Pi acceptance remains separate: Pictures journal recovery, full-folder completion,
-nearby discovery and cellular handoff. Never delete originals based only on sync
-completion. No Pi image is flashed as part of this release.
-
-The initial signed repair passed source verification but two attempts timed out
-fetching the BuildKit tool from Docker Hub. The second repair also pins that
-builder from the mirror; it retains the original immutable runtime source and
-requires a new signed repair tag. macOS publication is waiting for a hosted runner.
+Next: safe Pictures journal recovery, full-folder completion, phone-to-Pi
+nearby discovery and cellular handoff, plus the separate GPhoto OS acceptance
+gates. Preserve originals and account/pairing state. No Pi drive was flashed
+as part of this Covalent release.

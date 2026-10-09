@@ -1,7 +1,7 @@
 # Install the Covalent CLI
 
 No verified CLI archive is published with the historical v0.1.0 release. This
-guide applies to the published v0.2.1 CLI archives, checksums, and Sigstore
+guide applies to the published v0.2.12 CLI archives, checksums, and Sigstore
 bundles. Do not use a v0.1.0 archive to claim a current server.
 
 The archive is the supported way to run `covalent claim` on a trusted Mac or
@@ -33,7 +33,7 @@ On macOS, `shasum` is already installed. On Linux use `sha256sum` when
 available; `shasum -a 256` is an equivalent portable fallback.
 
 ```sh
-version=v0.2.1
+version=v0.2.12
 platform=macos-arm64 # or linux-amd64, linux-arm64
 archive="Covalent-${version}-${platform}.tar.gz"
 manifest="Covalent-${version}-${platform}-SHA256SUMS.txt"

@@ -5,10 +5,8 @@ private Covalent node automatically. Use the build and installation steps below,
 then [create a one-way link](../getting-started-links.md). Pair a destination
 with the Mac's local node; keep the app connected to its own node.
 
-v0.2.1 is available as a personal-use release. The
-[release ledger](../release/completion-progress.md) records native Mac and
-server-transfer acceptance under the owner's reduced threshold and retains
-historical UI findings. This does not verify a new source build.
+v0.2.12 is available as a personal-use release. The
+[v0.2.12 verification record](../release/0.2.12-status.md) identifies the exact source, archive checks and hosted tests. Historical native Mac and server-transfer acceptance remains in the [release ledger](../release/completion-progress.md). This does not verify a new source build.
 
 ## Before you start
 
@@ -39,21 +37,21 @@ the app inside still has the ad-hoc code signature verified below.
 
 ### Download the verified release build
 
-Download the v0.2.1 macOS assets from the official release page. The historical
+Download the v0.2.12 macOS assets from the official release page. The historical
 v0.1.0 archive is not a current Covalent setup.
 
 From the official
 [GitHub Releases page](https://github.com/thekozugroup/Covalent/releases),
 download both files for the same version:
 
-- `Covalent-v0.2.1-macOS-arm64-unsigned.zip`
-- `Covalent-v0.2.1-macOS-arm64-unsigned.zip.sha256`
+- `Covalent-v0.2.12-macOS-arm64-unsigned.zip`
+- `Covalent-v0.2.12-macOS-arm64-unsigned.zip.sha256`
 
 In Terminal, verify the download:
 
 ```sh
 cd "$HOME/Downloads"
-version=v0.2.1
+version=v0.2.12
 archive="Covalent-${version}-macOS-arm64-unsigned.zip"
 checksum="${archive}.sha256"
 test -f "$archive" && test -f "$checksum"

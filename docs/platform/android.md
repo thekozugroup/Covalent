@@ -5,48 +5,30 @@ Install the published personal APK, or build from source, then follow
 use Android's system folder picker. Folder links pair devices directly; legacy
 server enrollment is optional.
 
-The published v0.2.1 APK is debug-signed for personal use, not production-signed.
-Source builds use your computer's debug key. Different signers cannot update
-each other. Never install `app-release-unsigned.apk`; an unsigned release APK is
-not an alternative.
+The published v0.2.12 APK is minified, non-debuggable and signed with the personal release certificate. This is a personal-use package, not a store release. Source debug builds use a different key. Android cannot update between different signers. Never install `app-release-unsigned.apk`; an unsigned release is not an installable alternative.
 
-Android 17 / API 37 is the supported and release-tested target. The manifest
-allows API 26 and later, but older Android versions are not Tier 1 release
-evidence.
+The hosted sync journey uses Android 17 / API 37. The exact signed APK also passes startup, restart and navigation on Android 16 / API 36. These emulator checks do not certify every physical device or the Raspberry Pi appliance.
 
-## Download and install v0.2.1
+## Download and install v0.2.12
 
-For v0.2.1, download the published
-[debug-signed personal APK](https://github.com/thekozugroup/Covalent/releases/download/v0.2.1/Covalent-v0.2.1-android-personal-debug-7157b555a2c9f684.apk)
-and its
-[SHA-256 checksum](https://github.com/thekozugroup/Covalent/releases/download/v0.2.1/Covalent-v0.2.1-android-personal-debug-7157b555a2c9f684.apk.sha256).
-This is a personal-use debug APK, not a production-signed package.
-
-Download both files into the same folder and verify the checksum there:
+Download the [signed personal APK](https://github.com/thekozugroup/Covalent/releases/download/v0.2.12/Covalent-v0.2.12-android-personal-release-ae22815a70ec1480.apk) and its [SHA-256 checksum](https://github.com/thekozugroup/Covalent/releases/download/v0.2.12/Covalent-v0.2.12-android-personal-release-ae22815a70ec1480.apk.sha256) into the same folder.
 
 ```sh
-shasum -a 256 -c Covalent-v0.2.1-android-personal-debug-7157b555a2c9f684.apk.sha256
+shasum -a 256 -c Covalent-v0.2.12-android-personal-release-ae22815a70ec1480.apk.sha256
 ```
 
-Continue only when it prints `OK`. Transfer the verified APK to the phone,
-open it from the Files app, and use Android's installer. If Android requires
-permission to install from that app, grant it only to the app opening this APK
-and remove it afterward. Alternatively, install through `adb` on a trusted
-computer with one explicitly selected device:
+Continue only when it prints `OK`. Open the verified APK from Android's Files app and use the installer. Grant installation permission only to the app opening this APK and remove it afterward. For a new install through a trusted computer:
 
 ```sh
 adb devices
-adb -s DEVICE_SERIAL install Covalent-v0.2.1-android-personal-debug-7157b555a2c9f684.apk
+adb -s DEVICE_SERIAL install Covalent-v0.2.12-android-personal-release-ae22815a70ec1480.apk
 ```
 
-Replace `DEVICE_SERIAL` with that device's exact serial. This command is for a
-new install. Read [Install or update](#install-or-update) before replacing an
-existing installation; do not uninstall to bypass a signer mismatch. Then
-[pair a device and create a link](#pair-a-device-and-create-a-link).
+Replace `DEVICE_SERIAL` with the exact device serial. For an existing installation signed with the same certificate, use `install -r` to preserve app data.
 
-Current acceptance is API 37 emulator evidence, not physical-phone validation.
-See the [release ledger](../release/completion-progress.md) for accepted scope
-and retained historical failures.
+**Before updating v0.2.1:** its public debug APK uses a different certificate, so Android rejects an in-place update. Do not uninstall to bypass this. Preserve configuration, pairing identities and original files, then plan a migration; Android folder grants must be selected again after a reinstall. Read the [release upgrade note](https://github.com/thekozugroup/Covalent/releases/download/v0.2.12/Covalent-v0.2.12-android-upgrade.md), including both certificate fingerprints. Never remove originals just because a sync completed.
+
+Then [pair a device and create a link](#pair-a-device-and-create-a-link). The [v0.2.12 verification record](../release/0.2.12-status.md) identifies the exact source, APK and tested scope.
 
 ## Optional: build from source
 

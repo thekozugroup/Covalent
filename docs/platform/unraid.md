@@ -3,7 +3,7 @@
 Docker is the supported Unraid installation for the current
 [one-way link product](../product/synchronization.md). Import
 [`packaging/unraid/covalent.xml`](../../packaging/unraid/covalent.xml): the app
-is named **Covalent** and follows `ghcr.io/thekozugroup/covalent:stable`.
+is named **Covalent** and pins the verified v0.2.12 image digest. Select `ghcr.io/thekozugroup/covalent:stable` in Unraid's Repository field if you want signed channel updates.
 Waypoint has been tested; Atlas is offline. Community Applications listing
 is not yet available.
 
@@ -18,7 +18,7 @@ For online Tailnet devices in **Add device**, enable the
 configuration mount and a persistent User Scripts schedule, without granting
 the container access to the host Tailscale socket.
 
-Use Unraid's **Docker → Check for Updates → Update** normally. For unattended
+The imported template pins one verified release. To enable channel updates, set its Repository field to `ghcr.io/thekozugroup/covalent:stable`, preserving all other settings. Use Unraid's **Docker → Check for Updates → Update** normally. For unattended
 updates, select only **Covalent** in Unraid's Auto Update Applications plugin,
 or run the [scoped Watchtower updater](../../packaging/docker/README.md#release-installation)
 on the same Docker host. Use one updater, not both. The template includes its
@@ -32,8 +32,7 @@ Do not give Covalent the Docker socket. Only the optional updater needs it.
 
 ## Setting up
 
-Import the current template from this checkout. Its `stable` channel contains
-only images promoted by the signed container release workflow.
+Import the current template from this checkout. Its immutable digest is recorded in [v0.2.12 verification](../release/0.2.12-status.md). The optional `stable` channel contains only images promoted by the signed container release workflow.
 
 1. **Provision and escrow the KEK before installing or applying a template.**
    The reserved path is `/mnt/user/system/covalent-secrets`. It is never a
@@ -58,8 +57,7 @@ only images promoted by the signed container release workflow.
    and verify one byte-for-byte offline escrow copy on encrypted removable media
    that is never mounted into Covalent. Exclude the live KEK from every host and
    Covalent backup.
-2. Confirm the template repository is `ghcr.io/thekozugroup/covalent:stable`,
-   then import it manually. Keep existing paths when updating an installation.
+2. Confirm the template Repository matches the verified digest in the release record, then import it manually. Use `ghcr.io/thekozugroup/covalent:stable` for channel updates. Keep existing paths when updating an installation.
 3. Set **HTTPS hostname** to the exact name clients use, such as `tower.local`.
 4. Map **Configuration** to `/mnt/user/appdata/covalent/config` and **Encrypted
    storage** to `/mnt/user/appdata/covalent/data`. Create the writable paths
