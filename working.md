@@ -1,36 +1,40 @@
-# Covalent 0.2.4 release
+# Covalent 0.2.11 release
 
 Updated: 2026-10-09
 
 The owner authorized merging the functioning Covalent work to main and making
-a new release. `codex/release-0.2.4` integrates production-readiness and the
-Android appliance/mobile improvements over the current main commit. Existing
-main presentation and CI setup changes are preserved. Six integration conflicts
-retain the newer runtime and security source; the duplicate merged CodeQL YAML
-key is removed.
+a new release. PR 45 integrates production-readiness and Android appliance/mobile
+improvements over main, preserving the current presentation and CI setup work.
 
 Completed preparation:
 
-- Native package versions and workspace lockfile agree on 0.2.4 / build 2004.
-- Release version checking no longer loses a failed Android/Apple assertion
-  when checking workspace dependencies. Isolated regression fixtures reject
-  each version drift without modifying the checkout.
-- Release notes distinguish Covalent validation from remaining Pi acceptance.
-- All workflow mappings have unique YAML keys; integration has no unresolved
-  conflicts or whitespace errors.
+- Native versions and lockfile agree on 0.2.11 / build 2011. The public container
+  stable channel is already container-v0.2.10; 0.2.11 advances both channels
+  without bypassing the downgrade guard.
+- Release version checking preserves Android/Apple failures. Regression fixtures
+  reject version drift without modifying the checkout.
+- GitHub verifies the release signing key. Both author and committer use the
+  owner's email; no AI attribution is added.
+- Android first-launch tests now assert the saved-links heading and absent root
+  Back button, then verify system Back preserves the setup draft. The targeted
+  API 37 test passes. The preceding exact 0.2.4 candidate passed the local Android
+  gate and minified signed assembly; final 0.2.11 validation is required below.
+- Release notes and publishing guidance identify the personal release certificate
+  mismatch with the public v0.2.1 debug APK and the separate Pi acceptance scope.
 
 Acceptance gates:
 
-1. Signed release commit, verified by GitHub, with all exact-source CI and
-   CodeQL checks green. The earlier Android hosted failure occurred during
-   emulator setup before the app tests; a failed-jobs retry is running.
-2. Merge the checked commit into main with the owner's commit identity and
-   preserve linear history. Superseded PRs 32 and 44 reference this integration.
-3. Create an immutable signed annotated v0.2.4 tag. Complete CLI, container and
-   unsigned macOS publishing lanes; assemble Android personal-use assets with
+1. Final signed release commit has GitHub-verified signatures and all exact-source
+   CI and CodeQL checks green, including the complete API 37 device suite.
+2. Fast-forward the checked commit to main, preserving identity and linear history.
+   Close superseded PRs 32 and 44 with a reference to integration PR 45.
+3. Create an immutable signed annotated v0.2.11 tag. Complete CLI, container and
+   unsigned macOS lanes; assemble signed Android personal assets with inventories,
    checksums, certificate and exact-source provenance.
-4. Verify the complete draft and publish it. Record final workflow IDs, release
-   assets, container digest and signing compatibility in release evidence.
+4. Verify every draft asset and publish. Record workflow IDs, source SHA, artifact
+   hashes, container digest and Android signing compatibility in release evidence.
+5. Pin the verified published container digest in the Unraid template and commit
+   the post-release status update.
 
 Pi acceptance remains separate: interrupted Pictures journal recovery,
 full-folder completion, nearby discovery and cellular handoff are pending.
