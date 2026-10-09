@@ -31,6 +31,7 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performTextReplacement
 import androidx.documentfile.provider.DocumentFile
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.espresso.Espresso.closeSoftKeyboard
@@ -142,7 +143,7 @@ class SafFolderSyncJourneyInstrumentedTest {
             val settings = FolderLinkSettings(FolderLinkPolicy(), false, FolderLinkCadence.Manual)
             val labelMatcher = hasSetTextAction() and hasText(context.getString(R.string.folder_sync_label))
             compose.onNodeWithTag("folder-sync-list").performScrollToNode(labelMatcher)
-            compose.onNode(labelMatcher).performTextInput(SAF_FOLDER_LABEL)
+            compose.onNode(labelMatcher).performTextReplacement(SAF_FOLDER_LABEL)
             closeSoftKeyboard()
             clickScreenText("API 37 isolated peer")
             visibleScreenText(context.getString(R.string.folder_link_direction)).assertIsDisplayed()
@@ -238,7 +239,10 @@ class SafFolderSyncJourneyInstrumentedTest {
             assertTrue(oldWorkerPort != movedWorkerPort)
 
             val movedPeerAddress = advertisedGuestPeerAddress(movedPeerPort)
-            val addressButtonTag = "folder-peer-address-${identityB.deviceId}"
+            val detailsButtonTag = "folder-link-details-${createdShare.offerId}"
+            compose.onNodeWithTag("folder-sync-list").performScrollToNode(hasTestTag(detailsButtonTag))
+            compose.onNodeWithTag(detailsButtonTag).performClick()
+            val addressButtonTag = "folder-link-address-${createdShare.offerId}"
             compose.onNodeWithTag("folder-sync-list")
                 .performScrollToNode(hasTestTag(addressButtonTag))
             compose.onNodeWithTag(addressButtonTag).performClick()

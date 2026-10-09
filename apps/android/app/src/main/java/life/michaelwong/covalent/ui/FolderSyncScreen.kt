@@ -682,7 +682,11 @@ internal fun FolderSyncScreen(
             it.phase != FolderSharePhase.REMOVED || it.remoteRemovalPending
         }
         val needsFolderChoice = snapshot?.issue == FolderSyncIssue.FOLDER_ACCESS ||
-            activeShares.any { it.incoming && it.phase == FolderSharePhase.OFFERED }
+            activeShares.any { it.incoming && it.phase == FolderSharePhase.OFFERED } ||
+            activeShares.any { share ->
+                share.offerId in pendingRepairOffers ||
+                    snapshot?.folders?.any { it.folderId == share.folderId && it.accessUnavailable } == true
+            }
         val choosingDestination = activeShares.any { share ->
             share.incoming && (share.phase == FolderSharePhase.OFFERED ||
                 snapshot?.folders?.any { it.folderId == share.folderId && it.accessUnavailable } == true)
@@ -1213,11 +1217,13 @@ internal fun FolderShareCard(
                 FolderShareSummary.READY -> stringResource(R.string.folder_link_run_ready)
             }
             Text(summary)
-            TextButton(onClick = { showingDetails = !showingDetails }, enabled = !busy) {
+            TextButton(onClick = { showingDetails = !showingDetails }, enabled = !busy,
+                modifier = Modifier.testTag("folder-link-details-${share.offerId}")) {
                 Text(stringResource(if (showingDetails) R.string.folder_sync_hide_options else R.string.folder_link_details))
             }
             if (showingDetails && updateAddress != null) {
-                TextButton(onClick = updateAddress, enabled = !busy) {
+                TextButton(onClick = updateAddress, enabled = !busy,
+                    modifier = Modifier.testTag("folder-link-address-${share.offerId}")) {
                     Text(stringResource(R.string.folder_sync_update_address))
                 }
             }
