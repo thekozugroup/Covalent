@@ -466,7 +466,8 @@ internal fun FolderSyncScreen(
 
     LaunchedEffect(hostRequested) {
         while (hostRequested && isActive) {
-            if (status == null && error != null) break
+            // A saved API endpoint can be stale while the service starts after an update.
+            // Keep observing without restarting the node or changing the saved link.
             refresh()
             delay(3_000)
         }
@@ -1190,6 +1191,7 @@ internal fun FolderShareCard(
                     busy,
                     runNow,
                     reviewRun,
+                    showDetails = showingDetails,
                 )
             }
             val folderAccessUnavailable = status.issue == FolderSyncIssue.FOLDER_ACCESS ||
@@ -1216,7 +1218,10 @@ internal fun FolderShareCard(
                 FolderShareSummary.CONNECTION_UNKNOWN -> stringResource(R.string.folder_sync_connection_unknown)
                 FolderShareSummary.READY -> stringResource(R.string.folder_link_run_ready)
             }
-            Text(summary)
+            if (share.linkRun?.phase == null || shareSummary !in setOf(
+                    FolderShareSummary.SYNCING, FolderShareSummary.CONNECTED, FolderShareSummary.READY)) {
+                Text(summary)
+            }
             TextButton(onClick = { showingDetails = !showingDetails }, enabled = !busy,
                 modifier = Modifier.testTag("folder-link-details-${share.offerId}")) {
                 Text(stringResource(if (showingDetails) R.string.folder_sync_hide_options else R.string.folder_link_details))
@@ -1306,6 +1311,7 @@ private fun FolderLinkRunSummary(
     busy: Boolean,
     runNow: (SavedFolderLinkRunRequest?) -> Unit,
     review: () -> Unit,
+    showDetails: Boolean = false,
 ) {
     val settings = share.linkSettings ?: return
     if (!settings.confirmed) return
@@ -1354,7 +1360,7 @@ private fun FolderLinkRunSummary(
             },
         ))
     }
-    if (run?.destinations?.any { it.result == FolderLinkRunResult.FAILED } == true) {
+    if (showDetails && run?.destinations?.any { it.result == FolderLinkRunResult.FAILED } == true) {
         if (!settings.settings.deletionPolicy.restoreLocalDeletions) {
             Text(
                 stringResource(R.string.folder_link_run_failed_interrupted_restore_disabled),
