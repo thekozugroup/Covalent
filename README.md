@@ -201,20 +201,20 @@ For vulnerabilities, follow [SECURITY.md](SECURITY.md) and report privately.
 
 [MIT](LICENSE). Bundled dependencies retain their own licenses and notices.
 
-[first-link]: https://github.com/thekozugroup/Covalent/blob/9088b50416f686d533d75e27b8d89804dab51139/docs/getting-started-links.md
-[docker-setup]: https://github.com/thekozugroup/Covalent/blob/9088b50416f686d533d75e27b8d89804dab51139/packaging/docker/README.md
-[unraid-setup]: https://github.com/thekozugroup/Covalent/blob/9088b50416f686d533d75e27b8d89804dab51139/docs/platform/unraid.md
-[mac-setup]: https://github.com/thekozugroup/Covalent/blob/9088b50416f686d533d75e27b8d89804dab51139/docs/platform/macos.md
-[android-setup]: https://github.com/thekozugroup/Covalent/blob/9088b50416f686d533d75e27b8d89804dab51139/docs/platform/android.md
-[link-behavior]: https://github.com/thekozugroup/Covalent/blob/9088b50416f686d533d75e27b8d89804dab51139/docs/product/synchronization.md
-[security-model]: https://github.com/thekozugroup/Covalent/blob/9088b50416f686d533d75e27b8d89804dab51139/docs/security/threat-model.md
-[apple-dev]: https://github.com/thekozugroup/Covalent/blob/9088b50416f686d533d75e27b8d89804dab51139/apps/apple/README.md
-[android-dev]: https://github.com/thekozugroup/Covalent/blob/9088b50416f686d533d75e27b8d89804dab51139/apps/android/README.md
-[architecture]: https://github.com/thekozugroup/Covalent/blob/9088b50416f686d533d75e27b8d89804dab51139/docs/architecture/overview.md
-[requirements]: https://github.com/thekozugroup/Covalent/blob/9088b50416f686d533d75e27b8d89804dab51139/docs/product/requirements.md
-[design]: https://github.com/thekozugroup/Covalent/blob/9088b50416f686d533d75e27b8d89804dab51139/DESIGN.md
-[troubleshooting]: https://github.com/thekozugroup/Covalent/blob/9088b50416f686d533d75e27b8d89804dab51139/docs/troubleshooting.md
+[first-link]: https://github.com/thekozugroup/Covalent/blob/3d7e88dbd915e0e1191cffb5b0b01a3269c9975c/docs/getting-started-links.md
+[docker-setup]: https://github.com/thekozugroup/Covalent/blob/3d7e88dbd915e0e1191cffb5b0b01a3269c9975c/packaging/docker/README.md
+[unraid-setup]: https://github.com/thekozugroup/Covalent/blob/3d7e88dbd915e0e1191cffb5b0b01a3269c9975c/docs/platform/unraid.md
+[mac-setup]: https://github.com/thekozugroup/Covalent/blob/3d7e88dbd915e0e1191cffb5b0b01a3269c9975c/docs/platform/macos.md
+[android-setup]: https://github.com/thekozugroup/Covalent/blob/3d7e88dbd915e0e1191cffb5b0b01a3269c9975c/docs/platform/android.md
+[link-behavior]: https://github.com/thekozugroup/Covalent/blob/3d7e88dbd915e0e1191cffb5b0b01a3269c9975c/docs/product/synchronization.md
+[security-model]: https://github.com/thekozugroup/Covalent/blob/3d7e88dbd915e0e1191cffb5b0b01a3269c9975c/docs/security/threat-model.md
+[apple-dev]: https://github.com/thekozugroup/Covalent/blob/3d7e88dbd915e0e1191cffb5b0b01a3269c9975c/apps/apple/README.md
+[android-dev]: https://github.com/thekozugroup/Covalent/blob/3d7e88dbd915e0e1191cffb5b0b01a3269c9975c/apps/android/README.md
+[architecture]: https://github.com/thekozugroup/Covalent/blob/3d7e88dbd915e0e1191cffb5b0b01a3269c9975c/docs/architecture/overview.md
+[requirements]: https://github.com/thekozugroup/Covalent/blob/3d7e88dbd915e0e1191cffb5b0b01a3269c9975c/docs/product/requirements.md
+[design]: https://github.com/thekozugroup/Covalent/blob/3d7e88dbd915e0e1191cffb5b0b01a3269c9975c/DESIGN.md
+[troubleshooting]: https://github.com/thekozugroup/Covalent/blob/3d7e88dbd915e0e1191cffb5b0b01a3269c9975c/docs/troubleshooting.md
 [release-notes]: https://github.com/thekozugroup/Covalent/blob/7bb83c27ed56d2b78517845db7bdf1757b80fbe1/docs/release/notes/v0.2.12.md
 [release-evidence]: docs/release/0.2.12-status.md
 [website-pack]: docs/website/HANDOFF.md
-[legacy-backups]: https://github.com/thekozugroup/Covalent/blob/9088b50416f686d533d75e27b8d89804dab51139/docs/getting-started.md
+[legacy-backups]: https://github.com/thekozugroup/Covalent/blob/3d7e88dbd915e0e1191cffb5b0b01a3269c9975c/docs/getting-started.md
