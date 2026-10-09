@@ -117,7 +117,7 @@ jobs:
               jq -e --arg name "${archive_name}" '[.[] | select(.name == $name and .expired == false)] | length == 1' <<<"${prior_artifacts}" >/dev/null
             done
             signing_ref="${GITHUB_REF}"
-          elif [[ "${GITHUB_EVENT_NAME}" == workflow_dispatch && "${GITHUB_REF}" == refs/tags/release-tools-v0.2.12-container ]]; then
+          elif [[ "${GITHUB_EVENT_NAME}" == workflow_dispatch && "${GITHUB_REF}" == refs/tags/release-tools-v0.2.12-container-2 ]]; then
             ./scripts/verify-container-build-repair.sh "${version}" "${source_sha}"
             signing_ref="${GITHUB_REF}"
           elif [[ "${GITHUB_REF}" != "refs/tags/${version}" ]] || [[ "${source_sha}" != "${GITHUB_SHA}" ]]; then
@@ -219,6 +219,7 @@ jobs:
       # No setup-qemu-action: every leg now builds its own native platform.
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
         with:
+          driver-opts: image=mirror.gcr.io/moby/buildkit@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea
           buildkitd-config-inline: |
             [registry."docker.io"]
               mirrors = ["mirror.gcr.io"]

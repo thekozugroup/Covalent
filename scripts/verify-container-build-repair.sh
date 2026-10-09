@@ -15,7 +15,7 @@ test "$1" = v0.2.12
 test "$2" = 7bb83c27ed56d2b78517845db7bdf1757b80fbe1
 test "${GITHUB_EVENT_NAME:-}" = workflow_dispatch
 test "${GITHUB_REF_TYPE:-}" = tag
-repair_tag=release-tools-v0.2.12-container
+repair_tag=release-tools-v0.2.12-container-2
 test "${GITHUB_REF:-}" = "refs/tags/${repair_tag}"
 
 ref=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${repair_tag}")

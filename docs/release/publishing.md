@@ -78,7 +78,7 @@ including 202 Android unit tests and the 87-test API 37 suite. Its first
 container publication attempts failed on Docker Hub HTTP 429 responses before
 any public image promotion.
 
-The separate signed `release-tools-v0.2.12-container` tag repairs only the build
+The separate signed `release-tools-v0.2.12-container-2` tag repairs only the build
 and publication process. Dispatch `container-supply-chain.yml` from that tag
 with `version=v0.2.12` and no `artifact_run_id`. The repair gate accepts only
 this runtime SHA, version and annotated signed repair tag; it also verifies the
@@ -95,7 +95,7 @@ checksummed handoff, signatures, exact SBOM attestations and immutable promotion
 rules remain required.
 
 The container's exact GitHub OIDC identity is
-`https://github.com/thekozugroup/Covalent/.github/workflows/container-supply-chain.yml@refs/tags/release-tools-v0.2.12-container`,
+`https://github.com/thekozugroup/Covalent/.github/workflows/container-supply-chain.yml@refs/tags/release-tools-v0.2.12-container-2`,
 with issuer `https://token.actions.githubusercontent.com`. CLI artifacts retain
 their normal `refs/tags/v0.2.12` identity. Do not replace either with a branch or
 an identity regular expression. The completed container digest receipt records
@@ -280,3 +280,10 @@ in [the macOS setup guide](../platform/macos.md).
 After the GHCR package is public, submit `packaging/unraid/covalent.xml` to the
 Community Applications template feed. That is a human review cycle, not an
 automatable step.
+
+The first mirror repair still timed out while the Docker daemon fetched BuildKit
+from Docker Hub, before the configured mirror could run. The second immutable
+repair tag pins the BuildKit multi-platform image from the mirror at
+`sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea`.
+The first repair tag remains unchanged. The signed runtime tag and its Docker
+source inputs remain unchanged.

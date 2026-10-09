@@ -51,3 +51,8 @@ Acceptance gates:
 Pi acceptance remains separate: Pictures journal recovery, full-folder completion,
 nearby discovery and cellular handoff. Never delete originals based only on sync
 completion. No Pi image is flashed as part of this release.
+
+The initial signed repair passed source verification but two attempts timed out
+fetching the BuildKit tool from Docker Hub. The second repair also pins that
+builder from the mirror; it retains the original immutable runtime source and
+requires a new signed repair tag. macOS publication is waiting for a hosted runner.
