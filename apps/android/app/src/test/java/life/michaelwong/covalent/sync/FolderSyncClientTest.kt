@@ -1,0 +1,533 @@
+package life.michaelwong.covalent.sync
+
+import java.util.UUID
+import life.michaelwong.covalent.data.CovalentNodeClient
+import life.michaelwong.covalent.model.FolderSharePhase
+import life.michaelwong.covalent.model.FolderLinkPolicy
+import life.michaelwong.covalent.model.FolderLinkSettings
+import life.michaelwong.covalent.model.FolderLinkCadence
+import life.michaelwong.covalent.model.AndroidLinkConditions
+import life.michaelwong.covalent.model.FolderLinkRunPhase
+import life.michaelwong.covalent.model.FolderSyncIssue
+import life.michaelwong.covalent.model.FolderSyncLifecycle
+import life.michaelwong.covalent.model.PeerConnectionFreshness
+import life.michaelwong.covalent.model.PeerConnectionState
+import okhttp3.mockwebserver.MockResponse
+import okhttp3.mockwebserver.MockWebServer
+import org.json.JSONObject
+import org.json.JSONArray
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class FolderSyncClientTest {
+    @Test
+    fun authenticatedFolderRoutesUseTheBoundedV1Contract() {
+        val server = MockWebServer()
+        server.enqueue(MockResponse().setBody(STATUS))
+        repeat(10) { server.enqueue(MockResponse().setBody(MUTATION)) }
+        server.enqueue(MockResponse().setBody(ADDRESS_MUTATION))
+        server.start()
+        try {
+            val base = server.url("/").toString().removeSuffix("/")
+            val client = CovalentNodeClient()
+            val status = client.folderSyncStatus(base, "token")
+            assertEquals("Phone", status.peers.single().displayName)
+            assertEquals("192.0.2.10:8787", status.peers.single().address)
+            assertEquals(FolderSharePhase.OFFERED, status.shares.single().phase)
+            assertFalse(status.shares.single().expired)
+            assertFalse(status.shares.single().waitingForConditions)
+            assertEquals(PeerConnectionFreshness.FRESH, status.connectionFreshness)
+            assertEquals(PeerConnectionState.DISCONNECTED, status.shares.single().peerConnection)
+            assertEquals(FolderLinkPolicy(false, true), status.shares.single().linkPolicy)
+            val sharedSettings = checkNotNull(status.shares.single().linkSettings)
+            assertEquals(2L, sharedSettings.revision)
+            assertEquals(1_700_000_000_000L, sharedSettings.acceptedAtUnixMs)
+            assertTrue(sharedSettings.confirmed)
+            assertEquals(SETTINGS_REQUEST, sharedSettings.pendingChange?.changeId)
+            assertEquals(FolderLinkPolicy(true, false), sharedSettings.pendingChange?.settings?.deletionPolicy)
+            assertEquals(FolderLinkCadence.Scheduled(60), sharedSettings.settings.cadence)
+            assertEquals(AndroidLinkConditions(true, false), sharedSettings.settings.androidConditions)
+            assertEquals(FolderLinkRunPhase.RUNNING, status.shares.single().linkRun?.phase)
+
+            client.offerFolder(
+                base,
+                "token",
+                PEER,
+                UUID.fromString(FOLDER),
+                "Photos",
+                "covalent-saf:11111111-1111-4111-8111-111111111111",
+                FolderLinkSettings(
+                    FolderLinkPolicy(propagateSourceDeletions = true, restoreLocalDeletions = false),
+                    paused = false,
+                ),
+            )
+            client.updateFolderLinkSettings(
+                base,
+                "token",
+                FOLDER,
+                SETTINGS_REQUEST,
+                2,
+                FolderLinkSettings(
+                    FolderLinkPolicy(true, false),
+                    paused = true,
+                    cadence = FolderLinkCadence.Scheduled(1_440),
+                    androidConditions = AndroidLinkConditions(wifiOnly = true, chargingOnly = true),
+                ),
+            )
+            client.runFolderLinkNow(base, "token", FOLDER, SETTINGS_REQUEST, 3, 2)
+            client.observeFolderLinkAndroidConditions(base, "token", wifiConnected = true, charging = false)
+            client.acceptFolder(base, "token", OFFER, "covalent-saf:22222222-2222-4222-8222-222222222222")
+            client.pauseFolder(base, "token", OFFER, true)
+            client.repairFolder(base, "token", OFFER, "covalent-saf:33333333-3333-4333-8333-333333333333")
+            client.removeFolder(base, "token", OFFER)
+            client.retryFolderSync(base, "token")
+            client.renewFolder(base, "token", OFFER)
+            client.refreshFolderPeerAddress(
+                base,
+                "token",
+                PeerAddressRefreshRequest(PEER, "192.0.2.10:8787", "[2001:db8::20]:8787"),
+            )
+
+            assertEquals("/api/v1/sync/status", server.takeRequest().path)
+            val offer = server.takeRequest()
+            assertEquals("/api/v1/sync/folders", offer.path)
+            val offerBody = JSONObject(offer.body.readUtf8())
+            assertEquals(
+                setOf("peerId", "folderId", "label", "selectedRoot", "linkPolicy", "cadence", "androidConditions"),
+                offerBody.keys().asSequence().toSet(),
+            )
+            val linkPolicy = offerBody.getJSONObject("linkPolicy")
+            assertEquals(
+                setOf("propagateSourceDeletions", "restoreLocalDeletions"),
+                linkPolicy.keys().asSequence().toSet(),
+            )
+            assertTrue(linkPolicy.getBoolean("propagateSourceDeletions"))
+            assertFalse(linkPolicy.getBoolean("restoreLocalDeletions"))
+            assertEquals("continuous", offerBody.getJSONObject("cadence").getString("mode"))
+            val settings = server.takeRequest()
+            assertEquals("/api/v1/sync/settings", settings.path)
+            val settingsBody = JSONObject(settings.body.readUtf8())
+            assertEquals(
+                setOf("folderId", "changeId", "expectedRevision", "settings"),
+                settingsBody.keys().asSequence().toSet(),
+            )
+            assertEquals(FOLDER, settingsBody.getString("folderId"))
+            assertEquals(SETTINGS_REQUEST, settingsBody.getString("changeId"))
+            assertEquals(2L, settingsBody.getLong("expectedRevision"))
+            val submitted = settingsBody.getJSONObject("settings")
+            assertEquals(setOf("deletionPolicy", "paused", "cadence", "androidConditions"), submitted.keys().asSequence().toSet())
+            assertTrue(submitted.getBoolean("paused"))
+            assertEquals(1_440, submitted.getJSONObject("cadence").getInt("intervalMinutes"))
+            assertTrue(submitted.getJSONObject("androidConditions").getBoolean("wifiOnly"))
+            assertTrue(submitted.getJSONObject("androidConditions").getBoolean("chargingOnly"))
+            assertEquals(
+                setOf("propagateSourceDeletions", "restoreLocalDeletions"),
+                submitted.getJSONObject("deletionPolicy").keys().asSequence().toSet(),
+            )
+            val run = server.takeRequest()
+            assertEquals("/api/v1/sync/run", run.path)
+            assertEquals(SETTINGS_REQUEST, JSONObject(run.body.readUtf8()).getString("requestId"))
+            val conditions = server.takeRequest()
+            assertEquals("/api/v1/sync/conditions", conditions.path)
+            assertTrue(JSONObject(conditions.body.readUtf8()).getBoolean("wifiConnected"))
+            assertEquals("/api/v1/sync/accept", server.takeRequest().path)
+            assertEquals("/api/v1/sync/pause", server.takeRequest().path)
+            val repair = server.takeRequest()
+            assertEquals("/api/v1/sync/repair", repair.path)
+            assertEquals("POST", repair.method)
+            assertEquals("Bearer token", repair.getHeader("Authorization"))
+            val repairBody = JSONObject(repair.body.readUtf8())
+            assertEquals(setOf("offerId", "selectedRoot"), repairBody.keys().asSequence().toSet())
+            assertEquals(OFFER, repairBody.getString("offerId"))
+            assertEquals("covalent-saf:33333333-3333-4333-8333-333333333333", repairBody.getString("selectedRoot"))
+            assertEquals("/api/v1/sync/remove", server.takeRequest().path)
+            assertEquals("/api/v1/sync/retry", server.takeRequest().path)
+            val renewal = server.takeRequest()
+            assertEquals("/api/v1/sync/renew", renewal.path)
+            assertEquals("POST", renewal.method)
+            assertEquals("Bearer token", renewal.getHeader("Authorization"))
+            val renewalBody = JSONObject(renewal.body.readUtf8())
+            assertEquals(setOf("offerId"), renewalBody.keys().asSequence().toSet())
+            assertEquals(OFFER, renewalBody.getString("offerId"))
+            val address = server.takeRequest()
+            assertEquals("/api/v1/sync/peers/refresh-address", address.path)
+            assertEquals("POST", address.method)
+            assertEquals("Bearer token", address.getHeader("Authorization"))
+            val addressBody = JSONObject(address.body.readUtf8())
+            assertEquals(
+                setOf("peerId", "expectedAddress", "candidateAddress"),
+                addressBody.keys().asSequence().toSet(),
+            )
+            assertEquals(PEER, addressBody.getString("peerId"))
+            assertEquals("192.0.2.10:8787", addressBody.getString("expectedAddress"))
+            assertEquals("[2001:db8::20]:8787", addressBody.getString("candidateAddress"))
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun nullLinkPolicyRemainsLegacyTwoWay() {
+        val server = MockWebServer().apply {
+            enqueue(MockResponse().setBody(
+                STATUS.replace(
+                    "\"linkPolicy\":$LINK_POLICY,\"linkSettings\":$LINK_SETTINGS,\"linkRun\":$LINK_RUN",
+                    "\"linkPolicy\":null,\"linkSettings\":null,\"linkRun\":null",
+                ),
+            ))
+            start()
+        }
+        try {
+            val status = CovalentNodeClient().folderSyncStatus(
+                server.url("/").toString().removeSuffix("/"),
+                "token",
+            )
+            assertEquals(null, status.shares.single().linkPolicy)
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun omittedCadenceAndAndroidConditionsKeepOldClientsContinuous() {
+        val oldStatus = STATUS
+            .replace(",\"cadence\":{\"mode\":\"scheduled\",\"intervalMinutes\":60},\"androidConditions\":{\"wifiOnly\":true,\"chargingOnly\":false}", "")
+            .replace(",\"cadence\":{\"mode\":\"manual\"},\"androidConditions\":{\"wifiOnly\":false,\"chargingOnly\":true}", "")
+        val server = MockWebServer().apply { enqueue(MockResponse().setBody(oldStatus)); start() }
+        try {
+            val settings = checkNotNull(CovalentNodeClient().folderSyncStatus(
+                server.url("/").toString().removeSuffix("/"), "token",
+            ).shares.single().linkSettings).settings
+            assertEquals(FolderLinkCadence.Continuous, settings.cadence)
+            assertEquals(AndroidLinkConditions(), settings.androidConditions)
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun initialRunSummaryDecodesWithoutInventingAnActiveRun() {
+        val initial = """{"generation":0,"stateRevision":0,"settingsRevision":0,"phase":null,"startedAtUnixMs":null,"deadlineUnixMs":null,"endedAtUnixMs":null,"nextDueAtUnixMs":null,"pendingRequest":null,"rejectedRequest":null,"destinations":[]}"""
+        val server = MockWebServer().apply {
+            enqueue(MockResponse().setBody(STATUS.replace(LINK_RUN, initial)))
+            start()
+        }
+        try {
+            val run = checkNotNull(CovalentNodeClient().folderSyncStatus(
+                server.url("/").toString().removeSuffix("/"), "token",
+            ).shares.single().linkRun)
+            assertEquals(0L, run.generation)
+            assertEquals(null, run.phase)
+            assertTrue(run.destinations.isEmpty())
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun statusRejectsForeignPeerReferencesAndUnknownPhases() {
+        val invalid = STATUS.replace(PEER, "44444444-4444-4444-8444-444444444444", ignoreCase = false)
+            .replaceFirst("44444444-4444-4444-8444-444444444444", PEER)
+            .replace("\"offered\"", "\"future\"")
+        val server = MockWebServer().apply {
+            enqueue(MockResponse().setBody(invalid))
+            start()
+        }
+        try {
+            val result = runCatching {
+                CovalentNodeClient().folderSyncStatus(server.url("/").toString().removeSuffix("/"), "token")
+            }
+            assertTrue(result.isFailure)
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun initialScanIsASeparateSafeLifecycle() {
+        val scanning = STATUS
+            .replace("\"lifecycle\":\"stopped\"", "\"lifecycle\":\"initialScanning\"")
+            .replace("\"issue\":null", "\"issue\":\"initialScan\"")
+        val server = MockWebServer().apply {
+            enqueue(MockResponse().setBody(scanning))
+            start()
+        }
+        try {
+            val status = CovalentNodeClient().folderSyncStatus(
+                server.url("/").toString().removeSuffix("/"),
+                "token",
+            )
+            assertEquals(FolderSyncLifecycle.INITIAL_SCANNING, status.lifecycle)
+            assertEquals(FolderSyncIssue.INITIAL_SCAN, status.issue)
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun pairingUpgradeRequirementIsPerShareAndDefaultsOff() {
+        val upgrade = STATUS.replace("\"linkPolicy\":", "\"pairingUpgradeRequired\":true,\"linkPolicy\":")
+        val server = MockWebServer().apply {
+            enqueue(MockResponse().setBody(upgrade))
+            start()
+        }
+        try {
+            val status = CovalentNodeClient().folderSyncStatus(
+                server.url("/").toString().removeSuffix("/"),
+                "token",
+            )
+            assertTrue(status.shares.single().pairingUpgradeRequired)
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun offlineFolderAccessStatusRetainsRedactedSharesWithoutInventingHealth() {
+        val offline = STATUS
+            .replace("\"availability\":\"available\"", "\"availability\":\"needsAttention\"")
+            .replace("\"issue\":null", "\"issue\":\"folderAccess\"")
+            .replace("\"connectionFreshness\":\"fresh\"", "\"connectionFreshness\":\"neverObserved\"")
+            .replace("\"peerConnection\":\"disconnected\"", "\"peerConnection\":\"unknown\"")
+        val server = MockWebServer().apply {
+            enqueue(MockResponse().setBody(offline))
+            start()
+        }
+        try {
+            val status = CovalentNodeClient().folderSyncStatus(
+                server.url("/").toString().removeSuffix("/"),
+                "token",
+            )
+            assertEquals(FolderSyncLifecycle.STOPPED, status.lifecycle)
+            assertEquals(FolderSyncIssue.FOLDER_ACCESS, status.issue)
+            assertEquals(OFFER, status.shares.single().offerId)
+            assertEquals(PeerConnectionFreshness.NEVER_OBSERVED, status.connectionFreshness)
+            assertEquals(PeerConnectionState.UNKNOWN, status.shares.single().peerConnection)
+            assertTrue(status.folders.isEmpty())
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun folderAccessUnavailableIsPerFolderAndDefaultsOff() {
+        val folder = """{"folderId":"$FOLDER","state":"error","stateChanged":"2026-09-13T00:00:00Z","remainingFiles":0,"remainingBytes":0,"scanPullErrorCount":0,"reportedErrorRows":0,"statusError":false,"watchError":false}"""
+        val localized = STATUS.replace("\"folders\":[]", "\"folders\":[${folder.dropLast(1)},\"accessUnavailable\":true}]")
+        val legacy = STATUS.replace("\"folders\":[]", "\"folders\":[$folder]")
+        val malformed = STATUS.replace("\"folders\":[]", "\"folders\":[${folder.dropLast(1)},\"accessUnavailable\":\"true\"}]")
+        val server = MockWebServer().apply {
+            enqueue(MockResponse().setBody(localized))
+            enqueue(MockResponse().setBody(legacy))
+            enqueue(MockResponse().setBody(malformed))
+            start()
+        }
+        try {
+            val base = server.url("/").toString().removeSuffix("/")
+            assertTrue(CovalentNodeClient().folderSyncStatus(base, "token").folders.single().accessUnavailable)
+            assertFalse(CovalentNodeClient().folderSyncStatus(base, "token").folders.single().accessUnavailable)
+            assertTrue(runCatching { CovalentNodeClient().folderSyncStatus(base, "token") }.isFailure)
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun olderStatusDefaultsReachabilityToUnknownButMalformedValuesFail() {
+        val legacy = STATUS
+            .replace(",\"connectionFreshness\":\"fresh\"", "")
+            .replace(",\"peerConnection\":\"disconnected\"", "")
+            .replace(",\"address\":\"192.0.2.10:8787\"", "")
+        val server = MockWebServer().apply {
+            enqueue(MockResponse().setBody(legacy))
+            enqueue(MockResponse().setBody(STATUS.replace("\"disconnected\"", "\"invented\"")))
+            start()
+        }
+        try {
+            val base = server.url("/").toString().removeSuffix("/")
+            val old = CovalentNodeClient().folderSyncStatus(base, "token")
+            assertEquals(PeerConnectionFreshness.NEVER_OBSERVED, old.connectionFreshness)
+            assertEquals(PeerConnectionState.UNKNOWN, old.shares.single().peerConnection)
+            assertEquals(null, old.peers.single().address)
+            assertTrue(runCatching { CovalentNodeClient().folderSyncStatus(base, "token") }.isFailure)
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun peerAddressIsOptionalButPresentValuesAreStrictlyTypedAndNumeric() {
+        val variants = listOf<Any?>(
+            JSONObject.NULL,
+            true,
+            8787,
+            "peer.example:8787",
+            "192.0.2.10:0",
+            "192.0.2.010:8787",
+            "192.0.2.10:8787\n",
+            "a".repeat(129),
+        )
+        val server = MockWebServer()
+        variants.forEach { value ->
+            val json = JSONObject(STATUS)
+            json.getJSONArray("peers").getJSONObject(0).put("address", value)
+            server.enqueue(MockResponse().setBody(json.toString()))
+        }
+        server.start()
+        try {
+            val base = server.url("/").toString().removeSuffix("/")
+            repeat(variants.size) {
+                assertTrue(runCatching { CovalentNodeClient().folderSyncStatus(base, "token") }.isFailure)
+            }
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun malformedAddressRefreshInputsAreRejectedBeforeAnyRequest() {
+        val server = MockWebServer().apply { start() }
+        try {
+            val base = server.url("/").toString().removeSuffix("/")
+            val client = CovalentNodeClient()
+            for (request in listOf(
+                PeerAddressRefreshRequest(PEER, "peer.example:8787", "192.0.2.20:8787"),
+                PeerAddressRefreshRequest(PEER, "192.0.2.10:8787", "192.0.2.20:0"),
+                PeerAddressRefreshRequest("not-a-peer", "192.0.2.10:8787", "192.0.2.20:8787"),
+            )) {
+                assertTrue(runCatching { client.refreshFolderPeerAddress(base, "token", request) }.isFailure)
+            }
+            assertEquals(0, server.requestCount)
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun replacementIdsAreBoundedUniqueAndCannotNameTheCurrentInvitation() {
+        val oldId = "55555555-5555-4555-8555-555555555555"
+        val variants = listOf(
+            JSONArray().put(oldId), JSONObject.NULL, JSONArray().put(OFFER),
+            JSONArray().put(oldId).put(oldId), JSONArray(List(129) { oldId }),
+            JSONArray().put("00000000-0000-0000-0000-000000000000"),
+        )
+        val server = MockWebServer()
+        variants.forEach { value ->
+            val json = JSONObject(STATUS)
+            json.getJSONArray("shares").getJSONObject(0).put("supersededOfferIds", value)
+            server.enqueue(MockResponse().setBody(json.toString()))
+        }
+        server.start()
+        try {
+            val base = server.url("/").toString().removeSuffix("/")
+            val client = CovalentNodeClient()
+            assertEquals(listOf(oldId), client.folderSyncStatus(base, "token").shares.single().supersededOfferIds)
+            repeat(variants.size - 1) {
+                assertTrue(runCatching { client.folderSyncStatus(base, "token") }.isFailure)
+            }
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun removalStatusPreservesRetiredIdsAndRejectsMalformedPendingFlags() {
+        val oldId = "55555555-5555-4555-8555-555555555555"
+        val server = MockWebServer()
+        val variants = listOf(true, JSONObject.NULL, "true", 1)
+        variants.forEach { value ->
+            val json = JSONObject(STATUS)
+            json.getJSONArray("shares").getJSONObject(0)
+                .put("phase", "removed").put("supersededOfferIds", JSONArray().put(oldId))
+                .put("remoteRemovalPending", value)
+            server.enqueue(MockResponse().setBody(json.toString()))
+        }
+        val inconsistent = JSONObject(STATUS)
+        inconsistent.getJSONArray("shares").getJSONObject(0).put("remoteRemovalPending", true)
+        server.enqueue(MockResponse().setBody(inconsistent.toString()))
+        server.start()
+        try {
+            val base = server.url("/").toString().removeSuffix("/")
+            val client = CovalentNodeClient()
+            val removed = client.folderSyncStatus(base, "token").shares.single()
+            assertTrue(removed.remoteRemovalPending)
+            assertEquals(listOf(oldId), removed.supersededOfferIds)
+            repeat(variants.size) {
+                assertTrue(runCatching { client.folderSyncStatus(base, "token") }.isFailure)
+            }
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun transferConditionStatusIsOptionalStrictAndOnlyAppliesToReadyShares() {
+        val server = MockWebServer()
+        val ready = JSONObject(STATUS)
+        ready.getJSONArray("shares").getJSONObject(0)
+            .put("phase", "ready").put("waitingForConditions", true)
+        server.enqueue(MockResponse().setBody(ready.toString()))
+        for (invalid in listOf(JSONObject.NULL, "true", 1)) {
+            val json = JSONObject(STATUS)
+            json.getJSONArray("shares").getJSONObject(0).put("waitingForConditions", invalid)
+            server.enqueue(MockResponse().setBody(json.toString()))
+        }
+        val inactive = JSONObject(STATUS)
+        inactive.getJSONArray("shares").getJSONObject(0).put("waitingForConditions", true)
+        server.enqueue(MockResponse().setBody(inactive.toString()))
+        server.start()
+        try {
+            val base = server.url("/").toString().removeSuffix("/")
+            val client = CovalentNodeClient()
+            assertTrue(client.folderSyncStatus(base, "token").shares.single().waitingForConditions)
+            repeat(4) { assertTrue(runCatching { client.folderSyncStatus(base, "token") }.isFailure) }
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun settingsAcceptanceTimeSupportsLegacyZeroAndRejectsMalformedValues() {
+        val server = MockWebServer()
+        val legacy = JSONObject(STATUS)
+        legacy.getJSONArray("shares").getJSONObject(0)
+            .getJSONObject("linkSettings").remove("acceptedAtUnixMs")
+        server.enqueue(MockResponse().setBody(legacy.toString()))
+        for (invalid in listOf("1700000000000", -1, JSONObject.NULL)) {
+            val json = JSONObject(STATUS)
+            json.getJSONArray("shares").getJSONObject(0)
+                .getJSONObject("linkSettings").put("acceptedAtUnixMs", invalid)
+            server.enqueue(MockResponse().setBody(json.toString()))
+        }
+        server.start()
+        try {
+            val base = server.url("/").toString().removeSuffix("/")
+            val client = CovalentNodeClient()
+            assertEquals(0L, client.folderSyncStatus(base, "token").shares.single().linkSettings?.acceptedAtUnixMs)
+            repeat(3) { assertTrue(runCatching { client.folderSyncStatus(base, "token") }.isFailure) }
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    private companion object {
+        const val PEER = "22222222-2222-4222-8222-222222222222"
+        const val FOLDER = "11111111-1111-4111-8111-111111111111"
+        const val OFFER = "33333333-3333-4333-8333-333333333333"
+        const val SETTINGS_COMMIT = "66666666-6666-4666-8666-666666666666"
+        const val SETTINGS_REQUEST = "77777777-7777-4777-8777-777777777777"
+        const val LINK_POLICY = """{"propagateSourceDeletions":false,"restoreLocalDeletions":true}"""
+        const val LINK_SETTINGS = """{"revision":2,"settings":{"deletionPolicy":$LINK_POLICY,"paused":false,"cadence":{"mode":"scheduled","intervalMinutes":60},"androidConditions":{"wifiOnly":true,"chargingOnly":false}},"changeId":"$SETTINGS_COMMIT","changedBy":"$PEER","acceptedAtUnixMs":1700000000000,"confirmed":true,"pendingChange":{"folderId":"$FOLDER","sourceId":"$PEER","requesterId":"$OFFER","changeId":"$SETTINGS_REQUEST","expectedRevision":2,"settings":{"deletionPolicy":{"propagateSourceDeletions":true,"restoreLocalDeletions":false},"paused":false,"cadence":{"mode":"manual"},"androidConditions":{"wifiOnly":false,"chargingOnly":true}}},"conflictedChange":null}"""
+        const val LINK_RUN = """{"generation":3,"stateRevision":4,"settingsRevision":2,"phase":"running","startedAtUnixMs":1700000000000,"deadlineUnixMs":1700086400000,"endedAtUnixMs":null,"nextDueAtUnixMs":1700003600000,"pendingRequest":null,"rejectedRequest":null,"destinations":[{"peerId":"$PEER","result":"pending","endedAtUnixMs":null}]}"""
+        const val STATUS = """{
+          "schemaVersion":1,"availability":"available","lifecycle":"stopped","issue":null,
+          "healthFreshness":"neverObserved","connectionFreshness":"fresh",
+          "peers":[{"peerId":"$PEER","displayName":"Phone","address":"192.0.2.10:8787"}],
+          "shares":[{"offerId":"$OFFER","folderId":"$FOLDER","label":"Photos","peerId":"$PEER","incoming":true,"phase":"offered","expiresAtUnixMs":4102444800000,"expired":false,"peerConnection":"disconnected","linkPolicy":$LINK_POLICY,"linkSettings":$LINK_SETTINGS,"linkRun":$LINK_RUN}],
+          "folders":[]
+        }"""
+        const val MUTATION = """{"schemaVersion":1,"offerId":"$OFFER","lifecycle":"stopped","issue":null}"""
+        const val ADDRESS_MUTATION = """{"schemaVersion":1,"offerId":null,"lifecycle":"initialScanning","issue":"initialScan"}"""
+    }
+}

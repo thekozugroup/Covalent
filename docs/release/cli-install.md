@@ -1,12 +1,11 @@
 # Install the Covalent CLI
 
 No verified CLI archive is published with the historical v0.1.0 release. This
-guide applies only after the replacement signed release attaches its CLI
-archives. Until then, do not treat this page as an install path or use it to
-claim a v0.1.0 server.
+guide applies to the published v0.2.1 CLI archives, checksums, and Sigstore
+bundles. Do not use a v0.1.0 archive to claim a current server.
 
-Once published, the archive is the supported way to run `covalent claim` on a
-trusted Mac or Linux computer. It needs no source build and no installer script.
+The archive is the supported way to run `covalent claim` on a trusted Mac or
+Linux computer. It needs no source build and no installer script.
 Use the archive that exactly matches the computer running the command:
 
 | Computer | Archive suffix |
@@ -34,10 +33,16 @@ On macOS, `shasum` is already installed. On Linux use `sha256sum` when
 available; `shasum -a 256` is an equivalent portable fallback.
 
 ```sh
-version=vX.Y.Z
+version=v0.2.1
 platform=macos-arm64 # or linux-amd64, linux-arm64
 archive="Covalent-${version}-${platform}.tar.gz"
 manifest="Covalent-${version}-${platform}-SHA256SUMS.txt"
+# v0.2.1 alone uses the signed packaging-repair tag; runtime source stays v0.2.1.
+case "${version}" in
+  v0.2.1) signing_ref=release-tools-v0.2.1 ;;
+  *) signing_ref="${version}" ;;
+esac
+cli_certificate_identity="https://github.com/thekozugroup/Covalent/.github/workflows/cli-release.yml@refs/tags/${signing_ref}"
 
 # The manifest covers the archive, both Sigstore bundles, SBOM, and inventory.
 # Verify only the exact archive line when those audit assets were not downloaded.
@@ -54,7 +59,7 @@ case "${expected_digest}" in *[!0-9a-f]*) exit 1 ;; esac
 printf '%s  %s\n' "${expected_digest}" "${archive}" | shasum -a 256 -c -
 cosign verify-blob \
   --bundle "${archive}.sigstore.json" \
-  --certificate-identity "https://github.com/thekozugroup/Covalent/.github/workflows/cli-release.yml@refs/tags/${version}" \
+  --certificate-identity "${cli_certificate_identity}" \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   "${archive}"
 ```
@@ -63,16 +68,27 @@ This identity check ensures the archive was keylessly signed by this repository
 in GitHub Actions. A checksum alone detects accidental corruption; it does not
 establish who produced the archive.
 
+For v0.2.1, the exact allowed signing identity is
+`https://github.com/thekozugroup/Covalent/.github/workflows/cli-release.yml@refs/tags/release-tools-v0.2.1`.
+The repair workflow must reuse the original v0.2.1 build's exact archive and
+SBOM bytes; it repairs signing/publication without moving the runtime tag or
+rebuilding the program. Compare the release provenance and original archive
+checksums before installation. Do not accept a branch identity, a different
+repair tag, or an identity regular expression. Other versions keep their own
+exact version-tag identity; this exception does not apply to them.
+
 To audit the SBOM attestation too, also download
 `${archive}.attestation.sigstore.json` and
 `Covalent-${version}-${platform}-sbom.spdx.json`. From an exact checkout of the
-same signed release tag, run the repository verifier:
+same signed release tag, run the repository verifier. For v0.2.1, use the
+verifier from the signed `release-tools-v0.2.1` checkout and the exact identity
+selected above:
 
 ```sh
 sbom="Covalent-${version}-${platform}-sbom.spdx.json"
 scripts/verify-cli-release-attestation.sh \
   "${archive}.attestation.sigstore.json" "${archive}" "${sbom}" \
-  "https://github.com/thekozugroup/Covalent/.github/workflows/cli-release.yml@refs/tags/${version}" \
+  "${cli_certificate_identity}" \
   https://token.actions.githubusercontent.com
 ```
 

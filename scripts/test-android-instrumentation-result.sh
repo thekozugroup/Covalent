@@ -64,7 +64,11 @@ render_log() {
   done < "$suite_file"
   printf 'INSTRUMENTATION_RESULT: stream=\n'
   printf '\nTime: 12.345\n\n'
-  printf 'OK (%s tests)\n\n' "$summary_total"
+  summary_word=tests
+  if [ "$summary_total" -eq 1 ]; then
+    summary_word=test
+  fi
+  printf 'OK (%s %s)\n\n' "$summary_total" "$summary_word"
   printf 'INSTRUMENTATION_CODE: -1\n'
 }
 
@@ -278,6 +282,25 @@ fi
 render_log "$real_suite" "$real_count" > "$work_dir/real.log"
 accept "a synthetic clean run of the repository's own $real_count-test suite" \
   "$work_dir/real.log" "$real_suite"
+
+# Partition the entire self-contained SAF class. Adding a second test must not
+# silently exclude it from instrumentation while leaving it in the baseline.
+journey_class=life.michaelwong.covalent.node.SafFolderSyncJourneyInstrumentedTest
+awk -v prefix="$journey_class#" 'index($0, prefix) != 1' "$real_suite" > "$work_dir/real-base-suite.txt"
+awk -v prefix="$journey_class#" 'index($0, prefix) == 1' "$real_suite" > "$work_dir/real-journey-suite.txt"
+base_count=$(grep -c '^' "$work_dir/real-base-suite.txt")
+journey_count=$(grep -c '^' "$work_dir/real-journey-suite.txt" || true)
+if [ "$journey_count" -eq 0 ] || [ "$((base_count + journey_count))" -ne "$real_count" ]; then
+  echo "the SAF journey partition does not cover the repository suite" >&2
+  failures=$((failures + 1))
+else
+  render_log "$work_dir/real-base-suite.txt" "$base_count" > "$work_dir/real-base.log"
+  accept "the exact non-journey suite in its own process" \
+    "$work_dir/real-base.log" "$work_dir/real-base-suite.txt"
+  render_log "$work_dir/real-journey-suite.txt" "$journey_count" > "$work_dir/real-journey.log"
+  accept "the exact SAF journey suite in its own process" \
+    "$work_dir/real-journey.log" "$work_dir/real-journey-suite.txt"
+fi
 
 if [ "$failures" -ne 0 ]; then
   echo "Android instrumentation result contract: $failures assertion(s) failed" >&2

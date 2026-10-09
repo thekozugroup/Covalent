@@ -5,6 +5,7 @@ struct MacDevicesView: View {
     @ObservedObject var model: CovalentAppModel
     @State private var showingConnectProvider = false
     @State private var providerToRevoke: ProviderConnection?
+    @State private var peerAddressEditor: PeerAddressEditorContext?
     @State private var tailscaleAddress = ""
     @State private var isAdvancedRecoveryExpanded = false
 
@@ -19,10 +20,18 @@ struct MacDevicesView: View {
             .frame(maxWidth: 860, alignment: .leading)
             .padding(32)
         }
+        .accessibilityIdentifier("devices.view")
         .background(Color(nsColor: .windowBackgroundColor))
         .navigationTitle("Devices")
         .sheet(isPresented: $showingConnectProvider) {
             MacProviderConnectionView(model: model)
+        }
+        .sheet(item: $peerAddressEditor) { context in
+            MacPeerAddressEditor(
+                model: model,
+                peer: context.peer,
+                expectsProvider: context.expectsProvider
+            )
         }
         .confirmationDialog(
             "Revoke this device?",
@@ -39,14 +48,14 @@ struct MacDevicesView: View {
             }
             Button("Cancel", role: .cancel) { providerToRevoke = nil }
         } message: {
-            Text("Covalent permanently records that this device is no longer trusted, disconnects it, and blocks any future access. Copies already stored there stay encrypted.")
+            Text("Covalent permanently records that this device is no longer trusted, disconnects it, and blocks any future access. Existing shared files remain on both devices. Stored backup copies stay encrypted.")
         }
     }
 
     private var header: some View {
         HStack(alignment: .firstTextBaseline) {
             VStack(alignment: .leading, spacing: 7) {
-                Text("Your backup network")
+                Text("Your devices")
                     .font(.largeTitle.weight(.semibold))
                     .accessibilityAddTraits(.isHeader)
                 Text("Discovery is only a hint. Trust starts after both devices compare the same code.")
@@ -70,11 +79,13 @@ struct MacDevicesView: View {
                 Spacer()
             }
             HStack(alignment: .firstTextBaseline, spacing: 10) {
-                TextField("Tailscale hostname or IP", text: $tailscaleAddress, prompt: Text("nas.tailnet-name.ts.net:8787"))
+                TextField("Device address", text: $tailscaleAddress, prompt: Text("192.168.1.50:8787"))
                     .textFieldStyle(.roundedBorder)
                     .onSubmit { startTailscalePairing() }
-                    .accessibilityHint("Enter the address shown by the other device in Tailscale")
-                Button("Use as Backup Device") { startTailscalePairing() }
+                    .accessibilityIdentifier("devices.address")
+                    .accessibilityLabel("Device address")
+                    .accessibilityHint("Enter the address shown by the other device")
+                Button("Pair Device") { startTailscalePairing() }
                     .disabled(
                         tailscaleAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
                         !model.isAuthorized || model.startingPairingAddress != nil
@@ -82,19 +93,19 @@ struct MacDevicesView: View {
             }
             Text(
                 model.status?.lanDiscovery == false
-                    ? "Automatic LAN discovery is off. Enter a one-time Tailscale MagicDNS hostname or IP; both devices still confirm the same code."
-                    : "LAN devices appear automatically. Tailscale does not provide local device enumeration, so enter the other device's MagicDNS hostname or IP once."
+                    ? "Automatic LAN discovery is off. Enter a LAN IP address or Tailscale address; both devices still confirm the same code."
+                    : "LAN devices appear automatically. You can also enter the other device's LAN IP or Tailscale address."
             )
             .font(.caption)
             .secondaryLabelStyle()
             if model.startingPairingAddress != nil {
-                ProgressView("Contacting Tailscale device…")
+                ProgressView("Contacting device…")
                     .controlSize(.small)
             }
             if model.status?.lanDiscovery == false && model.discoveryCandidates.isEmpty {
                 MacCallout(
                     title: "LAN discovery is off",
-                    message: "Enter a Tailscale address above, or enable LAN discovery in Settings for automatic nearby-device hints.",
+                    message: "Enter a LAN IP or Tailscale address above, or enable LAN discovery in Settings for automatic nearby-device hints.",
                     systemImage: "network.slash",
                     tint: .secondary
                 ) {
@@ -104,7 +115,7 @@ struct MacDevicesView: View {
                 MacEmptyState(
                     systemImage: "dot.radiowaves.left.and.right",
                     title: "No candidates found",
-                    message: "No LAN devices replied. You can enter a Tailscale address above; "
+                    message: "No LAN devices replied. You can enter a LAN IP or Tailscale address above; "
                         + "discovery never grants trust automatically."
                 )
                 .frame(maxWidth: .infinity, minHeight: 180)
@@ -157,52 +168,102 @@ struct MacDevicesView: View {
     private var providers: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text("Connected storage devices")
+                Text("Paired devices")
                     .font(.title2.weight(.semibold))
             }
-            if model.providers.isEmpty {
+            if savedDeviceRows.isEmpty {
                 MacEmptyState(
                     systemImage: "server.rack",
-                    title: "No connected storage devices",
-                    message: "Backups stay on this Mac until you pair a device, connect it, and select it yourself."
+                    title: "No paired devices",
+                    message: "Pair another device, then create a one-way folder link."
                 )
                 .frame(maxWidth: .infinity, minHeight: 180)
                 .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 14))
             } else {
                 VStack(spacing: 0) {
-                    ForEach(model.providers) { provider in
+                    ForEach(savedDeviceRows) { row in
                         HStack(spacing: 14) {
                             Image(systemName: "server.rack")
                                 .font(.title2)
                                 .foregroundStyle(MacLabelColor.accentGlyph)
                                 .frame(width: 34)
                             VStack(alignment: .leading, spacing: 3) {
-                                Text(provider.address).font(.headline)
-                                Text("Certificate \(provider.certificateFingerprint.prefix(16))…")
-                                    .font(.caption.monospaced())
-                                    .secondaryLabelStyle()
+                                Text(row.displayName ?? row.address).font(.headline)
+                                if row.displayName != nil {
+                                    Text(row.address)
+                                        .font(.subheadline.monospaced())
+                                        .textSelection(.enabled)
+                                }
+                                if let provider = row.provider {
+                                    Text("Certificate \(provider.certificateFingerprint.prefix(16))…")
+                                        .font(.caption.monospaced())
+                                        .secondaryLabelStyle()
+                                } else {
+                                    Text("Paired device")
+                                        .font(.caption)
+                                        .secondaryLabelStyle()
+                                }
                             }
                             Spacer()
-                            Label("Connected", systemImage: "checkmark.circle.fill")
-                                .font(.caption)
-                                .foregroundStyle(.green)
-                            Menu {
-                                Button("Disconnect") {
-                                    Task { await model.disconnectProvider(provider) }
+                            if let provider = row.provider {
+                                TimelineView(.periodic(from: .now, by: 1)) { context in
+                                    let addressMatchesStatus = row.peer?.address == nil
+                                        || row.peer?.address == provider.address
+                                    let reachability = addressMatchesStatus
+                                        ? provider.displayedReachability(
+                                            atUnixMs: UInt64(max(0, context.date.timeIntervalSince1970 * 1_000))
+                                        )
+                                        : ProviderReachability.unknown
+                                    Label(
+                                        reachability.connectionStatusLabel,
+                                        systemImage: reachability.connectionStatusSymbol
+                                    )
+                                    .font(.caption)
+                                    .foregroundStyle(reachability == .reachable ? Color.green : Color.secondary)
+                                    .accessibilityLabel("\(row.accessibilityName), \(reachability.connectionStatusLabel)")
                                 }
-                                Divider()
-                                Button("Revoke Access…", role: .destructive) {
-                                    providerToRevoke = provider
+                            } else {
+                                Label(
+                                    ProviderReachability.unknown.connectionStatusLabel,
+                                    systemImage: ProviderReachability.unknown.connectionStatusSymbol
+                                )
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .accessibilityLabel("\(row.accessibilityName), status unknown")
+                            }
+                            Menu {
+                                Button("Change Address…") {
+                                    if let peer = row.peer {
+                                        peerAddressEditor = PeerAddressEditorContext(
+                                            peer: peer,
+                                            expectsProvider: row.provider != nil
+                                        )
+                                    }
+                                }
+                                .disabled(row.peer?.address == nil)
+                                .help(
+                                    row.peer?.address == nil
+                                        ? "Refresh Devices to load current saved addresses. If they remain unavailable, update Covalent."
+                                        : "Authenticate and save a new numeric address for this paired device."
+                                )
+                                if let provider = row.provider {
+                                    Button("Disconnect") {
+                                        Task { await model.disconnectProvider(provider) }
+                                    }
+                                    Divider()
+                                    Button("Revoke Access…", role: .destructive) {
+                                        providerToRevoke = provider
+                                    }
                                 }
                             } label: {
                                 Image(systemName: "ellipsis.circle")
                             }
                             .menuStyle(.borderlessButton)
-                            .accessibilityLabel("Actions for \(provider.address)")
+                            .accessibilityLabel("Actions for \(row.accessibilityName)")
                         }
                         .padding(.vertical, 13)
                         .padding(.horizontal, 15)
-                        if provider.id != model.providers.last?.id { Divider().padding(.leading, 62) }
+                        if row.id != savedDeviceRows.last?.id { Divider().padding(.leading, 62) }
                     }
                 }
                 .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 14))
@@ -218,7 +279,7 @@ struct MacDevicesView: View {
             // in is a glyph a few points wide.
             DisclosureGroup(isExpanded: $isAdvancedRecoveryExpanded) {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Recovery only: exchange signed setup files by hand when direct pairing over the network cannot be used, or when reconnecting an older backup server.")
+                    Text("Legacy recovery only: exchange signed setup files by hand when network pairing cannot be used, or when reconnecting an older backup server.")
                         .font(.caption)
                         .secondaryLabelStyle()
                     Button("Offline Pairing with Signed Files…") { model.requestManualPairing() }
@@ -247,6 +308,21 @@ struct MacDevicesView: View {
             EmptyView()
         }
     }
+
+    private var savedDeviceRows: [SavedPeerDevice] {
+        let peers = model.folderSyncStatus?.peers ?? []
+        return SavedPeerDevice.merge(peers: peers, providers: model.providers)
+    }
+}
+
+private struct PeerAddressEditorContext: Identifiable {
+    let peer: FolderSyncPeer
+    let expectsProvider: Bool
+    var id: UUID { peer.peerId }
+}
+
+private extension SavedPeerDevice {
+    var accessibilityName: String { displayName ?? address }
 }
 
 struct MacProviderConnectionView: View {
@@ -271,7 +347,7 @@ struct MacProviderConnectionView: View {
                         .frame(height: 220)
                         .overlay { RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.25)) }
                 }
-                Text("Your backup server checks the other device's identity, name, address, certificate, and certificate fingerprint against what both devices signed during pairing. Every one must match exactly.")
+                Text("A legacy backup connection checks the other device's identity, name, address, certificate, and certificate fingerprint against what both devices signed during pairing. Every one must match exactly.")
                     .font(.caption)
                     .secondaryLabelStyle()
             }
@@ -621,12 +697,12 @@ struct MacPairingView: View {
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 480)
             if peer.roles.contains(.storageProvider), let transport = confirmation.peerTransport {
-                Text("Add this signed device now, then choose it only for backups that should keep an extra copy.")
+                Text("Add this signed device only if you still use Legacy Backups.")
                     .font(.subheadline)
                     .secondaryLabelStyle()
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: 520)
-                Button("Use as Backup Device") {
+                Button("Use for Legacy Backups") {
                     isAddingBackupDevice = true
                     Task {
                         if await model.connectProvider(using: transport) { dismiss() }
@@ -640,7 +716,7 @@ struct MacPairingView: View {
             } else {
                 Text(peer.roles.contains(.storageProvider)
                     ? "This older pairing did not include signed connection details. Use Advanced recovery in Devices."
-                    : "Storage access was not granted, so this device cannot keep an extra copy.")
+                    : "Storage access was not granted, so this device cannot hold a legacy backup copy.")
                     .font(.subheadline)
                     .secondaryLabelStyle()
                     .multilineTextAlignment(.center)
@@ -692,7 +768,7 @@ struct MacNetworkPairingView: View {
             Text(title)
                 .font(.title.weight(.semibold))
                 .accessibilityAddTraits(.isHeader)
-            Text("Pairing lets either device store encrypted backup copies for the other. Nothing is copied now—you choose \(current.peerName) separately when creating a backup.")
+            Text("Pairing lets you create one-way folder links with \(current.peerName). Nothing is copied until you create a link.")
                 .multilineTextAlignment(.center)
                 .secondaryLabelStyle()
                 .frame(maxWidth: 440)
@@ -714,7 +790,7 @@ struct MacNetworkPairingView: View {
 
             switch current.state {
             case .awaitingLocalConfirmation:
-                Button("Codes Match — Use as Backup Device") {
+                Button("Codes Match — Pair Device") {
                     isWorking = true
                     Task {
                         await model.confirmNetworkPairing(current)
@@ -729,7 +805,7 @@ struct MacNetworkPairingView: View {
                 ProgressView("Confirmed here. Waiting for \(current.peerName)…")
             case .complete:
                 if model.isProviderReady(for: current) {
-                    Label("Backup device ready", systemImage: "checkmark.circle.fill")
+                    Label("Device ready for links", systemImage: "checkmark.circle.fill")
                         .font(.headline)
                         .foregroundStyle(.green)
                     Button("Done") { finish() }

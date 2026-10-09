@@ -1,0 +1,18 @@
+# UI-only updates reuse the exact released engine and runtime. Build the Caddy
+# evidence stage first to include its standard static-file handler.
+ARG RUNTIME_IMAGE=ghcr.io/thekozugroup/covalent@sha256:393f8a0dafa7f17d8ad964d501f3d33668d547889dc493080e042489ee3e1677
+ARG CADDY_IMAGE=covalent-webui-caddy:local
+FROM ${CADDY_IMAGE} AS caddy
+FROM ${RUNTIME_IMAGE}
+ARG WEBUI_REVISION
+LABEL io.covalent.webui.revision="${WEBUI_REVISION}"
+USER 0
+# Source archive names depend on the dependency inventory; replace the old
+# evidence directory rather than merging obsolete source archives into it.
+RUN rm -rf /usr/local/share/covalent/caddy
+USER 65532:65532
+COPY --from=caddy /caddy.unprivileged /usr/local/bin/caddy
+COPY --from=caddy /caddy-evidence/ /usr/local/share/covalent/caddy/
+COPY packaging/docker/Caddyfile /etc/caddy/Caddyfile
+COPY packaging/web/index.html /usr/local/share/covalent/web/index.html
+COPY packaging/web/*.js packaging/web/*.css /usr/local/share/covalent/web/assets/

@@ -1,5 +1,6 @@
 package life.michaelwong.covalent.node
 
+import life.michaelwong.covalent.BuildConfig
 import org.json.JSONObject
 
 /** Fixed direct JNI ABI. Native methods are registered by JNI_OnLoad, never name-mangled. */
@@ -21,6 +22,40 @@ internal object CovalentNative {
         maximumTotalBytes: Long,
         freeSpaceReserveBytes: Long,
         keyProtectionLevel: Int,
+        backupProviderEnabled: Boolean,
+        syncPackageInvalid: Boolean,
+        folderSyncAccessUnavailable: Boolean,
+        syncGuardianPath: String,
+        syncGuardianSha256: String,
+        syncWorkerPath: String,
+        syncWorkerSha256: String,
+        syncRuntimeDirectory: String,
+        syncListenerPort: Int,
+        peerListenerPort: Int,
+    ): String
+
+    @JvmStatic
+    private external fun nativeRecoverStart(
+        dataDirectory: String,
+        deviceName: String,
+        lanDiscoveryEnabled: Boolean,
+        apiToken: ByteArray,
+        keyEncryptionKey: ByteArray,
+        keyVersion: Int,
+        maximumTotalBytes: Long,
+        freeSpaceReserveBytes: Long,
+        keyProtectionLevel: Int,
+        recoveryKit: ByteArray,
+        recoveryKey: ByteArray,
+        backupProviderEnabled: Boolean,
+        syncPackageInvalid: Boolean,
+        folderSyncAccessUnavailable: Boolean,
+        syncGuardianPath: String,
+        syncGuardianSha256: String,
+        syncWorkerPath: String,
+        syncWorkerSha256: String,
+        syncRuntimeDirectory: String,
+        peerListenerPort: Int,
     ): String
 
     @JvmStatic
@@ -28,6 +63,18 @@ internal object CovalentNative {
 
     @JvmStatic
     private external fun nativeState(handle: Long): String
+
+    @JvmStatic
+    private external fun nativeRegisterFolderGrant(
+        handle: Long,
+        grantId: String,
+        port: Int,
+        username: String,
+        password: String,
+    ): Int
+
+    @JvmStatic
+    private external fun nativeUnregisterFolderGrant(handle: Long, grantId: String): Int
 
     /**
      * Starts the process-local node.
@@ -49,9 +96,21 @@ internal object CovalentNative {
         maximumTotalBytes: Long,
         freeSpaceReserveBytes: Long,
         keyProtectionLevel: KeyProtectionLevel,
+        syncEngine: PackagedSyncEnginePackage,
+        backupProviderEnabled: Boolean = true,
+        folderSyncAccessUnavailable: Boolean = false,
+        folderSyncListenerPort: Int = FOLDER_SYNC_LISTENER_PORT,
+        peerListenerPort: Int = PEER_LISTENER_PORT,
     ): NativeNodeResponse {
         if (!libraryLoaded) return NativeNodeResponse.unavailable()
+        require(BuildConfig.DEBUG || folderSyncListenerPort == FOLDER_SYNC_LISTENER_PORT) {
+            "Release builds use Covalent's fixed folder-sync listener port."
+        }
+        require(peerListenerPort in 0..0xffff && (BuildConfig.DEBUG || peerListenerPort == PEER_LISTENER_PORT)) {
+            "Release builds use Covalent's fixed peer listener port."
+        }
         return parse(runCatching {
+            val packaged = syncEngine.verifiedOrNull()
             nativeStart(
                 dataDirectory,
                 deviceName,
@@ -62,6 +121,69 @@ internal object CovalentNative {
                 maximumTotalBytes,
                 freeSpaceReserveBytes,
                 keyProtectionLevel.wireValue,
+                backupProviderEnabled,
+                syncEngine is PackagedSyncEnginePackage.Invalid,
+                folderSyncAccessUnavailable,
+                packaged?.guardianPath.orEmpty(),
+                packaged?.guardianSha256.orEmpty(),
+                packaged?.workerPath.orEmpty(),
+                packaged?.workerSha256.orEmpty(),
+                packaged?.runtimeDirectory.orEmpty(),
+                folderSyncListenerPort,
+                peerListenerPort,
+            )
+        }.getOrElse { NativeNodeResponse.unavailable().toJson() })
+    }
+
+    /**
+     * Recovers a node identity into its ordinary private data root before normal opening.
+     * Native code clears all four JVM byte arrays immediately. The caller also clears its
+     * arrays in `finally`, so validation and linkage failures cannot leave an owned copy here.
+     */
+    fun recoverStart(
+        dataDirectory: String,
+        deviceName: String,
+        lanDiscoveryEnabled: Boolean,
+        apiToken: ByteArray,
+        keyEncryptionKey: ByteArray,
+        keyVersion: Int,
+        maximumTotalBytes: Long,
+        freeSpaceReserveBytes: Long,
+        keyProtectionLevel: KeyProtectionLevel,
+        recoveryKit: ByteArray,
+        recoveryKey: ByteArray,
+        syncEngine: PackagedSyncEnginePackage,
+        backupProviderEnabled: Boolean = true,
+        folderSyncAccessUnavailable: Boolean = false,
+        peerListenerPort: Int = PEER_LISTENER_PORT,
+    ): NativeNodeResponse {
+        if (!libraryLoaded) return NativeNodeResponse.unavailable()
+        require(peerListenerPort in 0..0xffff && (BuildConfig.DEBUG || peerListenerPort == PEER_LISTENER_PORT)) {
+            "Release builds use Covalent's fixed peer listener port."
+        }
+        return parse(runCatching {
+            val packaged = syncEngine.verifiedOrNull()
+            nativeRecoverStart(
+                dataDirectory,
+                deviceName,
+                lanDiscoveryEnabled,
+                apiToken,
+                keyEncryptionKey,
+                keyVersion,
+                maximumTotalBytes,
+                freeSpaceReserveBytes,
+                keyProtectionLevel.wireValue,
+                recoveryKit,
+                recoveryKey,
+                backupProviderEnabled,
+                syncEngine is PackagedSyncEnginePackage.Invalid,
+                folderSyncAccessUnavailable,
+                packaged?.guardianPath.orEmpty(),
+                packaged?.guardianSha256.orEmpty(),
+                packaged?.workerPath.orEmpty(),
+                packaged?.workerSha256.orEmpty(),
+                packaged?.runtimeDirectory.orEmpty(),
+                peerListenerPort,
             )
         }.getOrElse { NativeNodeResponse.unavailable().toJson() })
     }
@@ -73,6 +195,26 @@ internal object CovalentNative {
     fun state(handle: Long): NativeNodeResponse =
         if (!libraryLoaded) NativeNodeResponse.unavailable()
         else parse(runCatching { nativeState(handle) }.getOrElse { NativeNodeResponse.unavailable().toJson() })
+
+    fun registerFolderGrant(
+        handle: Long,
+        grantId: String,
+        port: Int,
+        username: String,
+        password: String,
+    ): NativeFolderGrantResult {
+        if (!libraryLoaded || handle <= 0) return NativeFolderGrantResult.RUNTIME_UNAVAILABLE
+        return runCatching {
+            NativeFolderGrantResult.fromWire(nativeRegisterFolderGrant(handle, grantId, port, username, password))
+        }.getOrDefault(NativeFolderGrantResult.RUNTIME_UNAVAILABLE)
+    }
+
+    fun unregisterFolderGrant(handle: Long, grantId: String): NativeFolderGrantResult {
+        if (!libraryLoaded || handle <= 0) return NativeFolderGrantResult.RUNTIME_UNAVAILABLE
+        return runCatching {
+            NativeFolderGrantResult.fromWire(nativeUnregisterFolderGrant(handle, grantId))
+        }.getOrDefault(NativeFolderGrantResult.RUNTIME_UNAVAILABLE)
+    }
 
     private fun parse(value: String): NativeNodeResponse = runCatching {
         JSONObject(value).let { objectValue ->
@@ -87,7 +229,26 @@ internal object CovalentNative {
             )
         }
     }.getOrElse { NativeNodeResponse.unavailable() }
+
+    private const val FOLDER_SYNC_LISTENER_PORT = 8_789
+    private const val PEER_LISTENER_PORT = 8_787
 }
+
+internal enum class NativeFolderGrantResult {
+    OK,
+    INVALID_GRANT_ID,
+    INVALID_PORT,
+    INVALID_CREDENTIAL,
+    BUSY,
+    RUNTIME_UNAVAILABLE;
+
+    companion object {
+        fun fromWire(value: Int): NativeFolderGrantResult = entries.getOrNull(value) ?: RUNTIME_UNAVAILABLE
+    }
+}
+
+private fun PackagedSyncEnginePackage.verifiedOrNull(): VerifiedPackagedSyncEngine? =
+    (this as? PackagedSyncEnginePackage.Verified)?.engine
 
 internal data class NativeNodeResponse(
     val ok: Boolean,

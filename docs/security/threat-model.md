@@ -1,10 +1,54 @@
 # Threat model
 
-## Assets
+## Current one-way links
+
+Covalent uses a bundled rclone worker to copy from an authorized source to
+selected destinations. Native clients and the Docker web console share the
+node API. Pairing and receiver consent are required; pairing alone shares no
+files. The source signs shared setting revisions and confirms proposed changes.
+
+Peer control uses authenticated QUIC. File transfers use read-only SFTP source
+access bound to the paired SSH key and link, with known-host verification.
+Android's folder grant stays on-device; its authenticated WebDAV adapter listens
+on numeric loopback. Engine configuration, grants, caches, and executable
+verification remain private to the node. The bundled engine has no remote-control
+management server. See the [rclone integration](../../packaging/rclone/README.md).
+
+Folder links write ordinary destination files. SFTP protects files in transit;
+it does not turn destination files into encrypted archives. A destination user,
+an authorized local application, or a compromised endpoint can read those files.
+Revoking a device stops its authorized future access but cannot erase copies it
+already received. Operating-system permissions and disk encryption remain the
+owner's responsibility.
+
+Folder roots and access grants are validated. Missing mounts, lost permissions,
+and incomplete scans must not be interpreted as source deletions. Links use
+separate collection subfolders; deletion propagation and restoration of deleted
+destination files are off by default. A user who enables propagation can delete
+copies deliberately. One-way links have no historical-version recovery guarantee.
+Live database copying requires an application-consistent source.
+
+Management is private loopback or HTTPS with authenticated access. Key protection
+uses an explicit separately mounted owner-only key for Docker/Unraid, Keychain
+for macOS, and Android Keystore for Android. Caddy CA state and access tokens
+are sensitive. Discovery and Tailnet reachability do not establish trust. A
+compromised endpoint can expose keys, files, and operations available to it.
+Mobile background limits can delay transfers or revoke folder access.
+
+This project has not completed an external cryptographic audit. Package signing
+and platform testing limits are described in the [README](../../README.md).
+
+## Legacy encrypted archive model
+
+The sections below describe the retained encrypted backup and restore system.
+Chunk encryption, provider pools, opaque locators, and backup-key epochs apply
+to legacy archives, not ordinary destination files in current one-way links.
+
+### Assets
 
 Plaintext file contents and paths, backup/content keys, long-lived device identity keys, signed rosters, manifests, settings, Caddy local-CA signing state, restore destinations, and availability metadata.
 
-## Trust boundaries
+### Trust boundaries
 
 - A paired device is authorized, not universally trusted. Transport access is role-scoped and device-wide; chunk reads additionally require possession of an opaque locator. Explicit replica intent is scoped per backup snapshot.
 - A storage provider may be curious, compromised, stale, malicious, or unavailable.
@@ -12,7 +56,7 @@ Plaintext file contents and paths, backup/content keys, long-lived device identi
 - Local UI clients can invoke only the local authenticated service boundary.
 - The operating system controls sandbox grants, mount permissions, process isolation, and key storage.
 
-## Required defenses
+### Required defenses
 
 | Threat | Defense |
 | --- | --- |
@@ -21,7 +65,7 @@ Plaintext file contents and paths, backup/content keys, long-lived device identi
 | Curious provider | Client-side authenticated encryption for chunks and manifests; opaque chunk locators; no private keys on provider. Traffic size/timing leakage is documented. |
 | Malicious provider | Verify framing, authenticated ciphertext, expected length, keyed locator, and BLAKE3 plaintext digest before use. Attribute rejected copies and repair only from an intact acknowledged copy. |
 | Roster injection or rollback | Monotonic signed roster epochs, signer authorization, remembered high-water mark, explicit conflict state. |
-| Device compromise | All long-lived engine secrets are envelope-protected. Docker/Unraid requires an explicit owner-only KEK mounted separately from appdata; macOS uses the data-protection Keychain; Android uses Android Keystore. Missing, locked, invalidated, or wrong-version protection fails closed. A stolen backup master key remains valid for every epoch of that backup; recovery requires a new backup ID/master key and fresh replicas. |
+| Device compromise | All long-lived engine secrets are envelope-protected. Docker/Unraid requires an explicit owner-only KEK mounted separately from appdata; macOS uses the data-protection Keychain for provisioned builds and the login Keychain with its default application ACL for personal ad-hoc builds; Android uses Android Keystore. Missing, locked, invalidated, or wrong-version protection fails closed. A stolen backup master key remains valid for every epoch of that backup; recovery requires a new backup ID/master key and fresh replicas. |
 | Package-proxy compromise | `/config` is sensitive Caddy state containing the local CA certificate and signing key. It is backed up with the durable state, never represented by a settings export, and never offered as a source share. |
 | Path traversal | Canonical authorized root, protocol-level relative path type, rejection of absolute/empty/`.`/`..` paths, component-by-component no-follow resolution. |
 | Symlink or TOCTOU escape | Do not follow source symlinks by default. Rust and Apple restore paths use root descriptors, descriptor-relative no-follow traversal, and device/inode identity checks; root or child swaps fail closed before writes. |
@@ -31,9 +75,10 @@ Plaintext file contents and paths, backup/content keys, long-lived device identi
 | Unsafe settings import | Version/schema validation, size limits, reject unknown key-like fields, never deserialize identity keys from normal export. |
 | Unraid mount mistake | Read-only sources by default; `/boot` optional and read-only for backup; restore requires a separate explicit writable target and preview. |
 
-## Cryptographic design contract
+### Cryptographic design contract
 
-- Device identity and every other long-lived engine secret are stored in versioned authenticated envelopes. Docker/Unraid obtains the KEK only from a separately mounted owner-only secret file; macOS obtains its KEK hierarchy from the data-protection Keychain; Android unwraps it with Android Keystore. The Rust runtime receives only explicit key material and refuses to open state when that protector is unavailable. These adapter contracts have focused platform tests, but real-host deployment evidence remains separate from unit and simulator coverage.
+- Device identity and every other long-lived engine secret are stored in versioned authenticated envelopes. Docker/Unraid obtains the KEK only from a separately mounted owner-only secret file; macOS obtains its KEK hierarchy from the data-protection Keychain for provisioned builds or the login Keychain with its default application ACL for personal ad-hoc builds; Android unwraps it with Android Keystore. The Rust runtime receives only explicit key material and refuses to open state when that protector is unavailable. These adapter contracts have focused platform tests, but real-host deployment evidence remains separate from unit and simulator coverage.
+- The macOS adapter identifies personal ad-hoc signing through the Security framework. It adopts an existing hierarchy from either Keychain implementation, refuses conflicting records, and never treats locked or denied access as a missing key. A changed ad-hoc application requires normal macOS Keychain authorization; the app does not broaden the item ACL or store a plaintext fallback. Apple documents the implementation and provisioning differences in [TN3137](https://developer.apple.com/documentation/technotes/tn3137-on-mac-keychains).
 - Session establishment: QUIC TLS 1.3 with the peer certificate/transcript bound to the confirmed Covalent identity.
 - Data: independently authenticated XChaCha20-Poly1305 records. Domain-separated HKDF derives a content-specific key and 192-bit nonce from backup ID, epoch, digest, and length; identical content within an epoch is intentionally deterministic for deduplication.
 - Integrity: BLAKE3 plaintext digests inside the authenticated encrypted manifest; Ed25519 signature over the versioned encrypted manifest envelope.
@@ -41,10 +86,10 @@ Plaintext file contents and paths, backup/content keys, long-lived device identi
 
 Algorithm agility is versioned and downgrade-protected. Implementations use established RustCrypto, BLAKE3, Ed25519 Dalek, rustls, and Quinn libraries. Property and tamper tests cover round trips, domain separation, ciphertext modification, key mismatch, certificate pin mismatch, and roster rollback. Independent cryptographic review is still recommended before handling irreplaceable sole copies.
 
-## Restore invariant
+### Restore invariant
 
 For authorized canonical root `R` and protocol path `p`, every created object must resolve lexically and physically beneath `R`. Any absolute component, parent traversal, platform prefix, NUL, intermediate link, final link, changed directory identity, or authorization loss aborts that entry. A restore cannot widen its root after preview. Durable two-phase per-entry journal records reconcile a fully synced destination after a crash before the completion record; an existing unverified destination is never silently accepted.
 
-## Residual risks
+### Residual risks
 
 Endpoint compromise can expose data while decrypted. A stolen backup master key is not healed by incrementing its epoch. Traffic analysis reveals timing, approximate volume, repeated keyed locators within an epoch, and provider access patterns. Role grants are device-wide rather than per-backup ACLs. A user can explicitly choose too few providers. Mobile operating systems can revoke access, delay a scheduled task, or suspend background work. Apple archive exchange uses bounded durable temporary files and therefore still requires transfer-sized local capacity. Covalent reports these states and does not promise availability it cannot prove.

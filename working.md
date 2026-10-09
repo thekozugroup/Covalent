@@ -1,59 +1,38 @@
-# Working state
+# Covalent 0.2.4 release
 
-Updated: 2026-08-31
+Updated: 2026-10-09
 
-## Status
+The owner authorized merging the functioning Covalent work to main and making
+a new release. `codex/release-0.2.4` integrates production-readiness and the
+Android appliance/mobile improvements over the current main commit. Existing
+main presentation and CI setup changes are preserved. Six integration conflicts
+retain the newer runtime and security source; the duplicate merged CodeQL YAML
+key is removed.
 
-The exact-current local `v0.2.0` release candidate from
-`dafca8efebaf904ed886d48ba8371b0fde53af56` is validated and ready for its
-milestone commit. Tier 1 is Android, Apple Silicon macOS, Docker, and Unraid.
-iOS is informational only and unsupported. This is not a deployment: no
-`v0.2.0` tag, replacement immutable image digest, published personal-use native
-artifact, or live Atlas installation exists.
+Completed preparation:
 
-## Current release changes
+- Native package versions and workspace lockfile agree on 0.2.4 / build 2004.
+- Release version checking no longer loses a failed Android/Apple assertion
+  when checking workspace dependencies. Isolated regression fixtures reject
+  each version drift without modifying the checkout.
+- Release notes distinguish Covalent validation from remaining Pi acceptance.
+- All workflow mappings have unique YAML keys; integration has no unresolved
+  conflicts or whitespace errors.
 
-- Versioned authenticated envelopes protect long-lived Rust node secrets.
-  Docker/Unraid use a separate owner-only KEK, macOS uses Keychain, and Android
-  uses Android Keystore. Missing or wrong protection fails closed.
-- First-run ownership is a durable CLI-only HTTPS claim. Existing local-token
-  deployments migrate as already claimed; native and web clients accept tokens,
-  never setup codes.
-- Backup/archive terminal results persist until clients acknowledge them.
-  Clients preserve retry identity and receipts across reload, restart, and
-  interruption; retained results apply bounded backpressure.
-- Provider work uses durable bounded leases and streaming transfers. New
-  snapshots use a 512 KiB average CDC chunk size; old recorded boundaries remain
-  readable. Two consecutive exact 1 GiB source-loss gates completed at 26.127
-  MiB/s and 25.860 MiB/s with exact provider-only restore and enforced RSS/disk
-  ceilings.
-- The macOS product and helper are arm64-only. Android targets API 37. Docker
-  and Unraid remain Tier 1 with an immutable-digest-only template. Tailscale
-  use is explicit-address routing, not container-side Tailnet discovery.
-- Beginner setup now starts at one guide and ends with a verified restore.
-  One-command personal builders produce a checked ad-hoc Apple Silicon app and
-  a checked debug-signed Android APK. Docker setup uses separated, validated
-  host paths; blocked Unraid and Atlas deployment paths are labeled honestly.
+Acceptance gates:
 
-## Required remaining evidence
+1. Signed release commit, verified by GitHub, with all exact-source CI and
+   CodeQL checks green. The earlier Android hosted failure occurred during
+   emulator setup before the app tests; a failed-jobs retry is running.
+2. Merge the checked commit into main with the owner's commit identity and
+   preserve linear history. Superseded PRs 32 and 44 reference this integration.
+3. Create an immutable signed annotated v0.2.4 tag. Complete CLI, container and
+   unsigned macOS publishing lanes; assemble Android personal-use assets with
+   checksums, certificate and exact-source provenance.
+4. Verify the complete draft and publish it. Record final workflow IDs, release
+   assets, container digest and signing compatibility in release evidence.
 
-1. Commit and push the signed release candidate; wait for exact-commit hosted CI,
-   CodeQL, and supply-chain results.
-2. Create and verify the `v0.2.0` signed tag and published artifacts. Record the
-   newly produced immutable container digest, then update the Unraid template
-   atomically. Do not substitute a mutable tag or invent a digest.
-3. Run the documented read-only Atlas preflight. A real Atlas/Unraid install,
-   Tailnet pairing, upgrade, backup, and restore drill need explicit deployment
-   authority and remain unperformed.
-4. Publish the personal-use native scope honestly: ad-hoc Apple Silicon macOS
-   and debug-signed Android APK. Apple Developer ID/notarization is excluded;
-   Android production signing is deferred. Do not relabel either personal
-   artifact as store-signed or notarized.
-
-## Install and migration references
-
-- [v0.2.0 release candidate notes](docs/release/notes/v0.2.0.md)
-- [Docker](packaging/docker/README.md)
-- [Unraid](docs/platform/unraid.md)
-- [Atlas/Tailscale](docs/platform/atlas-tailscale.md)
-- [UI tour](docs/product/ui-tour.md)
+Pi acceptance remains separate: interrupted Pictures journal recovery,
+full-folder completion, nearby discovery and cellular handoff are pending.
+Never delete originals based only on sync completion. No Pi image is flashed
+as part of this Covalent release.

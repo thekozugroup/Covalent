@@ -17,6 +17,7 @@ import life.michaelwong.covalent.model.NodeStatus
 import life.michaelwong.covalent.model.NetworkPairing
 import life.michaelwong.covalent.model.Provider
 import life.michaelwong.covalent.model.RememberedBackup
+import life.michaelwong.covalent.model.RecoveryStatus
 import life.michaelwong.covalent.model.RestorePlanPage
 import life.michaelwong.covalent.model.RestoreConflictPolicy
 import life.michaelwong.covalent.model.TransferRecord
@@ -126,6 +127,8 @@ internal class CovalentViewModel(private val savedStateHandle: SavedStateHandle)
         private set
     var currentExportedSettings by mutableStateOf<JSONObject?>(null)
         private set
+    // Recovery status is explicitly secret-free. Recovery kit and code bytes never enter this model.
+    var recoveryStatus by mutableStateOf<RecoveryStatus?>(null)
 
     fun initialize(store: SecureNodeStore) {
         this.store = store

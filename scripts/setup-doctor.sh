@@ -96,8 +96,8 @@ check_macos() {
     missing "Apple Silicon Mac" "The macOS app supports arm64 only."
   fi
   check_rust
-  need_command xcodebuild "Install Xcode 26, open it once, and accept its license."
-  need_command swift "Install Xcode 26 with Swift 6.3."
+  need_command xcodebuild "Install Xcode 26 or newer, open it once, and accept its license."
+  need_command swift "Install Xcode 26 or newer with Swift 6.3 or newer."
   need_command codesign "Use the codesign tool included with macOS."
   need_command lipo "Install the Xcode command-line tools."
   need_command curl "Install curl. It is included with macOS."
@@ -105,9 +105,16 @@ check_macos() {
   need_sha256
   if command -v xcodebuild >/dev/null 2>&1; then
     xcode_version=$(xcodebuild -version | sed -n '1s/^Xcode //p')
-    case "$xcode_version" in
-      26|26.*) ok "Xcode $xcode_version" ;;
-      *) missing "Xcode 26 (found ${xcode_version:-unknown})" "Select Xcode 26 with xcode-select." ;;
+    xcode_major=${xcode_version%%.*}
+    case "$xcode_major" in
+      ''|*[!0-9]*) missing "Xcode 26 or newer (found ${xcode_version:-unknown})" "Select Xcode 26 or newer with xcode-select." ;;
+      *)
+        if [ "$xcode_major" -ge 26 ]; then
+          ok "Xcode $xcode_version"
+        else
+          missing "Xcode 26 or newer (found $xcode_version)" "Select Xcode 26 or newer with xcode-select."
+        fi
+        ;;
     esac
   fi
   if command -v xcodegen >/dev/null 2>&1; then

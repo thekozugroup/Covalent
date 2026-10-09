@@ -10,3 +10,5 @@ apps/android/.gradle
 apps/android/**/build
 apps/android/local.properties
 *.log
+
+**/node_modules

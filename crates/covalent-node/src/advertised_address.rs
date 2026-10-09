@@ -189,6 +189,21 @@ pub fn select_advertised_address(
     })
 }
 
+/// Android uses a stable Tailnet IPv4 when its VPN is connected. The peer and
+/// folder transports both bind IPv4; never advertise a v6 address on those sockets.
+pub fn select_android_address(observed: &[IpAddr]) -> Result<IpAddr, AddressRefusal> {
+    let v4: Vec<_> = observed.iter().copied().filter(IpAddr::is_ipv4).collect();
+    if let Some(address) = v4
+        .iter()
+        .copied()
+        .filter(|address| classify(*address) == Some(AddressClass::Tailnet))
+        .min()
+    {
+        return Ok(address);
+    }
+    select_advertised_address(&v4, false)
+}
+
 /// Reads the host's interface addresses.
 ///
 /// Failure to enumerate is reported as an empty list rather than an error: the
@@ -202,6 +217,14 @@ pub fn observed_interface_addresses() -> Vec<IpAddr> {
             interfaces
                 .into_iter()
                 .filter(|interface| !interface.is_loopback())
+                // Cellular carriers also use CGNAT. Only a VPN interface may
+                // supply a Tailnet candidate on Android.
+                .filter(|interface| {
+                    !cfg!(target_os = "android")
+                        || classify(interface.ip()) != Some(AddressClass::Tailnet)
+                        || interface.name.starts_with("tun")
+                        || interface.name == "tailscale0"
+                })
                 .map(|interface| interface.ip())
                 .collect()
         },
@@ -252,7 +275,11 @@ pub fn resolve_advertised_endpoint(
     if !bound.ip().is_unspecified() && !bound.ip().is_loopback() {
         return Ok(bound);
     }
-    let address = select_advertised_address(observed, in_container)?;
+    let address = if cfg!(target_os = "android") && bound.is_ipv4() {
+        select_android_address(observed)?
+    } else {
+        select_advertised_address(observed, in_container)?
+    };
     Ok(SocketAddr::new(address, bound.port()))
 }
 
@@ -262,6 +289,19 @@ mod tests {
 
     fn ip(text: &str) -> IpAddr {
         text.parse().expect("address")
+    }
+
+    #[test]
+    fn android_tailnet_survives_wifi_address_changes() {
+        let tailnet = ip("100.101.102.103");
+        for lan in ["192.168.1.50", "10.10.0.2"] {
+            assert_eq!(select_android_address(&[ip(lan), tailnet]), Ok(tailnet));
+        }
+        assert_eq!(
+            select_android_address(&[ip("192.168.1.50")]),
+            Ok(ip("192.168.1.50"))
+        );
+        assert!(select_android_address(&[ip("fe80::1"), ip("127.0.0.1")]).is_err());
     }
 
     #[test]

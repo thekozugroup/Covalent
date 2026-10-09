@@ -66,18 +66,18 @@ read_apple_project_version() {
 
 check_workspace_dependency_versions() {
   expected=$1
-  status=0
+  workspace_status=0
   for manifest in $workspace_manifests; do
     while IFS= read -r line; do
       actual=$(printf '%s\n' "$line" | sed -n 's/.*version = "\([0-9][0-9.]*\)".*path = "\.\.\/covalent-[^"]*".*/\1/p')
       [ -n "$actual" ] || continue
       if [ "$actual" != "$expected" ]; then
         echo "version drift: $manifest has internal Covalent dependency $actual, expected $expected" >&2
-        status=1
+        workspace_status=1
       fi
     done < "$manifest"
   done
-  return "$status"
+  return "$workspace_status"
 }
 
 rewrite_workspace_dependency_versions() {

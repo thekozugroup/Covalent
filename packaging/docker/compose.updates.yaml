@@ -1,0 +1,29 @@
+# Optional: docker compose -f packaging/docker/compose.yaml -f packaging/docker/compose.updates.yaml up -d
+services:
+  updater:
+    image: nickfedor/watchtower:1.22.2@sha256:b9c29d2cc30d5f232ab4d8d86e1a99749399c517cd12090dd3a7d2b6d03c90d5
+    container_name: Covalent-Updater
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp:size=16m,noexec,nosuid,nodev]
+    labels:
+      com.centurylinklabs.watchtower.enable: "false"
+      com.centurylinklabs.watchtower.scope: covalent
+    environment:
+      TZ: "${COVALENT_UPDATE_TIMEZONE:-UTC}"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    command:
+      - --label-enable
+      - --scope=covalent
+      - --cleanup
+      - --stop-timeout=60s
+      - --schedule=${COVALENT_UPDATE_SCHEDULE:-0 0 4 * * *}
+      - Covalent
+    logging:
+      driver: json-file
+      options:
+        max-size: 1m
+        max-file: "2"

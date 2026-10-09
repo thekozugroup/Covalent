@@ -1,9 +1,18 @@
 use covalent_protocol::{
-    ApiErrorBody, BackupSummary, ExportedDeviceSettings, Manifest, NodeEvent, NodeEventKind,
-    PROTOCOL_VERSION, PairingInvitation, RelativePath, SETTINGS_SCHEMA_VERSION, TransferKind,
-    TransferProgress, TransferState,
+    ApiErrorBody, BackupSummary, ExportedDeviceSettings, FolderShareAcceptance, FolderShareCommit,
+    FolderShareOffer, Manifest, NodeEvent, NodeEventKind, PROTOCOL_VERSION, PairingInvitation,
+    RelativePath, SETTINGS_SCHEMA_VERSION, TransferKind, TransferProgress, TransferState,
 };
 use proptest::prelude::*;
+use serde::Deserialize;
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct FolderShareFixture {
+    offer: FolderShareOffer,
+    acceptance: FolderShareAcceptance,
+    commit: FolderShareCommit,
+}
 
 #[test]
 fn versioned_json_fixtures_match_rust_contracts() {
@@ -18,6 +27,17 @@ fn versioned_json_fixtures_match_rust_contracts() {
     ))
     .expect("pairing fixture");
     assert_eq!(invitation.protocol_version, PROTOCOL_VERSION);
+
+    let sharing: FolderShareFixture = serde_json::from_str(include_str!(
+        "../../../fixtures/contracts/folder-share-v1.json"
+    ))
+    .expect("folder share fixture");
+    assert_eq!(sharing.offer.schema_version, 1);
+    assert_eq!(sharing.acceptance.offer_digest, sharing.commit.offer_digest);
+    assert_eq!(
+        sharing.offer.target_device_id,
+        sharing.acceptance.target_device_id
+    );
 
     let manifest: Manifest =
         serde_json::from_str(include_str!("../../../fixtures/contracts/manifest-v1.json"))
@@ -59,6 +79,37 @@ fn adversarial_restore_path_fixture_is_rejected() {
     for value in include_str!("../../../fixtures/security/invalid-restore-paths.txt").lines() {
         assert!(RelativePath::new(value).is_err(), "accepted {value:?}");
     }
+}
+
+#[test]
+fn legacy_pairing_invitation_serialization_is_unchanged() {
+    let invitation: PairingInvitation = serde_json::from_str(include_str!(
+        "../../../fixtures/contracts/pairing-invitation-v1.json"
+    ))
+    .expect("pairing fixture");
+    let encoded = serde_json::to_value(invitation).expect("serialize pairing fixture");
+    let keys: std::collections::BTreeSet<_> = encoded
+        .as_object()
+        .expect("pairing object")
+        .keys()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(
+        keys,
+        std::collections::BTreeSet::from([
+            "endpoints",
+            "expiresAtUnixMs",
+            "invitationId",
+            "invitationSecret",
+            "invitationSecretCommitment",
+            "inviterDeviceId",
+            "inviterDeviceName",
+            "inviterPublicKey",
+            "minimumProtocolVersion",
+            "protocolVersion",
+            "signature",
+        ])
+    );
 }
 
 proptest! {

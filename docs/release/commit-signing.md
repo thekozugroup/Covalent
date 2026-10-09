@@ -9,13 +9,15 @@ new releases.
 
 It does **not** check for a specific key, a specific signer, or a local
 `allowed_signers` file. It checks GitHub's own verification records for the
-commit and annotated tag. GitHub sets `verified: true` in exactly two situations:
+commit and annotated tag. The relevant supported signing paths are:
 
 1. The commit carries an SSH or GPG signature made with a key the author has
    registered on their GitHub account as a **signing key**.
-2. The commit was created by GitHub itself on behalf of an authenticated user —
-   the web editor, a merge performed through the UI or API, or any write through
-   the Contents API. GitHub signs those with its own key.
+2. The commit was created through a GitHub workflow that signs on behalf of an
+   authenticated user, such as the GraphQL `createCommitOnBranch` mutation used
+   for this repository's initial release. Confirm the resulting verification
+   record; a server-side write alone does not guarantee a signed commit. The
+   REST Git Data and Contents APIs must not be assumed to sign it.
 
 Case 2 is observable in this repository today. Every Dependabot commit on the
 `dependabot/*` branches reports:
@@ -63,47 +65,79 @@ commit; it cannot approve a replacement tag or any later release. Register the
 SSH signing key below and all later releases carry stronger commit and tag
 attestation.
 
-## The fix: register an SSH signing key
+## Repository setup
 
 This is the steady state the repository's
 [signed-history policy](signed-history-policy.md) assumes, and it is free.
 
-The `gh` token in use lacks the `admin:ssh_signing_key` scope, so **this cannot
-be done non-interactively** — `gh ssh-key add --type signing` will fail with a
-scope error until the token is refreshed. Run these yourself, in order:
+Register a dedicated public key as a GitHub **signing key**, not an
+authentication key, then enable SSH signing in this repository:
 
 ```sh
-# 1. Grant the scope. This opens a browser and asks for confirmation.
 gh auth refresh -h github.com -s admin:ssh_signing_key
-
-# 2. Create a signing key. Use a passphrase; add it to your agent afterwards.
 ssh-keygen -t ed25519 -C "thekozugroup@gmail.com" -f ~/.ssh/covalent_signing
-
-# 3. Register it with GitHub as a SIGNING key, not an authentication key.
 gh ssh-key add ~/.ssh/covalent_signing.pub --type signing --title "Covalent release signing"
-
-# 4. Tell git to use it for every commit and tag.
-git config --global gpg.format ssh
-git config --global user.signingkey ~/.ssh/covalent_signing.pub
-git config --global commit.gpgsign true
-git config --global tag.gpgsign true
+git config --local gpg.format ssh
+git config --local user.signingkey ~/.ssh/covalent_signing
+git config --local commit.gpgsign true
+git config --local tag.gpgsign true
 ```
 
-Verify before relying on it:
+The current repository completed that setup on 2026-09-20. The signing-only
+key is registered to `thekozugroup`; repository-local commit and tag signing are
+enabled. The receipt is
+`artifacts/validation-2026-09-20/release-signing-setup.json`. It records the
+public fingerprint and configuration, never private-key contents. Keep the
+private key persistent and protected; it is release identity, not temporary
+test data.
+
+Confirm configuration without printing private material:
 
 ```sh
-git commit --allow-empty -m "chore: verify commit signing"
-git log -1 --pretty='%h %G? %s'          # expect G, not N
-git push origin main
-gh api repos/thekozugroup/Covalent/commits/main --jq '.commit.verification.verified'
+git config --local --get gpg.format           # ssh
+git config --local --get user.signingkey      # path only
+git config --local --get commit.gpgsign       # true
+git config --local --get tag.gpgsign          # true
+gh api user/ssh_signing_keys \
+  --jq '.[] | select(.title == "Covalent release signing") | {id,title}'
 ```
 
-That last command must print `true`. `%G?` printing `G` locally is necessary but
-not sufficient — GitHub only reports `verified: true` once the *public* key is
-registered on the account, so always confirm through the API.
+Sign the real release commit normally. Do not create an empty verification
+commit or push directly to `main` only to test the key:
 
-Once signing is on, tag releases with `git tag -s`. The release workflow rejects
-lightweight, unsigned, and mismatched annotated tags before it builds an artifact.
+```sh
+git commit -S -m "release: prepare v0.2.1"
+git log -1 --show-signature --pretty=fuller
+git push origin codex/production-readiness
+release_commit=$(git rev-parse HEAD)
+gh api "repos/thekozugroup/Covalent/commits/${release_commit}" \
+  --jq '.commit.verification | {verified,reason}'
+```
+
+The API must report `verified: true` and `reason: valid`. A local signature is
+necessary but not sufficient because release workflows use GitHub's record.
+
+After the exact intended release commit is pushed, GitHub-verified, and passes
+its required checks, create and verify the annotated signed tag. The release
+workflows do not require that commit to be on `main`; no PR merge is needed:
+
+```sh
+release_commit=$(git rev-parse HEAD)
+gh api "repos/thekozugroup/Covalent/commits/${release_commit}" \
+  --jq '.commit.verification | {verified,reason}'
+git tag -s v0.2.1 -m "Covalent v0.2.1"
+git verify-tag v0.2.1
+test "$(git rev-list -n 1 v0.2.1)" = "${release_commit}"
+git push origin v0.2.1
+```
+
+Pushing the tag starts `container-supply-chain.yml`,
+`apple-unsigned-release.yml`, and `cli-release.yml`. The personal-release scope
+does not run `apple-release.yml` or `android-release.yml`: Developer ID and
+Android production signing remain deferred. Review all draft assets, checksums,
+and workflow results before publishing through the commands in
+`publishing.md`. The workflows reject lightweight, unsigned, mismatched, or
+GitHub-unverified tags before building release artifacts.
 
 ## Why the gate was not weakened
 

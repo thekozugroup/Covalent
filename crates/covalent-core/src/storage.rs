@@ -22,7 +22,8 @@ use crate::atomic::{
 };
 use crate::crypto::validate_hex_locator;
 use crate::recovery::MAX_RECOVERY_CAPSULE_BYTES;
-use crate::{BackupKey, CoreError, EncryptedChunk, RecoveryCapsule};
+use crate::replication::RecoveryCatalogSink;
+use crate::{BackupKey, CoreError, EncryptedChunk, JobControl, RecoveryCapsule};
 
 const SNAPSHOT_SCHEMA_VERSION: u16 = 1;
 const MAX_SNAPSHOT_METADATA_BYTES: usize = 256 * 1_024 * 1_024;
@@ -4009,9 +4010,53 @@ impl ChunkStore {
 
     /// Lists every bounded capsule available to an authenticated recovery principal.
     pub fn list_recovery_capsules(&self) -> Result<Vec<RecoveryCapsule>, CoreError> {
+        #[derive(Default)]
+        struct Collector(Vec<RecoveryCapsule>);
+
+        impl RecoveryCatalogSink for Collector {
+            fn reserve(&mut self, _serialized_bytes: u64) -> Result<(), CoreError> {
+                Ok(())
+            }
+
+            fn accept(&mut self, capsule: RecoveryCapsule) -> Result<(), CoreError> {
+                self.0.push(capsule);
+                Ok(())
+            }
+        }
+
+        let mut collector = Collector::default();
+        self.visit_recovery_capsules(&JobControl::new(), &mut collector)?;
+        collector.0.sort_by(|left, right| {
+            (left.signer_device_id, left.backup_id, &left.snapshot_id).cmp(&(
+                right.signer_device_id,
+                right.backup_id,
+                &right.snapshot_id,
+            ))
+        });
+        Ok(collector.0)
+    }
+
+    /// Visits each local recovery capsule while bounding reads to its reserved file size.
+    pub fn visit_recovery_capsules(
+        &self,
+        control: &JobControl,
+        sink: &mut dyn RecoveryCatalogSink,
+    ) -> Result<(), CoreError> {
+        const MAXIMUM_CAPSULES: usize = 1_000_000;
+
         let root = self.root.join("recovery-capsules/by-owner");
-        let mut capsules = Vec::new();
-        for owner_entry in read_directory_sorted(&root)? {
+        let mut capsule_count = 0_usize;
+        for owner_entry in fs::read_dir(&root).map_err(|source| CoreError::Io {
+            operation: "read recovery capsule owner directory",
+            path: root.clone(),
+            source,
+        })? {
+            control.check()?;
+            let owner_entry = owner_entry.map_err(|source| CoreError::Io {
+                operation: "read recovery capsule owner entry",
+                path: root.clone(),
+                source,
+            })?;
             let owner_device_id = DeviceId::from_str(&owner_entry.file_name().to_string_lossy())
                 .map_err(|_| CoreError::AuthenticationFailed)?;
             let owner_path = owner_entry.path();
@@ -4024,7 +4069,17 @@ impl ChunkStore {
             if owner_metadata.file_type().is_symlink() || !owner_metadata.is_dir() {
                 return Err(CoreError::AuthenticationFailed);
             }
-            for backup_entry in read_directory_sorted(&owner_path)? {
+            for backup_entry in fs::read_dir(&owner_path).map_err(|source| CoreError::Io {
+                operation: "read recovery capsule backup directory",
+                path: owner_path.clone(),
+                source,
+            })? {
+                control.check()?;
+                let backup_entry = backup_entry.map_err(|source| CoreError::Io {
+                    operation: "read recovery capsule backup entry",
+                    path: owner_path.clone(),
+                    source,
+                })?;
                 let backup_id = BackupId::from_str(&backup_entry.file_name().to_string_lossy())
                     .map_err(|_| CoreError::AuthenticationFailed)?;
                 let backup_path = backup_entry.path();
@@ -4039,14 +4094,53 @@ impl ChunkStore {
                         "unexpected recovery capsule entry".to_owned(),
                     ));
                 }
-                for entry in read_directory_sorted(&backup_path)? {
+                for entry in fs::read_dir(&backup_path).map_err(|source| CoreError::Io {
+                    operation: "read recovery capsule directory",
+                    path: backup_path.clone(),
+                    source,
+                })? {
+                    control.check()?;
+                    let entry = entry.map_err(|source| CoreError::Io {
+                        operation: "read recovery capsule entry",
+                        path: backup_path.clone(),
+                        source,
+                    })?;
+                    capsule_count = capsule_count
+                        .checked_add(1)
+                        .ok_or(CoreError::ResourceLimit("recovery capsule listing"))?;
+                    if capsule_count > MAXIMUM_CAPSULES {
+                        return Err(CoreError::ResourceLimit("recovery capsule listing"));
+                    }
                     let path = entry.path();
-                    let capsule: RecoveryCapsule =
-                        serde_json::from_slice(&read_private_regular_file_bounded(
-                            &path,
-                            MAX_RECOVERY_CAPSULE_BYTES as u64,
-                            "read listed recovery capsule",
-                        )?)?;
+                    let (mut file, original_length) = open_private_regular_file_bounded(
+                        &path,
+                        MAX_RECOVERY_CAPSULE_BYTES as u64,
+                        None,
+                        "open listed recovery capsule",
+                    )?;
+                    sink.reserve(original_length)?;
+                    control.check()?;
+                    let capsule: RecoveryCapsule = {
+                        let limited = (&mut file).take(original_length);
+                        let mut reader = BufReader::new(limited);
+                        let capsule = serde_json::from_reader(&mut reader)?;
+                        if reader.get_ref().limit() != 0 {
+                            return Err(CoreError::AuthenticationFailed);
+                        }
+                        capsule
+                    };
+                    if file
+                        .metadata()
+                        .map_err(|source| CoreError::Io {
+                            operation: "verify listed recovery capsule",
+                            path: path.clone(),
+                            source,
+                        })?
+                        .len()
+                        != original_length
+                    {
+                        return Err(CoreError::AuthenticationFailed);
+                    }
                     if capsule.signer_device_id != owner_device_id
                         || capsule.backup_id != backup_id
                         || path.extension().and_then(|value| value.to_str()) != Some("json")
@@ -4055,21 +4149,12 @@ impl ChunkStore {
                     {
                         return Err(CoreError::AuthenticationFailed);
                     }
-                    capsules.push(capsule);
-                    if capsules.len() > 1_000_000 {
-                        return Err(CoreError::ResourceLimit("recovery capsule listing"));
-                    }
+                    control.check()?;
+                    sink.accept(capsule)?;
                 }
             }
         }
-        capsules.sort_by(|left, right| {
-            (left.signer_device_id, left.backup_id, &left.snapshot_id).cmp(&(
-                right.signer_device_id,
-                right.backup_id,
-                &right.snapshot_id,
-            ))
-        });
-        Ok(capsules)
+        control.check()
     }
 
     /// Lists one bounded page belonging only to the authenticated owner peer.
@@ -9593,6 +9678,98 @@ mod tests {
             signer_device_id: peer_device_id,
             signature: "opaque".to_owned(),
         }
+    }
+
+    #[test]
+    fn recovery_capsule_visitor_reserves_exact_file_bytes_before_accepting() {
+        #[derive(Default)]
+        struct RecordingSink {
+            reserved: Vec<u64>,
+            accepted: Vec<RecoveryCapsule>,
+        }
+
+        impl RecoveryCatalogSink for RecordingSink {
+            fn reserve(&mut self, serialized_bytes: u64) -> Result<(), CoreError> {
+                self.reserved.push(serialized_bytes);
+                Ok(())
+            }
+
+            fn accept(&mut self, capsule: RecoveryCapsule) -> Result<(), CoreError> {
+                self.accepted.push(capsule);
+                Ok(())
+            }
+        }
+
+        let directory = tempdir().expect("temporary store");
+        let store = ChunkStore::open(directory.path(), 1_048_576).expect("store");
+        let owner = DeviceId::new();
+        let first = test_recovery_capsule(owner, BackupId::new(), "first", 1);
+        let second = test_recovery_capsule(owner, BackupId::new(), "second", 2);
+        store.put_recovery_capsule(&first).expect("first capsule");
+        store.put_recovery_capsule(&second).expect("second capsule");
+
+        let mut sink = RecordingSink::default();
+        store
+            .visit_recovery_capsules(&JobControl::new(), &mut sink)
+            .expect("visit capsules");
+        sink.reserved.sort_unstable();
+        let mut expected_lengths = vec![
+            serde_json::to_vec(&first).expect("first json").len() as u64,
+            serde_json::to_vec(&second).expect("second json").len() as u64,
+        ];
+        expected_lengths.sort_unstable();
+        assert_eq!(sink.reserved, expected_lengths);
+        assert_eq!(sink.accepted.len(), 2);
+    }
+
+    #[test]
+    fn recovery_capsule_visitor_rejects_file_growth_beyond_reservation() {
+        struct GrowingSink {
+            path: PathBuf,
+            reserved: Option<u64>,
+            accepted: usize,
+        }
+
+        impl RecoveryCatalogSink for GrowingSink {
+            fn reserve(&mut self, serialized_bytes: u64) -> Result<(), CoreError> {
+                self.reserved = Some(serialized_bytes);
+                let mut file = fs::OpenOptions::new()
+                    .append(true)
+                    .open(&self.path)
+                    .expect("open capsule for simulated growth");
+                file.write_all(b" ").expect("grow capsule");
+                Ok(())
+            }
+
+            fn accept(&mut self, _capsule: RecoveryCapsule) -> Result<(), CoreError> {
+                self.accepted += 1;
+                Ok(())
+            }
+        }
+
+        let directory = tempdir().expect("temporary store");
+        let store = ChunkStore::open(directory.path(), 1_048_576).expect("store");
+        let capsule = test_recovery_capsule(DeviceId::new(), BackupId::new(), "growing", 1);
+        store.put_recovery_capsule(&capsule).expect("capsule");
+        let path = store
+            .recovery_capsule_path(
+                capsule.signer_device_id,
+                capsule.backup_id,
+                &capsule.snapshot_id,
+            )
+            .expect("capsule path");
+        let original_length = fs::metadata(&path).expect("capsule metadata").len();
+        let mut sink = GrowingSink {
+            path,
+            reserved: None,
+            accepted: 0,
+        };
+        assert!(matches!(
+            store.visit_recovery_capsules(&JobControl::new(), &mut sink),
+            Err(CoreError::AuthenticationFailed)
+        ));
+        assert_eq!(sink.reserved, Some(original_length));
+        assert_eq!(sink.accepted, 0);
     }
 
     #[allow(clippy::too_many_arguments)]

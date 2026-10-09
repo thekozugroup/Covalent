@@ -43,6 +43,10 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           fetch-depth: 0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v6
+        with:
+          go-version: "1.26.7"
+          cache: false
       - uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # 1.97.1
         with:
           targets: aarch64-apple-darwin
@@ -89,6 +93,9 @@ jobs:
           test -s apps/apple/Package.resolved
           cd apps/apple
           xcodegen generate --quiet
+          swiftpm_dir="Covalent.xcodeproj/project.xcworkspace/xcshareddata/swiftpm"
+          mkdir -p "$swiftpm_dir"
+          cp Package.resolved "$swiftpm_dir/Package.resolved"
           xcodebuild \
             -resolvePackageDependencies \
             -project Covalent.xcodeproj \
@@ -187,6 +194,9 @@ jobs:
           retention-days: 7
 
   publish:
+    concurrency:
+      group: covalent-release-assets-${{ github.repository_id }}
+      cancel-in-progress: false
     name: Re-verify and publish unsigned macOS artifacts
     needs: build-verify
     runs-on: ubuntu-latest

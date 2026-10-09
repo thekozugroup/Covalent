@@ -22,6 +22,18 @@ for job in "$build_linux" "$build_macos" "$sign_job" "$publish_job"; do
   test -n "$job"
 done
 
+grep -Fq 'artifact_run_id:' "$workflow"
+grep -Fq 'actions: read' "$workflow"
+grep -Fq 'release-tools-${version}' "$workflow"
+grep -Fq 'actions/runs/${ARTIFACT_RUN_ID}' "$workflow"
+grep -Fq "'.head_sha')\" = \"\${source_sha}" "$workflow"
+grep -Fq "'.path')\" = .github/workflows/cli-release.yml" "$workflow"
+grep -Fq 'Build and validate CLI linux-amd64' "$workflow"
+grep -Fq 'Build and validate CLI linux-arm64' "$workflow"
+grep -Fq 'Build and validate CLI macOS arm64' "$workflow"
+grep -Fq 'run-id: ${{ inputs.artifact_run_id || github.run_id }}' "$workflow"
+grep -Fq 'github-token: ${{ github.token }}' "$workflow"
+
 for build_job in "$build_linux" "$build_macos"; do
   printf '%s\n' "$build_job" | grep -Fq 'contents: read'
   if printf '%s\n' "$build_job" | grep -Eq 'id-token: write|cosign|sign-blob|attest-blob'; then
@@ -34,10 +46,12 @@ done
 
 printf '%s\n' "$sign_job" | grep -Fq 'id-token: write'
 printf '%s\n' "$sign_job" | grep -Fq 'needs: [validate, build-linux, build-macos]'
+printf '%s\n' "$sign_job" | grep -Fq "needs.validate.outputs.recovery == 'true'"
+printf '%s\n' "$sign_job" | grep -Fq 'needs.validate.outputs.source_sha'
 unsigned_checksum_contract="shasum -a 256 -c \"\${unsigned_sums}\""
 printf '%s\n' "$sign_job" | grep -Fq "$unsigned_checksum_contract"
 printf '%s\n' "$sign_job" | grep -Fq 'cosign sign-blob --yes --bundle'
-printf '%s\n' "$sign_job" | grep -Fq 'cosign attest-blob --yes --type spdxjson'
+printf '%s\n' "$sign_job" | grep -Fq 'cosign attest-blob --yes --new-bundle-format --type spdxjson'
 printf '%s\n' "$sign_job" | grep -Fq 'signed-covalent-cli-'
 if printf '%s\n' "$sign_job" | grep -Eq 'actions/checkout|rust-toolchain|rust-cache|cargo build|anchore/sbom-action'; then
   echo "CLI signing job must remain a clean handoff verifier, not a build job" >&2
@@ -59,8 +73,11 @@ if [ -z "$handoff_verify_line" ] || [ -z "$sign_line" ] \
 fi
 
 printf '%s\n' "$publish_job" | grep -Fq 'needs: [validate, sign-cli]'
+printf '%s\n' "$publish_job" | grep -Fq 'group: covalent-release-assets-${{ github.repository_id }}'
+printf '%s\n' "$publish_job" | grep -Fq 'cancel-in-progress: false'
 printf '%s\n' "$publish_job" | grep -Fq 'pattern: signed-covalent-cli-*'
 printf '%s\n' "$publish_job" | grep -Fq '../scripts/verify-cli-release-attestation.sh'
+printf '%s\n' "$publish_job" | grep -Fq 'CERTIFICATE_IDENTITY: ${{ needs.validate.outputs.certificate_identity }}'
 if printf '%s\n' "$publish_job" | grep -Fq 'certificate-identity-regexp'; then
   echo "CLI publication must pin an exact Cosign certificate identity" >&2
   exit 1

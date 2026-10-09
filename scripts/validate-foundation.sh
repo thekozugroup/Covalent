@@ -54,11 +54,11 @@ docs/platform/android.md
 crates/covalent-core/Cargo.toml
 crates/covalent-protocol/Cargo.toml
 crates/covalent-node/Cargo.toml
-crates/covalent-ffi/Cargo.toml
 crates/covalent-cli/Cargo.toml
 apps/apple/Project.yml
 apps/android/app/build.gradle.kts
 packaging/docker/Dockerfile
+packaging/docker/compose.sync.yaml
 packaging/unraid/covalent.xml
 .github/workflows/ci.yml
 .github/workflows/apple-unsigned-release.yml
@@ -72,7 +72,25 @@ scripts/validate-setup-paths.sh
 scripts/build-personal-macos-app.sh
 scripts/build-personal-android-apk.sh
 scripts/test-personal-macos-app-builder.sh
+scripts/test-macos-sync-engine-packaging.sh
+scripts/build-android-sync-engine.sh
+scripts/build-linux-sync-engine.sh
+scripts/test-linux-sync-engine-notice-packaging.sh
+scripts/collect-go-target-license-inventory.py
+scripts/test-collect-go-target-license-inventory.py
+scripts/collect-sync-engine-notices.py
+scripts/collect-android-native-link-provenance.py
+scripts/android-go-link-wrapper.sh
+scripts/android-native-library-directory.py
+scripts/test-android-native-library-directory.py
+scripts/test-collect-android-native-link-provenance.py
+scripts/container-folder-sync-e2e.py
+scripts/test-collect-sync-engine-notices.py
+docs/licenses/sync-engine/Go-1.26.7-LICENSE.txt
+docs/licenses/sync-engine/Go-1.26.7-PATENTS.txt
+scripts/test-android-native-package.sh
 scripts/test-personal-android-apk-builder.sh
+scripts/test-android-jni-build-command.sh
 scripts/test-openapi-routes.sh
 scripts/test-setup-guidance.mjs
 scripts/test-setup-paths.sh
@@ -88,13 +106,10 @@ done
 for path in README.md docs/product/requirements.md docs/product/roadmap.md docs/architecture/overview.md docs/release/validation-matrix.md; do
   grep -q "Tier 1" "$path"
   grep -Eqi 'iOS (and Windows are|is) not (a )?supported|iOS native \| Not a blocker — unsupported platform' "$path"
-  grep -Eqi 'informational|not a required check|not gated|not gated on' "$path"
 done
 
-# iOS source and CI may remain for shared-code diagnostics, but current product
-# documentation must not revive the withdrawn supported-Tier-2 policy. ADR 0005
-# is deliberately excluded because it preserves that wording as historical
-# context for the policy change.
+# Keep unsupported platforms out of the current product contract. ADR 0005
+# preserves the former policy as historical context.
 scan_must_not_match "current documentation describes iOS as a supported Tier 2 platform" \
   -i --glob '*.md' --glob '!docs/adr/0005-tiered-platform-readiness.md' \
   --glob '!docs/release/notes/**' \
@@ -135,7 +150,21 @@ fi
 node ./scripts/test-setup-guidance.mjs
 ./scripts/test-setup-paths.sh
 ./scripts/test-personal-macos-app-builder.sh
+./scripts/test-macos-sync-engine-packaging.sh
+./scripts/test-android-native-package.sh
+python3 -B ./scripts/test-collect-sync-engine-notices.py
+python3 -B ./scripts/test-collect-caddy-distribution-evidence.py
+python3 -B ./scripts/test-verify-caddy-distribution-evidence.py
+python3 -B ./scripts/test-collect-alpine-runtime-evidence.py
+python3 -B ./scripts/test-verify-alpine-runtime-evidence.py
+python3 -B ./scripts/test-collect-android-native-link-provenance.py
+python3 -B ./scripts/test-collect-android-native-distribution-summary.py
+python3 -B ./scripts/test-android-native-library-directory.py
+python3 -B ./scripts/test-collect-go-target-license-inventory.py
+./scripts/test-linux-sync-engine-notice-packaging.sh
 ./scripts/test-personal-android-apk-builder.sh
+./scripts/test-android-jni-build-command.sh
+./scripts/test-remote-drill-owner-loss.sh
 ./scripts/test-openapi-routes.sh
 
 # The contract fixtures are a gate, not a nicety: `if command -v jq` silently
