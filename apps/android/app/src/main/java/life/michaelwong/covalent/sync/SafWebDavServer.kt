@@ -480,8 +480,8 @@ internal class SafWebDavServer(
             require(raw.mimeType.isNotEmpty() && raw.mimeType.toByteArray(Charsets.UTF_8).size <= MAX_MIME_BYTES)
             // FLAG_PARTIAL is an inlined API 29 bit. Rejecting it is safe on
             // API 26-28, where providers cannot legitimately advertise it.
-            require(raw.flags and DOCUMENT_FLAG_PARTIAL == 0)
-            require(raw.flags and DocumentsContract.Document.FLAG_VIRTUAL_DOCUMENT == 0)
+            require((raw.flags and DOCUMENT_FLAG_PARTIAL) == 0)
+            require((raw.flags and DocumentsContract.Document.FLAG_VIRTUAL_DOCUMENT) == 0)
             require(raw.sizeBytes == null || raw.sizeBytes >= 0)
             require(raw.lastModifiedMillis == null || raw.lastModifiedMillis >= 0)
             val documentUri = uri(raw.documentId)

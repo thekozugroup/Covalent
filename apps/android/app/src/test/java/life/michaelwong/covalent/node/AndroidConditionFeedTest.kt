@@ -8,6 +8,23 @@ import org.junit.Test
 
 class AndroidConditionFeedTest {
     @Test
+    fun observedWifiStartsEmptyAndRejectsSnapshotsFromAnEarlierLifetime() {
+        val state = AndroidConditionTransportState<String>()
+        val first = state.start(emptyList(), initialCharging = false)
+        assertEquals(emptyList<String>(), state.observedWifiNetworks(first))
+        state.updateWifi(first, "wifi-under-vpn", true)
+        val beforeLoss = state.observedWifiNetworks(first)
+        state.updateWifi(first, "wifi-under-vpn", false)
+        assertEquals(listOf("wifi-under-vpn"), beforeLoss)
+        assertEquals(emptyList<String>(), state.observedWifiNetworks(first))
+        state.stop()
+        assertNull(state.observedWifiNetworks(first))
+        val second = state.start(emptyList(), initialCharging = false)
+        assertNull(state.observedWifiNetworks(first))
+        assertEquals(emptyList<String>(), state.observedWifiNetworks(second))
+    }
+
+    @Test
     fun anyWifiNetworkCountsEvenWhenAnotherTransportCanBeDefault() {
         val state = AndroidConditionTransportState<String>()
         val token = state.start(initialWifi = listOf("local-wifi"), initialCharging = false)

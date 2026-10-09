@@ -150,15 +150,15 @@ internal object PackagedSyncEngine {
         gid: Int,
         appUid: Int,
     ): Boolean =
-        mode and FILE_TYPE_MASK == DIRECTORY_MODE &&
+        (mode and FILE_TYPE_MASK) == DIRECTORY_MODE &&
             uid == appUid &&
             gid == appUid &&
-            mode and WORLD_WRITE_MODE == 0
+            (mode and WORLD_WRITE_MODE) == 0
 
     internal fun privateRuntimeChildAllowed(mode: Int, uid: Int, appUid: Int): Boolean =
-        mode and FILE_TYPE_MASK == DIRECTORY_MODE &&
+        (mode and FILE_TYPE_MASK) == DIRECTORY_MODE &&
             uid == appUid &&
-            mode and 0b111_111_111 == OWNER_ONLY_MODE
+            (mode and 0b111_111_111) == OWNER_ONLY_MODE
 
     internal fun runtimeParentPathFits(value: String): Boolean =
         value.toByteArray(Charsets.UTF_8).size <= MAX_RUNTIME_PATH_BYTES
@@ -220,7 +220,7 @@ internal object PackagedSyncEngine {
             // exposes this additional descriptor assertion only from API 30.
             if (Build.VERSION.SDK_INT >= 30) {
                 onStage("close-on-exec")
-                check(Os.fcntlInt(input.fd, OsConstants.F_GETFD, 0) and OsConstants.FD_CLOEXEC != 0)
+                check((Os.fcntlInt(input.fd, OsConstants.F_GETFD, 0) and OsConstants.FD_CLOEXEC) != 0)
             }
             onStage("fstat-identity")
             val opened = Os.fstat(input.fd)

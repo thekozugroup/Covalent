@@ -17,6 +17,13 @@ tombstones until acknowledgement is durable, and serializes startup/interactive
 capability changes. Three new regression tests fail on the previous code and pass after correction;
 the existing capability-repair and lifecycle tests also pass.
 
+The default-branch CodeQL scan exposed nine actionable warnings after integration.
+Bitmask grouping is now explicit, the unused instrumentation variable is removed,
+and Wi-Fi tracking uses callback-observed networks instead of the deprecated list.
+Three singleton equality findings (#17, #18, #25) were reviewed against javap output
+and dismissed as compiler-generated false positives. The repository-wide zero-open
+CodeQL gate remains unchanged; default-branch analysis must confirm closure.
+
 Acceptance gates:
 
 1. Corrected source passes unit/lint/package checks, targeted persisted-removal

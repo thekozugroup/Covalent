@@ -431,7 +431,7 @@ class SafFolderSyncJourneyInstrumentedTest {
                 println("COVALENT_RECOVERY_UI visibleExactRunRetry=$visibleRetry")
                 throw failure
             }
-            val repairedRun = awaitValue("repaired SAF run completion") {
+            awaitValue("repaired SAF run completion") {
                 sourceShare(repairedA).linkRun?.takeIf { it.phase == FolderLinkRunPhase.SUCCEEDED }
             }
             awaitExactHelperCounts(0, 0)
@@ -1399,7 +1399,7 @@ class SafFolderSyncJourneyInstrumentedTest {
                 bytes[0].toInt() == 0xfd && bytes[1].toInt() == 0x7a &&
                     bytes[2].toInt() == 0x11 && bytes[3].toInt() == 0x5c &&
                     bytes[4].toInt() == 0xa1 && bytes[5].toInt() == 0xe0 -> ADDRESS_CLASS_TAILNET
-                bytes[0].toInt() and 0xfe == 0xfc -> ADDRESS_CLASS_PRIVATE_LAN
+                (bytes[0].toInt() and 0xfe) == 0xfc -> ADDRESS_CLASS_PRIVATE_LAN
                 else -> null
             }
         }

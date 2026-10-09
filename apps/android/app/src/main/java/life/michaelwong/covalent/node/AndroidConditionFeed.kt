@@ -61,6 +61,9 @@ internal class AndroidConditionTransportState<T> {
     fun snapshot(token: Long): AndroidConditionSnapshot? =
         if (active && token == epoch) snapshot() else null
 
+    fun observedWifiNetworks(token: Long): List<T>? =
+        if (active && token == epoch) wifiNetworks.toList() else null
+
     private fun snapshot() = AndroidConditionSnapshot(wifiNetworks.isNotEmpty(), charging)
 }
 
@@ -116,11 +119,11 @@ internal class AndroidConditionFeed(
     fun start() {
         if (registered) return
         heartbeat.start()
-        val initialWifi = currentWifiNetworks().orEmpty()
-        token = transport.start(initialWifi, initialCharging = false)
+        // The Wi-Fi callback reports existing matching networks too, including a
+        // physical Wi-Fi network underneath a VPN. Stay false until it arrives.
+        token = transport.start(emptyList(), initialCharging = false)
         val currentToken = token
         val callback = object : ConnectivityManager.NetworkCallback() {
-            override fun onAvailable(network: Network) = wifiChanged(currentToken, network, true)
             override fun onLost(network: Network) = wifiChanged(currentToken, network, false)
             override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) =
                 wifiChanged(currentToken, network, capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI))
@@ -165,7 +168,9 @@ internal class AndroidConditionFeed(
 
     private fun wifiChanged(callbackToken: Long, network: Network, available: Boolean) {
         transport.updateWifi(callbackToken, network, available)?.let {
-            report(callbackToken, SystemClock.elapsedRealtime(), refresh = false)
+            // Synchronous capability reads must run after the network callback
+            // returns; the callback-provided capability is authoritative here.
+            actor.post { report(callbackToken, SystemClock.elapsedRealtime(), refresh = false) }
         }
     }
 
@@ -178,9 +183,9 @@ internal class AndroidConditionFeed(
     private fun report(callbackToken: Long, nowMs: Long, refresh: Boolean) {
         val ready = connection() ?: return
         if (refresh || heartbeat.shouldRefresh(nowMs)) {
-            // Reconcile the callback state without requiring Wi-Fi to be the default network.
-            // If Android cannot provide the network list, do not renew a stale observation.
-            val wifi = currentWifiNetworks() ?: if (refresh) emptyList() else return
+            // Recheck callback-observed networks without requiring Wi-Fi to be
+            // the default route. An unreadable network must not renew stale state.
+            val wifi = currentWifiNetworks(callbackToken) ?: if (refresh) emptyList() else return
             transport.replaceWifi(callbackToken, wifi) ?: return
             val used = runCatching { api.status(ready) }.getOrNull()?.shares?.any { share ->
                 share.phase != FolderSharePhase.REMOVED && share.linkSettings?.confirmed == true &&
@@ -198,9 +203,8 @@ internal class AndroidConditionFeed(
     private fun isWifi(network: Network): Boolean = connectivity.getNetworkCapabilities(network)
         ?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
 
-    @Suppress("DEPRECATION")
-    private fun currentWifiNetworks(): List<Network>? = runCatching {
-        connectivity.allNetworks.filter(::isWifi)
+    private fun currentWifiNetworks(callbackToken: Long): List<Network>? = runCatching {
+        transport.observedWifiNetworks(callbackToken)?.filter(::isWifi)
     }.getOrNull()
 
     private fun Intent.isCharging(): Boolean = getIntExtra(BatteryManager.EXTRA_STATUS, -1).let {
