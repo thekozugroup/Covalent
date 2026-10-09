@@ -19,6 +19,15 @@ Completed preparation:
   Back button, then verify system Back preserves the setup draft. The targeted
   API 37 test passes. The preceding exact 0.2.4 candidate passed the local Android
   gate and minified signed assembly; final 0.2.11 validation is required below.
+- The 0.2.11 personal APK passed the full local Android gate and signed assembly.
+  Exact APK startup, cold restart, node readiness and Settings/system Back passed
+  on an API 37 arm64 emulator with software rendering.
+- Hosted CI passed all 86 baseline instrumentation tests and reached the final
+  removal check in the SAF transfer journey. That check polled a cached local
+  port after removal restarted the service. It now follows the manager's live
+  connection and still verifies both devices' removed state, unchanged identity,
+  released durable folder capability and zero remaining workers. Full rerun is
+  required before release.
 - Release notes and publishing guidance identify the personal release certificate
   mismatch with the public v0.2.1 debug APK and the separate Pi acceptance scope.
 

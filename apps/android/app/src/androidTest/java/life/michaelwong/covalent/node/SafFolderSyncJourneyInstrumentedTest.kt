@@ -595,10 +595,19 @@ class SafFolderSyncJourneyInstrumentedTest {
             compose.onNode(
                 hasText(context.getString(R.string.folder_sync_remove)) and hasAnyAncestor(isDialog()),
             ).performClick()
+            // Preparing/removing a folder capability can restart the service. Its
+            // private API port changes; the UI follows the manager's live connection.
+            // Verify the same durable removal through that current endpoint too.
             await("native SAF share removal recorded") {
-                sourceShare(repairedA).phase == FolderSharePhase.REMOVED &&
+                val current = manager.liveConnection() ?: return@await false
+                val removed = sourceShare(current).phase == FolderSharePhase.REMOVED &&
                     client.folderSyncStatus(connectionB.baseUrl, connectionB.token).shares
                         .single { it.offerId == offerId }.phase == FolderSharePhase.REMOVED
+                if (removed) {
+                    assertEquals(identityA.deviceId, client.transportIdentity(current.baseUrl, current.token).deviceId)
+                    assertTrue(FolderSyncGrantStore(context).records().none { it.offerId == offerId })
+                }
+                removed
             }
             awaitExactHelperCounts(0, 0)
         } finally {
