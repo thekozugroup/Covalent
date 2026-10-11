@@ -1,4 +1,4 @@
-FROM golang:1.26.7-alpine3.23@sha256:b17af760035fc2f338eed92d448a6c67f2d45438844fc6c60678fa5f99e44b57 AS sync-engine-worker
+FROM golang:1.27.0-alpine3.23@sha256:3747dcba41c8b0db3211fda4db61638b980e17ac5bb3c94460a975a9cfe19395 AS sync-engine-worker
 ARG TARGETARCH
 ENV CGO_ENABLED=0 \
     GOTOOLCHAIN=local \
@@ -31,7 +31,7 @@ RUN apk add --no-cache \
     && install -m 0444 /engine-evidence/target-license-inventory.json \
       /engine-worker/target-license-inventory.json
 
-FROM rust:1.97.1-alpine3.23@sha256:c4a364ddbf684fe038e6fa6a4f25b30c8dc85247423e0e660676ece0d17be4a2 AS builder
+FROM rust:1.99.0-alpine3.23@sha256:42c2519fdf75d9e34cc61a1aaf34b1a684da9bfd65fe5daefef98d92a801b001 AS builder
 ARG TARGETARCH
 WORKDIR /source
 ENV CARGO_INCREMENTAL=0
@@ -71,7 +71,7 @@ RUN build-linux-sync-engine package \
 #   - GOTOOLCHAIN=local, so the `go 1.26.7` directive in that go.mod is enforced
 #     by the image's own compiler instead of being papered over by an automatic
 #     toolchain download from the network.
-FROM golang:1.26.7-alpine3.23@sha256:b17af760035fc2f338eed92d448a6c67f2d45438844fc6c60678fa5f99e44b57 AS caddy
+FROM golang:1.27.0-alpine3.23@sha256:3747dcba41c8b0db3211fda4db61638b980e17ac5bb3c94460a975a9cfe19395 AS caddy
 ENV CGO_ENABLED=0 \
     GOTOOLCHAIN=local \
     GOFLAGS=-mod=readonly
@@ -144,7 +144,7 @@ RUN set -eu; \
     find /caddy-evidence -type f -exec chmod 0444 {} +
 
 # Build the reviewed local BusyBox revision from frozen corresponding source.
-FROM alpine:3.23@sha256:fd791d74b68913cbb027c6546007b3f0d3bc45125f797758156952bc2d6daf40 AS busybox-package-builder
+FROM alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6 AS busybox-package-builder
 
 ARG SOURCE_DATE_EPOCH=1781306698
 ENV SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH} \
@@ -196,7 +196,7 @@ RUN abuild-keygen -a -i -n \
       done \
     && test "$(find /home/package-builder/output/keys -type f -name '*.rsa.pub' | wc -l)" -eq 1
 
-FROM alpine:3.23@sha256:fd791d74b68913cbb027c6546007b3f0d3bc45125f797758156952bc2d6daf40 AS runtime-base
+FROM alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6 AS runtime-base
 # Alpine published the fixed OpenSSL security revision after the pinned 3.23.5
 # base image was assembled. Install only those two signed repository packages
 # at exact versions: a future repository change can fail this build, but cannot
