@@ -675,7 +675,9 @@ internal fun FolderSyncScreen(
                         Text(stringResource(if (photoAppliance) R.string.interlink_network_access_body
                             else R.string.folder_sync_network_access_body))
                         Button(onClick = {
-                            localNetworkPermission.launch(Manifest.permission.ACCESS_LOCAL_NETWORK)
+                            if (Build.VERSION.SDK_INT >= 37) {
+                                localNetworkPermission.launch(Manifest.permission.ACCESS_LOCAL_NETWORK)
+                            }
                         }) { Text(stringResource(R.string.folder_sync_network_allow)) }
                         TextButton(onClick = {
                             runCatching {
@@ -698,7 +700,7 @@ internal fun FolderSyncScreen(
                         Text(stringResource(if (photoAppliance) R.string.interlink_setup_title else R.string.folder_sync_access_title), fontWeight = FontWeight.SemiBold)
                         Text(stringResource(if (photoAppliance) R.string.interlink_setup_body else R.string.folder_sync_saf_access_explanation))
                         Button(onClick = {
-                            if (!networkGranted) {
+                            if (Build.VERSION.SDK_INT >= 37 && !networkGranted) {
                                 localNetworkPermission.launch(Manifest.permission.ACCESS_LOCAL_NETWORK)
                             } else {
                                 enableHostAndRefresh()

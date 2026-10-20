@@ -66,7 +66,6 @@
     <string name="folder_sync_access_title">Enable shared folders</string>
     <string name="folder_sync_enable">Start folder sync on this phone</string>
     <string name="folder_sync_host_unavailable">Android could not durably enable folder sync.</string>
-    <string name="folder_sync_local_network_declined">Local network access is off. Folder sync stayed stopped; backup and recovery are unchanged.</string>
     <string name="folder_sync_starting">Starting the private folder service…</string>
     <string name="folder_sync_checking_folders">Checking selected folders before connecting…</string>
     <string name="folder_sync_choose_folder">Choose an existing folder</string>

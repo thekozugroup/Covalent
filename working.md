@@ -42,6 +42,10 @@ fixed disposable AVDs, not phones. CI now runs it after the existing 86 baseline
 tests and SAF journey. Initial debug/minified builds, release lint and all 205
 shared unit tests pass; exact committed and hosted follow-up evidence remains
 separate. Receipts are in artifacts/interlink-qa/api37-permission-recovery-*.
+The full cross-app gate caught two missing explicit API37 guards and the
+superseded unused denial string. Both permission launches are now guarded;
+the unused string is removed. No lint rule was suppressed. Retain the failed
+07fd041 full-check log; rerun the committed full gate before promotion.
 
 The compact Pi image is now GPhotoOS-rpi5-nvme-0.3.1-13c2416.img in the private
 Interlink checkout. Interrupted-update faults and offline image validation pass;
