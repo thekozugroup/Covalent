@@ -207,7 +207,19 @@ jobs:
       # the linked arm64-v8a and x86_64 objects actually honour it. The script
       # existed with no caller anywhere in the repo, so it gated nothing.
       - run: ./scripts/check-android-jni-contract.sh
+      - name: Test shared inventory and dedicated signing policy
+        run: |
+          python3 -B scripts/test-android-inventory.py
+          python3 -B scripts/test-interlink-release.py
       - run: ./scripts/check-android.sh
+      - name: Verify dedicated release signing with disposable test keys
+        run: |
+          version=$(sed -n 's/^[[:space:]]*versionName = "\([^"]*\)"$/\1/p' apps/android/companion/build.gradle.kts)
+          code=$(sed -n 's/^[[:space:]]*versionCode = \([0-9]*\)$/\1/p' apps/android/companion/build.gradle.kts)
+          python3 -B scripts/test-interlink-release-sdk.py \
+            --build-tools "$ANDROID_HOME/build-tools/37.0.0" \
+            --unsigned-apk apps/android/companion/build/outputs/apk/release/companion-release-unsigned.apk \
+            --version "$version" --version-code "$code"
       - name: Preserve Android foundation failure reports
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -219,6 +231,7 @@ jobs:
             apps/android/app/build/generated/syncEngine/reports
             apps/android/app/build/generated/jniLibs/provenance
             apps/android/app/build/generated/jniLibs/covalent-android-native-provenance.sha256
+            apps/android/companion/build/reports
           if-no-files-found: warn
       - name: Retain the exact Android native distribution evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -239,6 +252,17 @@ jobs:
             apps/android/app/build/reports/covalent/android-sbom.cdx.json
             apps/android/app/build/reports/covalent/android-license-inventory.json
           if-no-files-found: error
+      - name: Retain unsigned Interlink release candidate and exact inventories
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: interlink-unsigned-candidate-${{ github.sha }}
+          path: |
+            apps/android/companion/build/outputs/apk/release
+            apps/android/companion/build/outputs/bundle/release
+            apps/android/companion/build/outputs/mapping/release
+            apps/android/companion/build/reports/interlink
+          if-no-files-found: error
+          retention-days: 14
 
   android-device:
     name: Android API 37 device

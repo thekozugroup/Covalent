@@ -4,6 +4,9 @@ End users should follow the
 [verified APK and onboarding guide](../../docs/platform/android.md). This file
 is for source development and validation.
 
+The separate photo-appliance companion is documented in the
+[Interlink development and signing guide](../../docs/platform/interlink.md).
+
 ## Supported target
 
 Android is Tier 1. Release evidence uses Android 17 / API 37. The native

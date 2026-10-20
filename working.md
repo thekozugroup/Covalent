@@ -48,8 +48,39 @@ then another transferred to the patched Pi core after its forced restart. Exact
 source/destination bytes match; pairing and originals remain. The installed QA
 APK matches `artifacts/interlink-qa/interlink-minified-4389d16-qa.apk` (SHA-256
 `994200163a7ba9121cee8df122e8f41ea2274c5aa20c0c6d7f96d1c4ad326322`).
-It retains the Android Debug certificate for isolated QA only. Current hosted
-checks for runtime source `4389d16` are still running; no release was published.
+It retains the Android Debug certificate for isolated QA only. The runtime CI
+run was superseded by the documentation push. The current hosted container sync
+journeys pass, but vulnerability scans on both architectures reject Go 1.26.7
+and golang.org/x/net v0.58.0. Reports identify fixes in Go 1.26.9 and x/net
+v0.60.0; those changes and full rescan remain open. No scan was suppressed and
+no release was published. Evidence: CI run `39478832334`, private
+`artifacts/interlink-qa/hosted-go-findings.json`.
+
+Release hardening: both Android apps now use one reviewed, fail-closed Maven
+inventory generator. Covalent's output matches its previous JSON exactly;
+Interlink records its own 80 dependencies, including Material 3 Expressive.
+Changed application version, dependency coordinates and candidate file bytes
+invalidate the respective Gradle tasks. Real offline Gradle regressions cover
+those changes, unreviewed licenses and duplicate native entries.
+
+The dedicated candidate includes APK/AAB, mapping, runtime/license inventories,
+native provenance binding and SHA-256 checksums. Both native ABIs match the
+actual link records across debug/release; all eight packaged native objects
+match between APK and AAB. Prebuilt checks also re-read both companion lint
+reports. The package guard caught and refused an older debug APK containing
+the pre-security-fix engine before both variants were rebuilt together.
+
+Added a separate Interlink signing preparer with no fallback identity: pinned
+certificate, explicit private keystore inputs, no debug signer, exact app/version,
+native package validation and v2/v3 verification. Passwords stay out of command
+arguments, public output and non-signing subprocesses. Existing output is never
+replaced. Fifteen policy regressions and real SDK smoke with disposable test
+keys pass. The smoke neither installs nor publishes. Local full builds, 205
+shared unit tests, debug/release lint and native package checks pass. CI now
+retains unsigned companion candidates; source fingerprints must remain stable
+through the full gate before a prebuilt stamp is accepted. Production identity,
+signed publication and real upgrade acceptance remain unconfigured/open.
+See `docs/platform/interlink.md` for exact commands and boundaries.
 
 GPhoto OS source is in the private Interlink repository, branch
 `codex/appliance-robustness`, initial milestone `7893c65`. Removable storage
@@ -57,9 +88,10 @@ imports require per-volume approval, keep originals, verify bytes, publish
 atomically and retain receipts after Photos cleanup. The account-free candidate
 image removes another 37.92 MiB of APKs and passes component/filesystem checks.
 
-Open gates: API 37 and physical companion checks; production signing and
-companion release/SBOM automation; physical Pi/Solstice reboot and cellular
-handoff; card/camera compatibility and PTP/MTP support; exact-cloud-proof source
+Open gates: current Go/networking vulnerability fixes and rescans; API 37 and
+physical companion checks; production signing and signed publication;
+physical Pi/Solstice reboot and cellular handoff; physical card/PTP/MTP camera
+compatibility; exact-cloud-proof source
 cleanup; safe interrupted Pictures journal recovery; update credentials,
 rollback and fresh-image cold boot. No physical installation was changed.
 Do not clear the legacy transfer journal or enable restoration blindly.

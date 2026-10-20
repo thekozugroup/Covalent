@@ -76,3 +76,17 @@ dependencies {
     androidTestImplementation("androidx.test.ext:junit:1.3.0")
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
 }
+
+// A separate inventory records this app's Expressive dependency graph.
+extra["androidInventoryName"] = "interlink-android"
+extra["androidInventoryDirectory"] = "interlink"
+apply(from = rootProject.file("gradle/android-inventory.gradle"))
+
+val verifyInterlinkRelease = tasks.register<Exec>("verifyInterlinkRelease") {
+    group = "verification"
+    description = "Verifies the dedicated app identity, alignment, native bytes and its own dependency evidence."
+    dependsOn("assembleDebug", "assembleRelease", "bundleRelease", "generateAndroidSbom")
+    workingDir(rootProject.projectDir.resolve("../.."))
+    commandLine("sh", "scripts/check-interlink-package.sh")
+}
+tasks.named("generateReleaseChecksums") { dependsOn(verifyInterlinkRelease) }

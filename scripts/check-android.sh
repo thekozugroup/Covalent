@@ -66,7 +66,7 @@ fi
 # `:app:buildAndroidJni`, which cross-compiles the Rust crates through the NDK,
 # so the crates and the Cargo lockfile are build inputs of the Android artifacts
 # exactly as much as apps/android is.
-android_build_inputs="apps/android crates packaging/sync-engine packaging/rclone Cargo.toml Cargo.lock rust-toolchain.toml LICENSE scripts/build-android-jni.sh scripts/build-android-sync-engine.sh scripts/android-go-link-wrapper.sh scripts/collect-go-target-license-inventory.py scripts/collect-sync-engine-notices.py scripts/collect-android-native-link-provenance.py scripts/collect-android-native-distribution-summary.py scripts/test-collect-android-native-distribution-summary.py scripts/android-native-budgets.sh scripts/check-android-native-package.sh scripts/test-android-native-package.sh"
+android_build_inputs="apps/android crates packaging/sync-engine packaging/rclone Cargo.toml Cargo.lock rust-toolchain.toml LICENSE scripts/build-android-jni.sh scripts/build-android-sync-engine.sh scripts/android-go-link-wrapper.sh scripts/collect-go-target-license-inventory.py scripts/collect-sync-engine-notices.py scripts/collect-android-native-link-provenance.py scripts/collect-android-native-distribution-summary.py scripts/test-collect-android-native-distribution-summary.py scripts/android-native-budgets.sh scripts/check-android-native-package.sh scripts/test-android-native-package.sh scripts/check-interlink-package.sh scripts/interlink-release.py"
 android_prebuild_stamp="$repo_root/apps/android/app/build/covalent-prebuild-stamp"
 native_distribution_summary="$repo_root/apps/android/app/build/generated/syncEngine/reports/android-native-distribution-summary.json"
 android_sbom="$repo_root/apps/android/app/build/reports/covalent/android-sbom.cdx.json"
@@ -205,9 +205,9 @@ if [ "$mode" = verify-prebuilt ]; then
   fi
   echo "  verified: debug lint report records no error-severity issues"
 elif [ -n "$android_java" ]; then
-  env JAVA_HOME="$android_java" ANDROID_HOME="$android_sdk" ANDROID_SDK_ROOT="$android_sdk" COVALENT_ANDROID_NDK_HOME="$android_ndk" "$repo_root/apps/android/gradlew" -p "$repo_root/apps/android" --no-daemon -PcovalentBuildSyncEngine=true test lint assembleDebug assembleRelease assembleDebugAndroidTest generateAndroidSbom
+  env JAVA_HOME="$android_java" ANDROID_HOME="$android_sdk" ANDROID_SDK_ROOT="$android_sdk" COVALENT_ANDROID_NDK_HOME="$android_ndk" "$repo_root/apps/android/gradlew" -p "$repo_root/apps/android" --no-daemon -PcovalentBuildSyncEngine=true test lint assembleDebug assembleRelease assembleDebugAndroidTest generateAndroidSbom :companion:generateReleaseChecksums
 else
-  env ANDROID_HOME="$android_sdk" ANDROID_SDK_ROOT="$android_sdk" COVALENT_ANDROID_NDK_HOME="$android_ndk" "$repo_root/apps/android/gradlew" -p "$repo_root/apps/android" --no-daemon -PcovalentBuildSyncEngine=true test lint assembleDebug assembleRelease assembleDebugAndroidTest generateAndroidSbom
+  env ANDROID_HOME="$android_sdk" ANDROID_SDK_ROOT="$android_sdk" COVALENT_ANDROID_NDK_HOME="$android_ndk" "$repo_root/apps/android/gradlew" -p "$repo_root/apps/android" --no-daemon -PcovalentBuildSyncEngine=true test lint assembleDebug assembleRelease assembleDebugAndroidTest generateAndroidSbom :companion:generateReleaseChecksums
 fi
 
 # Account for every native object in both APK variants. Covalent-built objects
@@ -237,6 +237,10 @@ if [ "$mode" = full ]; then
 else
   python3 -B "$native_summary_tool" "$@" --verify-output "$native_distribution_summary"
 fi
+
+# The companion has a different application identity and dependency graph.
+# A clean Covalent package summary cannot vouch for its packaged bytes.
+sh "$repo_root/scripts/check-interlink-package.sh" --verify-prebuilt
 
 # Record what this build was made from. Written only after the Gradle run above
 # exited 0, so the stamp can never vouch for a failed build, and removed outright
