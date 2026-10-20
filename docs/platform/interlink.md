@@ -16,6 +16,12 @@ backup. Remote deletion and restoration are disabled for appliance links.
 Android battery restrictions, a deliberate force-stop and locked boot can delay
 reconnection; no claim of unrestricted continuous Android execution is made.
 
+On Android 17, pairing and sync require Nearby devices access. If access is
+denied or later revoked, the companion shows Allow access and Open settings.
+Returning with access restored restarts an opted-in native host without
+resetting its saved identity. The same recovery applies to Covalent's folder
+sync screen. Permission changes never enroll a previously disabled host.
+
 ## Build and verify
 
 Use the pinned toolchain in [the Android source guide](../../apps/android/README.md).
@@ -104,3 +110,21 @@ The inventory regression exercises actual Gradle task invalidation, changed
 artifact bytes/version/coordinates, unreviewed-license refusal and duplicate
 native entries. SDK signing smoke uses disposable test keys, rejects debug
 signing and deletes its temporary artifacts. It never installs or publishes.
+
+The API 37 CI lane also runs the dedicated companion's real permission journey
+after the existing Covalent suite. To repeat on the named, disposable headed
+emulator, build the debug APK before booting it and run:
+
+```sh
+python3 -B scripts/interlink-api37-permission-test.py \
+  --serial emulator-5572 --avd Interlink_QA_API37 \
+  --evidence-dir /absolute/private/qa/interlink-permissions
+```
+
+The guard accepts only the two fixed QA AVD/serial pairs, refuses an existing
+non-debug app and verifies installed APK bytes. It exercises actual permission
+revocation, app Settings return and the runtime grant dialog, then requires
+the native API's unpaired-ready state and foreground service. Device identity,
+TLS identity and key-envelope hashes must remain unchanged. Only an unpaired
+debug fixture is supported; it never clears app data or tests on a phone.
+This complements, rather than replaces, paired transfer and hardware checks.

@@ -8,6 +8,12 @@
     <string name="interlink_setup_body">First, pair with your Pi. Then choose a source folder.</string>
     <string name="interlink_pair_next">Pair your Pi to continue</string>
     <string name="interlink_folder_next">Choose a source folder</string>
+    <string name="folder_sync_network_access_title">Nearby devices access is off</string>
+    <string name="folder_sync_network_access_body">Allow Nearby devices access to pair and sync. Saved links and files are kept.</string>
+    <string name="interlink_network_access_body">Allow Nearby devices access to pair and sync with your Pi. Your originals stay on this phone.</string>
+    <string name="folder_sync_network_allow">Allow access</string>
+    <string name="folder_sync_network_settings">Open settings</string>
+    <string name="folder_sync_network_settings_unavailable">App settings could not open. Open this app’s permissions in Android Settings and allow Nearby devices.</string>
 
     <string name="action_accept_invitation">Accept invitation</string>
     <string name="action_back">Back</string>

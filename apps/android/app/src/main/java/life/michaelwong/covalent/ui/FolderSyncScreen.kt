@@ -1,8 +1,11 @@
 package life.michaelwong.covalent.ui
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
+import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -33,6 +36,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -51,6 +55,9 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.documentfile.provider.DocumentFile
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -119,7 +126,7 @@ internal fun FolderSyncScreen(
 ) {
     val context = LocalContext.current
     val hostUnavailableMessage = stringResource(R.string.folder_sync_host_unavailable)
-    val localNetworkDeclinedMessage = stringResource(R.string.folder_sync_local_network_declined)
+    val settingsUnavailableMessage = stringResource(R.string.folder_sync_network_settings_unavailable)
     val pairedDeviceName = stringResource(R.string.folder_sync_paired_device)
     val invalidPeerAddressMessage = stringResource(R.string.node_error_invalid_peer_address)
     val peerAddressChangedMessage = stringResource(R.string.node_error_peer_address_changed)
@@ -138,6 +145,11 @@ internal fun FolderSyncScreen(
     val settingsChanges = remember(context) { FolderLinkSettingsChangeStore(context.applicationContext) }
     val api = remember { NodeFolderSyncApi(CovalentNodeClient()) }
     var hostRequested by remember { mutableStateOf(manager.folderSyncRequested()) }
+    fun networkAccessGranted(): Boolean = Build.VERSION.SDK_INT < 37 ||
+        ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_LOCAL_NETWORK) ==
+            PackageManager.PERMISSION_GRANTED
+    var networkGranted by remember { mutableStateOf(networkAccessGranted()) }
+    var networkDenied by rememberSaveable { mutableStateOf(false) }
     var status by remember { mutableStateOf<FolderSyncStatus?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var selectedFolder by remember { mutableStateOf<String?>(null) }
@@ -437,16 +449,42 @@ internal fun FolderSyncScreen(
     val localNetworkPermission = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { granted ->
+        val wasGranted = networkGranted
+        networkGranted = granted
+        networkDenied = !granted
         if (granted) {
+            error = null
             if (hostRequested) {
-                manager.refreshFolderSyncAccess()
-                refresh()
+                if (!wasGranted) {
+                    manager.refreshFolderSyncAccess()
+                    refresh()
+                }
             } else {
                 enableHostAndRefresh()
             }
-        } else {
-            error = localNetworkDeclinedMessage
         }
+    }
+
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner, manager) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                val wasGranted = networkGranted
+                val granted = networkAccessGranted()
+                networkGranted = granted
+                hostRequested = manager.folderSyncRequested()
+                if (granted) {
+                    networkDenied = false
+                    if (!wasGranted && hostRequested) {
+                        error = null
+                        manager.refreshFolderSyncAccess()
+                        refresh()
+                    }
+                }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
     val folderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
@@ -466,8 +504,8 @@ internal fun FolderSyncScreen(
         }
     }
 
-    LaunchedEffect(hostRequested) {
-        while (hostRequested && isActive) {
+    LaunchedEffect(hostRequested, networkGranted) {
+        while (hostRequested && networkGranted && isActive) {
             // A saved API endpoint can be stale while the service starts after an update.
             // Keep observing without restarting the node or changing the saved link.
             refresh()
@@ -611,7 +649,7 @@ internal fun FolderSyncScreen(
             )
             Spacer(Modifier.height(6.dp))
             Text(stringResource(if (photoAppliance) R.string.interlink_subtitle else R.string.folder_sync_subtitle))
-            error?.let { message ->
+            error?.takeIf { networkGranted }?.let { message ->
                 Spacer(Modifier.height(14.dp))
                 Text(message, color = MaterialTheme.colorScheme.error)
                 if (hostRequested && status == null) {
@@ -629,6 +667,30 @@ internal fun FolderSyncScreen(
                 Text(message)
             }
         }
+        if (!networkGranted && (hostRequested || networkDenied)) {
+            item {
+                Card(Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text(stringResource(R.string.folder_sync_network_access_title), fontWeight = FontWeight.SemiBold)
+                        Text(stringResource(if (photoAppliance) R.string.interlink_network_access_body
+                            else R.string.folder_sync_network_access_body))
+                        Button(onClick = {
+                            localNetworkPermission.launch(Manifest.permission.ACCESS_LOCAL_NETWORK)
+                        }) { Text(stringResource(R.string.folder_sync_network_allow)) }
+                        TextButton(onClick = {
+                            runCatching {
+                                context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                    Uri.fromParts("package", context.packageName, null)))
+                            }.onFailure { error = settingsUnavailableMessage }
+                        }) { Text(stringResource(R.string.folder_sync_network_settings)) }
+                        error?.takeIf { it == settingsUnavailableMessage }?.let {
+                            Text(it, color = MaterialTheme.colorScheme.error)
+                        }
+                    }
+                }
+            }
+            return@LazyColumn
+        }
         if (!hostRequested) {
             item {
                 Card(Modifier.fillMaxWidth()) {
@@ -636,12 +698,7 @@ internal fun FolderSyncScreen(
                         Text(stringResource(if (photoAppliance) R.string.interlink_setup_title else R.string.folder_sync_access_title), fontWeight = FontWeight.SemiBold)
                         Text(stringResource(if (photoAppliance) R.string.interlink_setup_body else R.string.folder_sync_saf_access_explanation))
                         Button(onClick = {
-                            if (
-                                Build.VERSION.SDK_INT >= 37 && ContextCompat.checkSelfPermission(
-                                    context,
-                                    Manifest.permission.ACCESS_LOCAL_NETWORK,
-                                ) != PackageManager.PERMISSION_GRANTED
-                            ) {
+                            if (!networkGranted) {
                                 localNetworkPermission.launch(Manifest.permission.ACCESS_LOCAL_NETWORK)
                             } else {
                                 enableHostAndRefresh()

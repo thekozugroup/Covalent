@@ -26,11 +26,27 @@ without a permanent Back button. Temporary theme/font changes were restored.
 No paired link, phone original or physical installation was changed by this UI
 check. Private evidence: artifacts/interlink-qa/setup-clarity-*.png and
 setup-clarity-build.log; QA signing uses the existing Android Debug identity.
-This UI follow-up needs its own committed build and hosted rerun.
+The exact committed `6177379` minified APK passes API37 cold launch and initial
+permission denial/grant checks on the separate headed Interlink_QA_API37 AVD.
+Its hosted run 39504560766 passes Android foundation, Rust/contracts, both native
+containers, both macOS jobs, CodeQL and version sync; API37 is still running.
 
-The compact Pi image is now GPhotoOS-rpi5-nvme-0.3.1-fadfe95.img in the private
+Permission recovery follow-up: a real revocation on API37 reproduced a startup
+screen with no permission action. Both apps' folder-sync surface now shows
+Allow access/Open settings and rechecks access on resume. Restoring access
+restarts only an opted-in host. The guarded debug companion journey passes
+actual revocation, Settings return and runtime grant, requiring native-API
+ready state and a foreground service. Device/TLS identities and the key
+envelope remain byte-identical. The test never clears data and accepts only
+fixed disposable AVDs, not phones. CI now runs it after the existing 86 baseline
+tests and SAF journey. Initial debug/minified builds, release lint and all 205
+shared unit tests pass; exact committed and hosted follow-up evidence remains
+separate. Receipts are in artifacts/interlink-qa/api37-permission-recovery-*.
+
+The compact Pi image is now GPhotoOS-rpi5-nvme-0.3.1-13c2416.img in the private
 Interlink checkout. Interrupted-update faults and offline image validation pass;
-69 Linux Python, eight Android shell and 70 Java import checks pass. Private
+70 Linux Python, nine Android shell and 70 Java import checks pass. The last
+watchdog wait now rechecks accepted health before rolling back. Private
 GitHub CI cannot start because of account billing/spending limits. No physical
 boot or Google Photos deletion acceptance is inferred. User requests software
 work first. Source retention supports retain/off; delete-after-cloud-backup is
