@@ -1,6 +1,25 @@
 # Interlink companion and appliance robustness — 2026-10-20
 
-Latest hosted milestone 6177379d1e3c0dab4c514d49d9fa340d3eb0dcbd passes all
+Build reliability follow-up: c1ee2b8 run 39510203636 passes Android foundation,
+Rust, both containers, dependencies, macOS, CodeQL and version sync. Its device
+job fails in :app:packageRelease with explicit Java heap exhaustion in
+ApkFlinger. The missing prebuild stamp then refuses the device suite; the new
+permission journey is not reached. This is not a permission-test failure.
+3b54db6 raises the Gradle heap to 4 GiB, limits workers to two and disables
+parallel projects. 510a1f7 also exports the resolved SDK to all helpers, fixing
+the reproduced macOS fallback failure after successful Gradle packaging.
+
+The exact 510a1f7 full Android gate passes locally: 205 shared unit tests,
+zero-error debug/release lint for both apps, native/package/provenance guards
+and release inventories. Both SDK environment variables were unset at entry,
+so this exercises the repaired SDK fallback. An earlier release APK is saved;
+removing only the generated APK forced :app:packageRelease to execute in the
+3b54db6 Gradle build, which passes. Initial wrong-Go and missing-SDK-helper
+attempt logs remain; the final run uses pinned Go 1.26.10. Receipt:
+artifacts/interlink-qa/build-memory-510a1f7.json. Its hosted follow-up remains
+required. This documentation change does not relabel the runtime artifacts.
+
+Previous fully green hosted milestone 6177379d1e3c0dab4c514d49d9fa340d3eb0dcbd passes all
 jobs in run 39504560766: Android foundation, API37 device, both complete
 native containers, shared Rust/contracts, dependency review, both macOS jobs and
 the combined release-candidate software gate. CodeQL and version sync pass too.
@@ -57,10 +76,13 @@ superseded unused denial string. Both permission launches are now guarded;
 the unused string is removed. No lint rule was suppressed. Retain the failed
 07fd041 full-check log; the corrected 6b31fde full gate passes without exceptions.
 
-The compact Pi image is now GPhotoOS-rpi5-nvme-0.3.1-13c2416.img in the private
+The compact Pi checkpoint is GPhotoOS-rpi5-nvme-0.3.1-5e50c9d.img in the private
 Interlink checkout. Interrupted-update faults and offline image validation pass;
-70 Linux Python, nine Android shell and 70 Java import checks pass. The last
-watchdog wait now rechecks accepted health before rolling back. Private
+75 Linux Python tests, including 90 installation/restoration interruption
+cases, nine Android shell and 70 Java import checks pass at that checkpoint.
+Recovery removes partial added files and retains the new helper through
+interrupted restoration. The last watchdog wait rechecks accepted health.
+Further helper-flush work is tracked in the private appliance checkout. Private
 GitHub CI cannot start because of account billing/spending limits. No physical
 boot or Google Photos deletion acceptance is inferred. User requests software
 work first. Source retention supports retain/off; delete-after-cloud-backup is
