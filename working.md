@@ -1,5 +1,19 @@
 # Interlink companion and appliance robustness — 2026-10-20
 
+Hosted run 39491384945 passes both native container jobs completely: exact
+packaging/source/notices, folder journeys, vulnerability scans and budgets. The
+earlier optional amd64 deletion timeout did not recur; its cause is unproven.
+Shared Rust/contracts, dependency review and both macOS jobs pass. Android
+foundation fails in :app:packageRelease with an opaque IncrementalSplitterRunnable
+exception and no nested cause in the retained log. Local execution initially
+reports that task up to date. After preserving and removing only its generated
+unsigned APK, the packaging task actually regenerates it and passes in 37 seconds.
+This narrow local check does not clear the failed hosted gate or establish full
+Android acceptance. The full gate now requests --stacktrace in both JDK branches
+to retain the cause of a repeat failure. No release signing identity changed.
+Private logs: artifacts/go-security/android-package-release-37d.log and
+android-package-release-forced-37d.log; the prior unsigned APK is preserved.
+
 Hosted run 39490316340 passes the signed CA upgrade, exact CA bytes and Caddy
 collection on both native architectures, then fails in Alpine source fetching
 with the old generic diagnostic. A clean local Linux container downloads and
