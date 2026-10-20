@@ -1,12 +1,13 @@
 # Interlink companion and appliance robustness — 2026-10-20
 
-Current software milestone c0420aaa8033203fb8fcd7e77f1b65dc579f1737 passes all
-jobs in hosted run 39500216419: Android foundation, API37 device, both complete
+Latest hosted milestone 6177379d1e3c0dab4c514d49d9fa340d3eb0dcbd passes all
+jobs in run 39504560766: Android foundation, API37 device, both complete
 native containers, shared Rust/contracts, dependency review, both macOS jobs and
-the combined release-candidate software gate. Android proves all 86 expected
+the combined release-candidate software gate. CodeQL and version sync pass too.
+Android proves all 86 expected
 baseline tests by name and the separate SAF journey. The earlier packageRelease
 failure did not recur; no unproven cause is assigned. Receipt:
-artifacts/interlink-qa/hosted-c042-success.json. These are software checks;
+artifacts/interlink-qa/hosted-6177379-success.json. These are software checks;
 physical device, production signing and publication remain separate gates.
 
 The SDK37 signer-report repair supports both known certificate labels, requires
@@ -28,8 +29,7 @@ check. Private evidence: artifacts/interlink-qa/setup-clarity-*.png and
 setup-clarity-build.log; QA signing uses the existing Android Debug identity.
 The exact committed `6177379` minified APK passes API37 cold launch and initial
 permission denial/grant checks on the separate headed Interlink_QA_API37 AVD.
-Its hosted run 39504560766 passes Android foundation, Rust/contracts, both native
-containers, both macOS jobs, CodeQL and version sync; API37 is still running.
+Its hosted run 39504560766 now passes all software gates above.
 
 Permission recovery follow-up: a real revocation on API37 reproduced a startup
 screen with no permission action. Both apps' folder-sync surface now shows
@@ -39,13 +39,23 @@ actual revocation, Settings return and runtime grant, requiring native-API
 ready state and a foreground service. Device/TLS identities and the key
 envelope remain byte-identical. The test never clears data and accepts only
 fixed disposable AVDs, not phones. CI now runs it after the existing 86 baseline
-tests and SAF journey. Initial debug/minified builds, release lint and all 205
-shared unit tests pass; exact committed and hosted follow-up evidence remains
-separate. Receipts are in artifacts/interlink-qa/api37-permission-recovery-*.
+tests and SAF journey. Exact runtime source 6b31fde6d127497e097591da8b49eb6d58dc174f
+passes the full cross-app Android gate, all 205 unit tests, both lint variants
+for both apps, and native/package/inventory checks. Its guarded debug journey
+passes on the headed API37 ARM64/4 KiB AVD. The minified QA APK passes both
+recovery routes and installed-byte readback. After an actual emulator reboot,
+the foreground service and UDP 18887 listener return before opening the
+Activity; the launcher remains foreground. All three protected identity-file
+hashes remain unchanged after minified recovery and reboot. QA retains the
+existing Android Debug signer. This documentation commit does not rebuild or
+relabel those runtime bytes. Latest-head hosted follow-up remains separate.
+Receipts: artifacts/interlink-qa/permission-recovery-6b31fde-build.json,
+api37-permission-recovery-6b31fde/permission-recovery.json and
+interlink-6b31fde-qa.json in the same private evidence directory.
 The full cross-app gate caught two missing explicit API37 guards and the
 superseded unused denial string. Both permission launches are now guarded;
 the unused string is removed. No lint rule was suppressed. Retain the failed
-07fd041 full-check log; rerun the committed full gate before promotion.
+07fd041 full-check log; the corrected 6b31fde full gate passes without exceptions.
 
 The compact Pi image is now GPhotoOS-rpi5-nvme-0.3.1-13c2416.img in the private
 Interlink checkout. Interrupted-update faults and offline image validation pass;
