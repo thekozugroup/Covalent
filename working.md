@@ -1,22 +1,47 @@
 # Interlink companion and appliance robustness — 2026-10-20
 
-Run 39497483404 now passes the full Android Gradle/package/native/inventory
-gate, shared Rust/contracts, both complete native container jobs, dependency
-review and both macOS jobs. Android foundation then fails in its separate
-disposable release-signing smoke. A real build-tools 37 probe reproduces the
-cause: certificate rows are labeled `V3.0 Signer:` rather than `Signer #1`.
-The release verifier now accepts both known report formats, requires exactly
-one reported signer, rejects unknown/duplicate certificate rows and requires
-every reported certificate to match the exact pinned identity. Fingerprints
-are compared as bytes regardless of hex letter case. No key policy or signature
-scheme requirement was relaxed. Twenty-one policy regressions pass; real SDK
-36 and 37 smoke each verifies v2/v3 signatures, pinned identity, debug-key
-refusal and existing-output preservation with disposable keys only. No
-production Interlink key was created and no artifact was published/installed.
-Logs: artifacts/go-security/interlink-sdk{36,37}-signer-format-smoke.log.
-The new commit still requires its hosted rerun; API 37 device acceptance and
-physical Pi/Solstice checks remain open. The earlier opaque release-packaging
-failure did not recur; no unproven root cause is assigned to it.
+Current software milestone c0420aaa8033203fb8fcd7e77f1b65dc579f1737 passes all
+jobs in hosted run 39500216419: Android foundation, API37 device, both complete
+native containers, shared Rust/contracts, dependency review, both macOS jobs and
+the combined release-candidate software gate. Android proves all 86 expected
+baseline tests by name and the separate SAF journey. The earlier packageRelease
+failure did not recur; no unproven cause is assigned. Receipt:
+artifacts/interlink-qa/hosted-c042-success.json. These are software checks;
+physical device, production signing and publication remain separate gates.
+
+The SDK37 signer-report repair supports both known certificate labels, requires
+one signer and every certificate pinned, and refuses unknown/duplicate rows.
+Twenty-one policy tests and real SDK36/37 disposable-key smokes pass, including
+v2/v3 signatures, debug-key refusal and existing-output preservation. No signing
+requirement was relaxed or production identity substituted.
+
+Companion follow-up: unpaired status now says Pair your Pi to continue; a paired
+node without folders asks for a source folder. Error/startup/stopping handling
+is retained. Purpose text states that originals stay on the phone, and setup
+instructions follow the actual pair-first form order. The minified build,
+release lint and all 205 shared unit tests pass. Fresh API36/ARM64 testing uses
+an isolated 16 KiB-page AVD: first setup, Get started, unpaired state, light/dark
+and scroll access to folder controls at 200% text pass. Logo/serif header remains
+without a permanent Back button. Temporary theme/font changes were restored.
+No paired link, phone original or physical installation was changed by this UI
+check. Private evidence: artifacts/interlink-qa/setup-clarity-*.png and
+setup-clarity-build.log; QA signing uses the existing Android Debug identity.
+This UI follow-up needs its own committed build and hosted rerun.
+
+The compact Pi image is now GPhotoOS-rpi5-nvme-0.3.1-fadfe95.img in the private
+Interlink checkout. Interrupted-update faults and offline image validation pass;
+69 Linux Python, eight Android shell and 70 Java import checks pass. Private
+GitHub CI cannot start because of account billing/spending limits. No physical
+boot or Google Photos deletion acceptance is inferred. User requests software
+work first. Source retention supports retain/off; delete-after-cloud-backup is
+not implemented. Production companion signing/publication, physical Pi/Solstice,
+roaming, actual cards/cameras and exact Photos cleanup remain open. Pictures
+only; DCIM is unauthorized. Preserve the legacy recovery journal.
+
+## Earlier development evidence
+
+The entries below retain prior checkpoints and failures. Current results above
+supersede their pending/failing software-gate statements.
 
 Hosted run 39491384945 passes both native container jobs completely: exact
 packaging/source/notices, folder journeys, vulnerability scans and budgets. The

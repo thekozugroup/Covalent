@@ -3,6 +3,11 @@
     <string name="folder_sync_renew_detail">The other device must choose its folder and accept again.</string>
     <string name="folder_sync_renew_incoming_detail">Ask the other device to send a new invitation, then choose your folder again.</string>
     <string name="app_name">Covalent</string>
+    <string name="interlink_subtitle">Send photos to your Pi. Keep originals on this phone.</string>
+    <string name="interlink_setup_title">Set up photo sync</string>
+    <string name="interlink_setup_body">First, pair with your Pi. Then choose a source folder.</string>
+    <string name="interlink_pair_next">Pair your Pi to continue</string>
+    <string name="interlink_folder_next">Choose a source folder</string>
 
     <string name="action_accept_invitation">Accept invitation</string>
     <string name="action_back">Back</string>

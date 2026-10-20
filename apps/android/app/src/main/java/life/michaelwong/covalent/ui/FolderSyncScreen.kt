@@ -610,7 +610,7 @@ internal fun FolderSyncScreen(
                 fontWeight = FontWeight.SemiBold,
             )
             Spacer(Modifier.height(6.dp))
-            Text(if (photoAppliance) "Choose a folder, pair your Pi, and keep your originals." else stringResource(R.string.folder_sync_subtitle))
+            Text(stringResource(if (photoAppliance) R.string.interlink_subtitle else R.string.folder_sync_subtitle))
             error?.let { message ->
                 Spacer(Modifier.height(14.dp))
                 Text(message, color = MaterialTheme.colorScheme.error)
@@ -633,8 +633,8 @@ internal fun FolderSyncScreen(
             item {
                 Card(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Text(if (photoAppliance) "Connect your photos" else stringResource(R.string.folder_sync_access_title), fontWeight = FontWeight.SemiBold)
-                        Text(if (photoAppliance) "Choose the folders this phone can share. Pair with your Pi once, then sync whenever it is available. Your originals stay here." else stringResource(R.string.folder_sync_saf_access_explanation))
+                        Text(stringResource(if (photoAppliance) R.string.interlink_setup_title else R.string.folder_sync_access_title), fontWeight = FontWeight.SemiBold)
+                        Text(stringResource(if (photoAppliance) R.string.interlink_setup_body else R.string.folder_sync_saf_access_explanation))
                         Button(onClick = {
                             if (
                                 Build.VERSION.SDK_INT >= 37 && ContextCompat.checkSelfPermission(
@@ -669,6 +669,10 @@ internal fun FolderSyncScreen(
                                 stringResource(R.string.folder_sync_checking_folders)
                             it.lifecycle == FolderSyncLifecycle.STILL_STOPPING ->
                                 stringResource(R.string.folder_sync_stopping)
+                            photoAppliance && it.peers.isEmpty() ->
+                                stringResource(R.string.interlink_pair_next)
+                            photoAppliance && it.folders.isEmpty() ->
+                                stringResource(R.string.interlink_folder_next)
                             it.lifecycle == FolderSyncLifecycle.RUNNING ->
                                 stringResource(R.string.folder_sync_running)
                             else -> stringResource(R.string.folder_sync_ready_to_share)
