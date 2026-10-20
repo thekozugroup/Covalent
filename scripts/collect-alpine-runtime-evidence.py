@@ -14,6 +14,7 @@ import re
 import stat
 import sys
 import tarfile
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -427,8 +428,15 @@ def collect_inputs(lock: dict, cache: Path, download: bool) -> dict[tuple[str, s
                 except FileNotFoundError:
                     if not download:
                         raise EvidenceError('locked source is missing from offline cache')
-                    with opener.open(row['url'], timeout=40) as response:
-                        data = response.read(row['bytes'] + 1)
+                    # Keep public source identity and HTTP status actionable;
+                    # never echo exception URLs, response bodies or local paths.
+                    try:
+                        with opener.open(row['url'], timeout=40) as response:
+                            data = response.read(row['bytes'] + 1)
+                    except urllib.error.HTTPError as error:
+                        raise EvidenceError(f'locked source download failed (HTTP {error.code}): {key[0]}/{key[1]}') from error
+                    except (urllib.error.URLError, OSError) as error:
+                        raise EvidenceError(f'locked source download unavailable: {key[0]}/{key[1]}') from error
                     check_bytes(data, row)
                     fd = os.open(key[1], os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
                                  0o600, dir_fd=origin_fd)

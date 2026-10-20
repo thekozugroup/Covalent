@@ -63,6 +63,16 @@ the coordinated builder/runtime/recipe/source/notice fix above. Strict byte,
 package and vulnerability gates remain intact; a pushed fix is not image
 acceptance until the new native jobs pass.
 
+Hosted run 39490316340 confirms the signed CA upgrade, exact trust bytes and
+Caddy collection on both native runners, then stops in source retrieval with a
+generic diagnostic. A clean local Linux container fetches/verifies all 155
+inputs. The collector now reports sanitized per-input HTTP/network failures,
+without exception URLs or bodies. The exact, unchanged 230,531-byte CA source
+archive is retained in the repository and seeds the build-only cache; size,
+SHA256 and original APKBUILD SHA512 checks remain mandatory. This removes the
+GitLab download dependency, without assuming an unrecorded HTTP cause or
+claiming final image acceptance.
+
 The same refresh also exposed RUSTSEC-2026-0382 and RUSTSEC-2026-0383 in the
 shared TLS verifier/root bundle. The lockfile now selects rustls-webpki
 0.103.16 and webpki-root-certs 1.0.10; current cargo-deny advisory, ban, license

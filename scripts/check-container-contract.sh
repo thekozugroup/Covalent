@@ -118,6 +118,7 @@ require_text 'ADD --checksum=sha256:a4c5de1bf37652cd98cbe71aec209512ae0508a96496
 require_text 'apk --no-network del ca-certificates' "$dockerfile"
 require_text 'apk --keys-dir /usr/share/apk/keys add --no-cache --no-network /tmp/ca-bundle.apk' "$dockerfile"
 require_text "apk info -e 'ca-certificates-bundle=20261020-r0'" "$dockerfile"
+require_text 'COPY --chmod=0444 packaging/docker/alpine/ca-certificates-20261020/ca-certificates-20261020.tar.bz2 /tmp/alpine-source-cache/ca-certificates/ca-certificates-20261020.tar.bz2' "$dockerfile"
 require_text 'collect-alpine-runtime-evidence --arch "$TARGETARCH"' "$dockerfile"
 require_text 'COPY --from=alpine-evidence /alpine-evidence/ /usr/local/share/covalent/alpine/' "$dockerfile"
 require_text 'exact Alpine package database and copied CA' "$documentation"

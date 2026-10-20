@@ -37,6 +37,15 @@ def archive_bytes(kind='regular'):
 
 
 class EvidenceTests(unittest.TestCase):
+    def test_vendored_ca_source_matches_locked_archive_and_recipe(self):
+        base = Path(__file__).resolve().parent.parent / 'packaging/docker/alpine'
+        lock, _ = M.load_lock(base / 'runtime-source-lock.json')
+        row = next(r for r in lock['files'] if r['origin'] == 'ca-certificates'
+                   and r['name'] == 'ca-certificates-20261020.tar.bz2')
+        data = M.regular(base / 'ca-certificates-20261020' / row['name'], M.MAX_FILE)
+        M.check_bytes(data, row)
+        self.assertEqual(hashlib.sha512(data).hexdigest(), row['apkbuildSHA512'])
+
     def test_only_reviewed_openssl_release_can_redirect_to_https_github_assets(self):
         handler = M.HTTPSRedirect()
         request = M.urllib.request.Request(M.OPENSSL_RELEASE_URL)
@@ -152,6 +161,25 @@ class EvidenceTests(unittest.TestCase):
                 self.save_lock()
                 with self.assertRaisesRegex(M.EvidenceError, 'source URL'):
                     M.load_lock(self.args.lock)
+
+    def test_download_errors_identify_public_input_without_leaking_urls(self):
+        (self.cache / self.origin / 'APKBUILD').unlink()
+        self.args.download = True
+        for error, message in (
+            (M.urllib.error.HTTPError('https://untrusted.test/?token=secret', 403,
+                                     'secret response', {}, None), 'HTTP 403'),
+            (M.urllib.error.URLError('secret local path or credential'), 'unavailable'),
+        ):
+            with self.subTest(message=message), mock.patch.object(M.urllib.request, 'build_opener') as opener:
+                opener.return_value.open.side_effect = error
+                with self.assertRaises(M.EvidenceError) as raised:
+                    self.run_collector()
+                self.assertIn(message, str(raised.exception))
+                self.assertIn('ca-certificates/APKBUILD', str(raised.exception))
+                self.assertNotIn('secret', str(raised.exception))
+                self.assertNotIn('https:', str(raised.exception))
+                self.assertFalse((self.cache / self.origin / 'APKBUILD').exists())
+                self.assertFalse(self.args.output.exists())
 
     def add_local_busybox(self):
         """Small synthetic local recipe, alongside an unchanged CA package."""

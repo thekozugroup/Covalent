@@ -301,6 +301,10 @@ COPY --from=caddy /lib/apk/db/installed /tmp/alpine-builder-installed
 COPY --from=caddy /etc/ssl/certs/ca-certificates.crt /tmp/alpine-ca.crt
 COPY --chmod=0555 scripts/collect-alpine-runtime-evidence.py /usr/local/bin/collect-alpine-runtime-evidence
 COPY packaging/docker/alpine/ /alpine-source/
+# Preserve the exact small CA source archive locally: its upstream GitLab
+# endpoint need not be reachable from a release runner. The collector still
+# requires the locked size, SHA256 and original APKBUILD SHA512.
+COPY --chmod=0444 packaging/docker/alpine/ca-certificates-20261020/ca-certificates-20261020.tar.bz2 /tmp/alpine-source-cache/ca-certificates/ca-certificates-20261020.tar.bz2
 RUN collect-alpine-runtime-evidence --arch "$TARGETARCH" \
       --lock /alpine-source/runtime-source-lock.json \
       --installed /tmp/alpine-runtime-installed \

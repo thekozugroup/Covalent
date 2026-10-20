@@ -1,5 +1,16 @@
 # Interlink companion and appliance robustness — 2026-10-20
 
+Hosted run 39490316340 passes the signed CA upgrade, exact CA bytes and Caddy
+collection on both native architectures, then fails in Alpine source fetching
+with the old generic diagnostic. A clean local Linux container downloads and
+validates all 155 source inputs. Added sanitized per-input HTTP/network errors
+without logging exception URLs/bodies, with credential-leak regressions. Retain
+the unchanged 230,531-byte CA source archive in the repository and seed the
+build-only cache; strict size/SHA256/original APKBUILD SHA512 still apply. This
+removes GitLab archive reachability from that step. The hosted failure's exact
+HTTP cause was not recorded; complete-image acceptance remains open.
+
+
 October 20 CA build repair: the old 20260909 pin failed hosted image builds.
 Both targets now consume the same checksum-pinned official signed 20261020
 noarch APK. The unused old CA generator is removed from the Go builder so its
