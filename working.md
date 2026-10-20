@@ -42,8 +42,14 @@ locked Quinn, rustls and ZIP libraries. Updated to quinn-proto 0.11.18,
 rustls 0.23.46 and zip 9.0.0, and adapted the frozen-upgrade fixture to ZIP's
 fallible name API. Full locked workspace tests and all-feature clippy pass;
 cargo-deny passes current advisories, bans, licenses and sources. No advisory
-was suppressed. The patched minified Android companion rebuild is in progress;
-prior APK/device evidence above predates these dependency changes.
+was suppressed. The patched minified companion rebuilt for both Android ABIs.
+A synthetic PNG transferred after in-place APK update with the Activity unopened,
+then another transferred to the patched Pi core after its forced restart. Exact
+source/destination bytes match; pairing and originals remain. The installed QA
+APK matches `artifacts/interlink-qa/interlink-minified-4389d16-qa.apk` (SHA-256
+`994200163a7ba9121cee8df122e8f41ea2274c5aa20c0c6d7f96d1c4ad326322`).
+It retains the Android Debug certificate for isolated QA only. Current hosted
+checks for runtime source `4389d16` are still running; no release was published.
 
 GPhoto OS source is in the private Interlink repository, branch
 `codex/appliance-robustness`, initial milestone `7893c65`. Removable storage
