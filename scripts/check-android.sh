@@ -41,6 +41,9 @@ if [ -z "$android_sdk" ]; then
   echo "Android SDK not found; set ANDROID_HOME or ANDROID_SDK_ROOT." >&2
   exit 1
 fi
+# Every package/provenance helper must use the same resolved SDK as Gradle,
+# including the macOS fallback when neither SDK environment variable was set.
+export ANDROID_HOME="$android_sdk" ANDROID_SDK_ROOT="$android_sdk"
 
 # `assembleRelease` depends on `:app:buildAndroidJni`, which shells out to
 # scripts/build-android-jni.sh and hard-requires COVALENT_ANDROID_NDK_HOME. No
