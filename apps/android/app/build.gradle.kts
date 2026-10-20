@@ -71,6 +71,8 @@ android {
         targetSdk = 37
         versionCode = 2012
         versionName = "0.2.12"
+        buildConfigField("int", "COVALENT_PEER_PORT", "8787")
+        buildConfigField("int", "COVALENT_SYNC_PORT", "8789")
         buildConfigField(
             "boolean",
             "COVALENT_SYNC_ENGINE_PACKAGED",

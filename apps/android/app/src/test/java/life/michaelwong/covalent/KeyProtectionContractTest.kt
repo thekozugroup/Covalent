@@ -147,7 +147,9 @@ class KeyProtectionContractTest {
     fun productionStartsRetainTheSamePeerListenerAcrossNormalAndRecoveryLaunches() {
         val kotlin = moduleFile("src/main/java/life/michaelwong/covalent/node/CovalentNative.kt").readText()
         assertTrue(kotlin.contains("peerListenerPort: Int = PEER_LISTENER_PORT"))
-        assertTrue(kotlin.contains("private const val PEER_LISTENER_PORT = 8_787"))
+        assertEquals(8_787, BuildConfig.COVALENT_PEER_PORT)
+        assertEquals(8_789, BuildConfig.COVALENT_SYNC_PORT)
+        assertTrue(kotlin.contains("private const val PEER_LISTENER_PORT = BuildConfig.COVALENT_PEER_PORT"))
         assertTrue(kotlin.contains("BuildConfig.DEBUG || peerListenerPort == PEER_LISTENER_PORT"))
 
         val rust = rustJniSource()

@@ -230,8 +230,8 @@ internal object CovalentNative {
         }
     }.getOrElse { NativeNodeResponse.unavailable() }
 
-    private const val FOLDER_SYNC_LISTENER_PORT = 8_789
-    private const val PEER_LISTENER_PORT = 8_787
+    private const val FOLDER_SYNC_LISTENER_PORT = BuildConfig.COVALENT_SYNC_PORT
+    private const val PEER_LISTENER_PORT = BuildConfig.COVALENT_PEER_PORT
 }
 
 internal enum class NativeFolderGrantResult {

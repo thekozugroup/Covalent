@@ -87,6 +87,7 @@ import life.michaelwong.covalent.sync.PeerAddressUpdateDraft
 import life.michaelwong.covalent.sync.PeerAddressUpdateOutcome
 import life.michaelwong.covalent.sync.SafFolderGrantStore
 import life.michaelwong.covalent.sync.completePeerAddressUpdate
+import life.michaelwong.covalent.sync.readFolderSyncStatusWhenReady
 
 private data class LoadedFolderSyncStatus(
     val status: FolderSyncStatus,
@@ -114,6 +115,7 @@ internal fun FolderSyncScreen(
     manager: EmbeddedNodeManager,
     modifier: Modifier = Modifier,
     onProviderConnectionsChanged: suspend () -> Unit = {},
+    photoAppliance: Boolean = false,
 ) {
     val context = LocalContext.current
     val hostUnavailableMessage = stringResource(R.string.folder_sync_host_unavailable)
@@ -175,7 +177,7 @@ internal fun FolderSyncScreen(
         }
         return withContext(Dispatchers.IO) {
             val previousChoices = grants.records().mapNotNull { it.offerId }.toSet()
-            val snapshot = api.status(ready).also {
+            val snapshot = readFolderSyncStatusWhenReady { api.status(ready) }.also {
                 grants.reconcile(it)
                 settingsChanges.reconcile(it)
             }
@@ -551,6 +553,7 @@ internal fun FolderSyncScreen(
         LinkSettingsEditorDialog(
             editor = editor,
             busy = busy,
+            allowDeletionPolicies = !photoAppliance,
             onChange = { settingsEditor = it },
             onSave = {
                 val enablesSourceDeletion =
@@ -566,7 +569,7 @@ internal fun FolderSyncScreen(
                     submitSettings(
                         editor.folderId,
                         editor.current.revision,
-                        editor.proposedSettings(),
+                        editor.proposedSettings().let { if (photoAppliance) it.copy(deletionPolicy = FolderLinkPolicy(false, false)) else it },
                     )
                 }
             },
@@ -602,12 +605,12 @@ internal fun FolderSyncScreen(
         ) {
         item {
             Text(
-                stringResource(R.string.folder_sync_title),
+                if (photoAppliance) "Your photo links" else stringResource(R.string.folder_sync_title),
                 style = MaterialTheme.typography.headlineMedium,
                 fontWeight = FontWeight.SemiBold,
             )
             Spacer(Modifier.height(6.dp))
-            Text(stringResource(R.string.folder_sync_subtitle))
+            Text(if (photoAppliance) "Choose a folder, pair your Pi, and keep your originals." else stringResource(R.string.folder_sync_subtitle))
             error?.let { message ->
                 Spacer(Modifier.height(14.dp))
                 Text(message, color = MaterialTheme.colorScheme.error)
@@ -630,8 +633,8 @@ internal fun FolderSyncScreen(
             item {
                 Card(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Text(stringResource(R.string.folder_sync_access_title), fontWeight = FontWeight.SemiBold)
-                        Text(stringResource(R.string.folder_sync_saf_access_explanation))
+                        Text(if (photoAppliance) "Connect your photos" else stringResource(R.string.folder_sync_access_title), fontWeight = FontWeight.SemiBold)
+                        Text(if (photoAppliance) "Choose the folders this phone can share. Pair with your Pi once, then sync whenever it is available. Your originals stay here." else stringResource(R.string.folder_sync_saf_access_explanation))
                         Button(onClick = {
                             if (
                                 Build.VERSION.SDK_INT >= 37 && ContextCompat.checkSelfPermission(
@@ -644,7 +647,7 @@ internal fun FolderSyncScreen(
                                 enableHostAndRefresh()
                             }
                         }) {
-                            Text(stringResource(R.string.folder_sync_enable))
+                            Text(if (photoAppliance) "Get started" else stringResource(R.string.folder_sync_enable))
                         }
                     }
                 }
@@ -703,7 +706,7 @@ internal fun FolderSyncScreen(
         }
         if (showSetup) {
             item(key = "phone-pairing") {
-                FolderSyncPairing(manager = manager, onPeersChanged = ::refresh)
+                FolderSyncPairing(manager = manager, onPeersChanged = ::refresh, photoAppliance = photoAppliance)
             }
         }
         if (showSetup || needsFolderChoice) {
@@ -809,6 +812,7 @@ internal fun FolderSyncScreen(
                         }
                     }
                     if (showSyncOptions) {
+                    if (!photoAppliance) {
                     item {
                         LinkPolicyControl(
                             checked = propagateSourceDeletions,
@@ -826,6 +830,7 @@ internal fun FolderSyncScreen(
                             detail = stringResource(R.string.folder_link_destination_deletions_detail),
                             tag = "folder-link-destination-deletions",
                         )
+                    }
                     }
                     item {
                         LinkCadenceControl(
@@ -908,8 +913,8 @@ internal fun FolderSyncScreen(
                             share.folderId,
                             share.label,
                             state,
-                            policy.propagateSourceDeletions,
-                            policy.restoreLocalDeletions,
+                            !photoAppliance && policy.propagateSourceDeletions,
+                            !photoAppliance && policy.restoreLocalDeletions,
                             state.settings.cadence,
                             (state.settings.cadence as? FolderLinkCadence.Scheduled)?.intervalMinutes?.toString() ?: "60",
                             state.settings.androidConditions.wifiOnly,
@@ -935,8 +940,8 @@ internal fun FolderSyncScreen(
                                     share.folderId,
                                     share.label,
                                     state,
-                                    policy.propagateSourceDeletions,
-                                    policy.restoreLocalDeletions,
+                                    !photoAppliance && policy.propagateSourceDeletions,
+                                    !photoAppliance && policy.restoreLocalDeletions,
                                     state.settings.cadence,
                                     (state.settings.cadence as? FolderLinkCadence.Scheduled)?.intervalMinutes?.toString() ?: "60",
                                     state.settings.androidConditions.wifiOnly,
@@ -1593,6 +1598,7 @@ private fun AndroidConditionsControl(
 private fun LinkSettingsEditorDialog(
     editor: LinkSettingsEditor,
     busy: Boolean,
+    allowDeletionPolicies: Boolean = true,
     onChange: (LinkSettingsEditor) -> Unit,
     onSave: () -> Unit,
     onDismiss: () -> Unit,
@@ -1606,6 +1612,7 @@ private fun LinkSettingsEditorDialog(
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 Text(stringResource(R.string.folder_link_settings_every_destination))
+                if (allowDeletionPolicies) {
                 LinkPolicyControl(
                     editor.propagateSourceDeletions,
                     { onChange(editor.copy(propagateSourceDeletions = it)) },
@@ -1620,6 +1627,9 @@ private fun LinkSettingsEditorDialog(
                     stringResource(R.string.folder_link_destination_deletions_detail),
                     "folder-link-settings-destination-deletions",
                 )
+                } else {
+                    Text("Originals are retained. Files freed by Google Photos stay removed from the Pi.")
+                }
                 LinkCadenceControl(
                     editor.cadence,
                     editor.scheduledMinutes,
