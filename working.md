@@ -37,6 +37,14 @@ appliance image, and verified recovery without risking originals or pairing.
   substitute production signing identity. Cold launch measured 332 ms under the
   recovered emulator configuration; this is not a physical-phone performance claim.
 
+Security follow-up: hosted RustSec checks found twelve advisories across the
+locked Quinn, rustls and ZIP libraries. Updated to quinn-proto 0.11.18,
+rustls 0.23.46 and zip 9.0.0, and adapted the frozen-upgrade fixture to ZIP's
+fallible name API. Full locked workspace tests and all-feature clippy pass;
+cargo-deny passes current advisories, bans, licenses and sources. No advisory
+was suppressed. The patched minified Android companion rebuild is in progress;
+prior APK/device evidence above predates these dependency changes.
+
 GPhoto OS source is in the private Interlink repository, branch
 `codex/appliance-robustness`, initial milestone `7893c65`. Removable storage
 imports require per-volume approval, keep originals, verify bytes, publish
