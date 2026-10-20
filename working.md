@@ -1,5 +1,23 @@
 # Interlink companion and appliance robustness — 2026-10-20
 
+Run 39497483404 now passes the full Android Gradle/package/native/inventory
+gate, shared Rust/contracts, both complete native container jobs, dependency
+review and both macOS jobs. Android foundation then fails in its separate
+disposable release-signing smoke. A real build-tools 37 probe reproduces the
+cause: certificate rows are labeled `V3.0 Signer:` rather than `Signer #1`.
+The release verifier now accepts both known report formats, requires exactly
+one reported signer, rejects unknown/duplicate certificate rows and requires
+every reported certificate to match the exact pinned identity. Fingerprints
+are compared as bytes regardless of hex letter case. No key policy or signature
+scheme requirement was relaxed. Twenty-one policy regressions pass; real SDK
+36 and 37 smoke each verifies v2/v3 signatures, pinned identity, debug-key
+refusal and existing-output preservation with disposable keys only. No
+production Interlink key was created and no artifact was published/installed.
+Logs: artifacts/go-security/interlink-sdk{36,37}-signer-format-smoke.log.
+The new commit still requires its hosted rerun; API 37 device acceptance and
+physical Pi/Solstice checks remain open. The earlier opaque release-packaging
+failure did not recur; no unproven root cause is assigned to it.
+
 Hosted run 39491384945 passes both native container jobs completely: exact
 packaging/source/notices, folder journeys, vulnerability scans and budgets. The
 earlier optional amd64 deletion timeout did not recur; its cause is unproven.

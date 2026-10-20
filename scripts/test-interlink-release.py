@@ -38,6 +38,9 @@ class ReleaseTests(unittest.TestCase):
         self.debug = False
         self.badging = "package: name='life.michaelwong.interlink' versionCode='1' versionName='0.1.0-dev'\n"
         self.signed_cert = PIN
+        self.signer_label = "Signer #1"
+        self.signer_count = "Number of signers: 1\n"
+        self.extra_certificates = ""
         self.bad_scheme = False
         self.commands = []
 
@@ -55,7 +58,8 @@ class ReleaseTests(unittest.TestCase):
             elif Path(command[-1]).name == "unsigned.apk":
                 code = 1
             else:
-                output = (f"Signer #1 certificate SHA-256 digest: {self.signed_cert}\n"
+                output = (self.signer_count + f"{self.signer_label} certificate SHA-256 digest: {self.signed_cert}\n"
+                    + self.extra_certificates +
                     "Signer #1 certificate DN: CN=Interlink Test\n"
                     "Verified using v2 scheme (APK Signature Scheme v2): true\n"
                     f"Verified using v3 scheme (APK Signature Scheme v3): {str(not self.bad_scheme).lower()}\n").encode()
@@ -121,6 +125,42 @@ class ReleaseTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "APK signer"):
             self.sign()
         self.assertFalse(self.args.output_directory.exists())
+
+    def test_sdk37_versioned_signer_label_accepts_exact_pin(self):
+        self.signer_label = "V3.0 Signer:"
+        self.sign()
+
+    def test_sdk37_additional_version_must_use_same_identity(self):
+        self.signer_label = "V3.0 Signer:"
+        self.extra_certificates = f"V3.1 Signer: certificate SHA-256 digest: {PIN}\n"
+        self.sign()
+
+    def test_sdk37_different_versioned_certificate_refuses(self):
+        self.signer_label = "V3.0 Signer:"
+        self.extra_certificates = f"V3.1 Signer: certificate SHA-256 digest: {'0' * 64}\n"
+        with self.assertRaisesRegex(ValueError, "APK signer"):
+            self.sign()
+        self.assertFalse(self.args.output_directory.exists())
+
+    def test_extra_unknown_or_duplicate_certificate_refuses(self):
+        for label in ("Signer #2", "V3.3 Signer:", "Signer #1"):
+            with self.subTest(label=label):
+                self.extra_certificates = f"{label} certificate SHA-256 digest: {PIN}\n"
+                with self.assertRaisesRegex(ValueError, "APK signer"):
+                    self.sign()
+                self.assertFalse(self.args.output_directory.exists())
+
+    def test_missing_or_multiple_signer_count_refuses(self):
+        for count in ("", "Number of signers: 2\n", "Number of signers: 1\nNumber of signers: 1\n"):
+            with self.subTest(count=count):
+                self.signer_count = count
+                with self.assertRaisesRegex(ValueError, "APK signer"):
+                    self.sign()
+                self.assertFalse(self.args.output_directory.exists())
+
+    def test_uppercase_certificate_digest_matches_same_bytes(self):
+        self.signed_cert = PIN.upper()
+        self.sign()
 
     def test_missing_v3_signature_refuses(self):
         self.bad_scheme = True

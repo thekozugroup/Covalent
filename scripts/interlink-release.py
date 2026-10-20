@@ -79,8 +79,17 @@ def inspect_apk(apk, tools, version, version_code, *, certificate=None):
     else:
         require(result.returncode == 0, "Signed APK signature verification failed")
         evidence = result.stdout.decode("utf-8")
-        signers = re.findall(r"^Signer #\d+ certificate SHA-256 digest: ([0-9a-fA-F]+)$", evidence, re.M)
-        require(signers == [fingerprint(certificate)], "APK signer differs from the pinned Interlink identity")
+        # Build-tools 37 labels its signer by v3 version instead of signer index.
+        # Verify every reported certificate; never confuse a key digest with it
+        # or accept an extra/unknown signer while searching for the pinned row.
+        counts = re.findall(r"^Number of signers: (\d+)$", evidence, re.M)
+        rows = [line for line in evidence.splitlines() if "certificate SHA-256 digest:" in line]
+        parsed = [re.fullmatch(r"(Signer #1|V3\.[012] Signer:) certificate SHA-256 digest: ([0-9a-fA-F]{64})", line)
+                  for line in rows]
+        require(counts == ["1"] and parsed and all(parsed)
+                and len({row[1] for row in parsed}) == len(parsed)
+                and all(row[2].lower() == fingerprint(certificate) for row in parsed),
+                "APK signer differs from the pinned Interlink identity")
         require("android debug" not in evidence.lower(), "Android Debug signing is forbidden for a production release")
         for scheme in (2, 3):
             require(re.search(rf"^Verified using v{scheme} scheme .*: true$", evidence, re.M) is not None,
