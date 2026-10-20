@@ -54,10 +54,14 @@
     },
     {
       "name": "ca-certificates-bundle",
-      "version": "20260909-r0",
+      "version": "20261020-r0",
       "origin": "ca-certificates",
       "license": "MPL-2.0 AND MIT",
-      "aportsCommit": "c733d58a9d16316e7fb6a49e65f28ecda365c56b"
+      "aportsCommit": "ac857c298f6fd212498ce76bb87836d940cdba2d",
+      "architectureByTarget": {
+        "amd64": "x86_64",
+        "arm64": "noarch"
+      }
     },
     {
       "name": "libcrypto3",
@@ -114,12 +118,12 @@
   ],
   "copiedCABundle": {
     "package": "ca-certificates-bundle",
-    "version": "20260909-r0",
+    "version": "20261020-r0",
     "origin": "ca-certificates",
     "license": "MPL-2.0 AND MIT",
-    "aportsCommit": "c733d58a9d16316e7fb6a49e65f28ecda365c56b",
-    "bytes": 181724,
-    "sha256": "028fca5150ee1915c4474489985d55c54fceaa680c754cc8d1301734f01b2232"
+    "aportsCommit": "ac857c298f6fd212498ce76bb87836d940cdba2d",
+    "bytes": 178791,
+    "sha256": "5961c0a3c65459931c023e0075c09733f09aea4ca439cb85bc4a08bb4f3f568b"
   },
   "files": [
     {
@@ -1189,23 +1193,23 @@
     {
       "origin": "ca-certificates",
       "name": "APKBUILD",
-      "url": "https://raw.githubusercontent.com/alpinelinux/aports/c733d58a9d16316e7fb6a49e65f28ecda365c56b/main/ca-certificates/APKBUILD",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/ac857c298f6fd212498ce76bb87836d940cdba2d/main/ca-certificates/APKBUILD",
       "bytes": 2520,
-      "sha256": "0c14312c1d5c4a8b7ef74433be9db58517b17eb091bccdf2c8325bc4c9c26480",
-      "gitBlob": "1dc886bc363ca5418211781ef0c946ea805ccfe0"
+      "sha256": "7b35fb8e11790105578f47d57a3b22831227b0d8ad7d064e575bad146023f3da",
+      "gitBlob": "c76805bafbc2a5867c1fe67aa0437573022a36fd"
     },
     {
       "origin": "ca-certificates",
-      "name": "ca-certificates-20260909.tar.bz2",
-      "url": "https://distfiles.alpinelinux.org/distfiles/v3.23/ca-certificates-20260909.tar.bz2",
-      "bytes": 232735,
-      "sha256": "dc460c535f3833432be4e561d214a5fe816b05ede5a2ade64787e501671cd082",
-      "apkbuildSHA512": "d235529da679f14e2e8df4175bc8189507add1382fe0ef8493824b07a49763a2a3af8201f43d30a0260eb8357a10bb0d7054d9b012abf3b74ecf889551cf0dd7"
+      "name": "ca-certificates-20261020.tar.bz2",
+      "url": "https://gitlab.alpinelinux.org/alpine/ca-certificates/-/archive/20261020/ca-certificates-20261020.tar.bz2",
+      "bytes": 230531,
+      "sha256": "1048bc7f50fa42a6621bc2f8816173f89a0c0098f26dff072bc8fe40af714400",
+      "apkbuildSHA512": "d28eb01751b1a914ffb5d8cb99e662f0a35a95148c21dcf98de1ab3108b54db9714a99472d07715023867f4f76a21f2a79a2bc1c7e9876ce5167fdd865ad2dd7"
     },
     {
       "origin": "ca-certificates",
       "name": "ca-certificates.post-deinstall",
-      "url": "https://raw.githubusercontent.com/alpinelinux/aports/c733d58a9d16316e7fb6a49e65f28ecda365c56b/main/ca-certificates/ca-certificates.post-deinstall",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/ac857c298f6fd212498ce76bb87836d940cdba2d/main/ca-certificates/ca-certificates.post-deinstall",
       "bytes": 137,
       "sha256": "9523860edc396093bd41270c6e33a569a30657e2ffd729829514ee6b6d54d652",
       "gitBlob": "10d219f03f526641af8a366db975b010b3c260e1"
@@ -1213,7 +1217,7 @@
     {
       "origin": "ca-certificates",
       "name": "ca-certificates.trigger",
-      "url": "https://raw.githubusercontent.com/alpinelinux/aports/c733d58a9d16316e7fb6a49e65f28ecda365c56b/main/ca-certificates/ca-certificates.trigger",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/ac857c298f6fd212498ce76bb87836d940cdba2d/main/ca-certificates/ca-certificates.trigger",
       "bytes": 67,
       "sha256": "1bf77c8eae3220b1bd7dd86561d0899315f51d72257c1aeb4066072ed4304fe5",
       "gitBlob": "0ed2ac4980c97739fb6addfbf41a5700c6d286a1"
@@ -1545,15 +1549,15 @@
     },
     {
       "origin": "ca-certificates",
-      "archive": "ca-certificates-20260909.tar.bz2",
-      "member": "ca-certificates-20260909/c_rehash.c",
+      "archive": "ca-certificates-20261020.tar.bz2",
+      "member": "ca-certificates-20261020/c_rehash.c",
       "bytes": 9533,
       "sha256": "a68fedc0edd976b9f35ecfdcb252d80dc12084b1bc4e945be7dc42c437d8b540"
     },
     {
       "origin": "ca-certificates",
-      "archive": "ca-certificates-20260909.tar.bz2",
-      "member": "ca-certificates-20260909/mk-ca-bundle.pl",
+      "archive": "ca-certificates-20261020.tar.bz2",
+      "member": "ca-certificates-20261020/mk-ca-bundle.pl",
       "bytes": 24902,
       "sha256": "8e278f4982210b37e4f9a048bd6ed23df41e4a054085bd73f8242628f03d09ca"
     },
@@ -1604,8 +1608,8 @@
       "MPL-2.0.txt",
       "MIT-terms.txt",
       "curl.txt",
-      "ca-certificates-20260909/c_rehash.c",
-      "ca-certificates-20260909/mk-ca-bundle.pl"
+      "ca-certificates-20261020/c_rehash.c",
+      "ca-certificates-20261020/mk-ca-bundle.pl"
     ],
     "musl": [
       "musl-1.2.5/COPYRIGHT",
@@ -2235,13 +2239,13 @@
     },
     {
       "origin": "ca-certificates",
-      "aportsCommit": "c733d58a9d16316e7fb6a49e65f28ecda365c56b",
-      "treeSHA1": "6e740a4da4ef3bf4228df6043b0005deccdfd3c6",
+      "aportsCommit": "ac857c298f6fd212498ce76bb87836d940cdba2d",
+      "treeSHA1": "cf049142e972ade53e9a4d9afbdaeb6b0a2cf277",
       "entries": [
         {
           "name": "APKBUILD",
           "mode": "100644",
-          "gitBlob": "1dc886bc363ca5418211781ef0c946ea805ccfe0"
+          "gitBlob": "c76805bafbc2a5867c1fe67aa0437573022a36fd"
         },
         {
           "name": "ca-certificates.post-deinstall",

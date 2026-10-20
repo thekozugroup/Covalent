@@ -20,13 +20,29 @@ October 19 certificate-verification fix included in 1.26.10.
 
 The Go builder is pinned to the verified official multi-platform index
 `sha256:a07f231c19b03e6106cf442f02a5bcf262147e744d15b7b5e4b6d81d420c70a0`.
-Its CA bundle is 20260909-r0, 181,724 bytes, SHA-256
-`028fca5150ee1915c4474489985d55c54fceaa680c754cc8d1301734f01b2232`.
-Both architecture manifests/layers and the complete new Alpine recipe tree
-were independently verified before updating source and expected-notice pins.
-These pins do not prove a rebuilt final runtime. The final image's installed
-database, notices, source, payload, functionality and scan must still pass the
-existing independent gates on both native CI runners.
+The build now explicitly installs the same official signed, noarch
+`ca-certificates-bundle=20261020-r0` APK on both targets. Its 107,116 bytes are
+pinned to SHA-256 `a4c5de1bf37652cd98cbe71aec209512ae0508a964961957a6c9650f795e46c4`.
+The resulting 178,791-byte bundle hashes to
+`5961c0a3c65459931c023e0075c09733f09aea4ca439cb85bc4a08bb4f3f568b`.
+The architecture-independent package reached the x86 mirror while ARM's index
+still offered the previous version. The checksum-pinned build-only input
+avoids that mirror race. Signature checking uses `/usr/share/apk/keys` per
+command, including the official x86 signer; the global trust store is unchanged.
+No untrusted-package bypass is used.
+
+The Go builder's old full `ca-certificates` generator is removed first because
+its old source certificates could overwrite the new bundle on a later apk
+trigger. The signed bundle alone supplies Caddy's required trust file. Real
+upgrades on both digest-verified Go base layers pass; exact bundle bytes and
+installed records were measured. Apk 3.0.8 records the signed noarch input as
+`x86_64` on amd64 and `noarch` on arm64; target-specific checks bind those
+observed values instead of accepting either. Complete recipe tree
+`ac857c298f6fd212498ce76bb87836d940cdba2d` and the exact GitLab source archive
+were freshly downloaded and verified against Git blobs and APKBUILD SHA-512.
+All 155 source inputs validate. Notice/source review pins were regenerated
+without creating a synthetic installed-runtime receipt. Full native CI image
+checks and vulnerability scans remain required.
 
 The final locally rebuilt Caddy ELF pair passes its strict distribution
 verifier. Explicit file SBOM scans with Grype 0.117.0, database v6.1.10 built
@@ -42,11 +58,10 @@ assessment excludes Alpine and other runtime executables and is not a complete
 image clearance. Explicit Mac/Android rclone scans retain the same unknown row;
 their target graphs also contain no OpenPGP imports.
 
-Hosted run 39485175979 fails before image acceptance because the signed Alpine
-repository now offers `ca-certificates-bundle=20261020-r0`, replacing the pinned
-20260909-r0. The official Go builder still contains the older bundle. Update
-builder/runtime CA identity and corresponding source, recipe and notice pins
-together before rerunning. Keep exact package and vulnerability gates intact.
+Hosted run 39485175979 exposed the old CA pin failure. The source now contains
+the coordinated builder/runtime/recipe/source/notice fix above. Strict byte,
+package and vulnerability gates remain intact; a pushed fix is not image
+acceptance until the new native jobs pass.
 
 The same refresh also exposed RUSTSEC-2026-0382 and RUSTSEC-2026-0383 in the
 shared TLS verifier/root bundle. The lockfile now selects rustls-webpki

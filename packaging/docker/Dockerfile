@@ -1,3 +1,9 @@
+# Alpine's noarch CA package reached the x86 mirror before the ARM index.
+# Fetch exactly the same signed bytes for both targets. ADD checks the download;
+# apk checks its signature using Alpine's bundled official keys per command.
+FROM scratch AS ca-bundle-input
+ADD --checksum=sha256:a4c5de1bf37652cd98cbe71aec209512ae0508a964961957a6c9650f795e46c4 https://dl-cdn.alpinelinux.org/alpine/v3.23/main/x86_64/ca-certificates-bundle-20261020-r0.apk /ca-bundle.apk
+
 FROM golang:1.26.10-alpine3.23@sha256:a07f231c19b03e6106cf442f02a5bcf262147e744d15b7b5e4b6d81d420c70a0 AS sync-engine-worker
 ARG TARGETARCH
 ENV CGO_ENABLED=0 \
@@ -72,6 +78,15 @@ RUN build-linux-sync-engine package \
 #     by the image's own compiler instead of being papered over by an automatic
 #     toolchain download from the network.
 FROM golang:1.26.10-alpine3.23@sha256:a07f231c19b03e6106cf442f02a5bcf262147e744d15b7b5e4b6d81d420c70a0 AS caddy
+COPY --from=ca-bundle-input /ca-bundle.apk /tmp/ca-bundle.apk
+# The old generator owns older source certificates and can regenerate an old
+# bundle during later apk operations. Caddy needs only the pre-generated file.
+# Remove the unused generator before installing the reviewed noarch bundle.
+RUN apk --no-network del ca-certificates \
+    && apk --keys-dir /usr/share/apk/keys add --no-cache --no-network /tmp/ca-bundle.apk \
+    && apk info -e 'ca-certificates-bundle=20261020-r0' \
+    && echo '5961c0a3c65459931c023e0075c09733f09aea4ca439cb85bc4a08bb4f3f568b  /etc/ssl/certs/ca-certificates.crt' | sha256sum -c - \
+    && rm /tmp/ca-bundle.apk
 ENV CGO_ENABLED=0 \
     GOTOOLCHAIN=local \
     GOFLAGS=-mod=readonly
@@ -207,14 +222,18 @@ RUN abuild-keygen -a -i -n \
     && test "$(find /home/package-builder/output/keys -type f -name '*.rsa.pub' | wc -l)" -eq 1
 
 FROM alpine:3.23@sha256:fd791d74b68913cbb027c6546007b3f0d3bc45125f797758156952bc2d6daf40 AS runtime-base
+COPY --from=ca-bundle-input /ca-bundle.apk /tmp/ca-bundle.apk
 # Alpine published the fixed OpenSSL security revision after the pinned 3.23.5
 # base image was assembled. Install only those two signed repository packages
 # at exact versions: a future repository change can fail this build, but cannot
 # silently select a different runtime. Both libraries are retained because
 # apk-tools and BusyBox ssl_client require them even though Covalent and Caddy
 # are statically linked and do not load OpenSSL. BusyBox ssl_client retains both.
-RUN apk add --no-cache --upgrade \
-      ca-certificates-bundle=20260909-r0 \
+RUN apk --keys-dir /usr/share/apk/keys add --no-cache --no-network /tmp/ca-bundle.apk \
+    && apk info -e 'ca-certificates-bundle=20261020-r0' \
+    && echo '5961c0a3c65459931c023e0075c09733f09aea4ca439cb85bc4a08bb4f3f568b  /etc/ssl/certs/ca-certificates.crt' | sha256sum -c - \
+    && rm /tmp/ca-bundle.apk \
+    && apk add --no-cache --upgrade \
       libcrypto3=3.5.9-r0 \
       libssl3=3.5.9-r0 \
     && apk info -e 'libcrypto3=3.5.9-r0' \

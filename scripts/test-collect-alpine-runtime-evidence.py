@@ -106,6 +106,53 @@ class EvidenceTests(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()):
             return M.collect(self.args)
 
+    def test_upstream_ca_architecture_mapping_is_exact_and_binds_database(self):
+        self.add_local_busybox()
+        row = self.lock['packages'][0]
+        row['architectureByTarget'] = {'amd64': 'x86_64', 'arm64': 'noarch'}
+        self.save_lock()
+        inventory = self.run_collector()
+        ca = next(r for r in inventory['packages'] if r['name'] == 'ca-certificates-bundle')
+        self.assertEqual(ca['architecture'], 'x86_64')
+        self.assertEqual(next(r for r in M.expected_packages(self.lock, 'arm64')
+                              if r['name'] == 'ca-certificates-bundle')['architecture'], 'noarch')
+        self.args.installed.write_bytes(self.database.replace(b'A:x86_64', b'A:noarch', 1))
+        with self.assertRaisesRegex(M.EvidenceError, 'installed runtime packages differ'):
+            self.run_collector()
+        for change in (
+            {'architectureByTarget': {'amd64': 'noarch', 'arm64': 'noarch'}},
+            {'architectureByTarget': {'amd64': 'x86_64'}},
+            {'origin': 'busybox'},
+            {'architecture': 'noarch'},
+            {'installedDatabaseCommit': None},
+        ):
+            with self.subTest(change=change):
+                original = dict(row)
+                row.update(change)
+                self.save_lock()
+                with self.assertRaisesRegex(M.EvidenceError, 'architecture override'):
+                    M.load_lock(self.args.lock)
+                row.clear()
+                row.update(original)
+
+    def test_only_exact_reviewed_ca_gitlab_archive_url_is_accepted(self):
+        row = self.lock['files'][1]
+        row.update(name='ca-certificates-20261020.tar.bz2', url=M.CA_RELEASE_URL)
+        self.lock['archiveNotices'][0]['archive'] = row['name']
+        self.save_lock()
+        M.load_lock(self.args.lock)
+        for wrong in (
+            M.CA_RELEASE_URL.replace('20261020', '20261021'),
+            M.CA_RELEASE_URL.replace('gitlab.alpinelinux.org', 'gitlab.alpinelinux.org.evil.test'),
+            M.CA_RELEASE_URL + '?ref=other',
+            M.CA_RELEASE_URL.replace('https:', 'http:'),
+        ):
+            with self.subTest(url=wrong):
+                row['url'] = wrong
+                self.save_lock()
+                with self.assertRaisesRegex(M.EvidenceError, 'source URL'):
+                    M.load_lock(self.args.lock)
+
     def add_local_busybox(self):
         """Small synthetic local recipe, alongside an unchanged CA package."""
         self.lock['schema'] = 2

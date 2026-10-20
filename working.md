@@ -1,5 +1,20 @@
 # Interlink companion and appliance robustness — 2026-10-20
 
+October 20 CA build repair: the old 20260909 pin failed hosted image builds.
+Both targets now consume the same checksum-pinned official signed 20261020
+noarch APK. The unused old CA generator is removed from the Go builder so its
+triggers cannot overwrite the new trust file. Signature-checked upgrades on
+both real digest-verified builder roots preserve the exact expected CA bytes.
+Target checks bind apk's measured metadata difference (x86_64 on amd64, noarch
+on arm64). A fresh source/recipe download verifies all 155 locked inputs;
+source and notice review pins were regenerated together. Caddy binaries are
+unchanged and both pass their strict distribution verifier with the new CA.
+Collector/verifier regressions and the static container contract pass. No
+installed-runtime receipt was fabricated. Complete native CI images, scans and
+the earlier optional amd64 deletion journey remain open. No release or physical
+installation is promoted by this repair.
+
+
 Active GPhoto OS goal: a focused phone companion, durable Pi imports, minimal
 appliance image, and verified recovery without risking originals or pairing.
 

@@ -47,15 +47,15 @@ EXPECTED_TARGET_RECORDS = {
     "linux-amd64": {
         "packageCount": 951,
         "moduleCount": 148,
-        "inventorySha256": "98ec241b8da6ed08d0d37b038771a528c583b3bce50ad2487798561d5569241a",
-        "noticeSha256": "9cfba0208df0532333ee8102ce3b9edde25ca228098c7e9e1a96ba0907102ce9",
+        "inventorySha256": "fd1bca9bcbedc0337a7221c449b8d4cdece52c3a111661f7d21a71d8aee6a694",
+        "noticeSha256": "300d0eb6042939a5d8f82f0df3c38f49abab8cfc5fe73b0e982500ac107a01fa",
         "binarySha256": "4d3c36baf6d793f5512193bcf035937c690e5e7f366e0893736b8469be7afad2"
     },
     "linux-arm64": {
         "packageCount": 949,
         "moduleCount": 148,
-        "inventorySha256": "c4e4d95256d9ca2c990989ca85c8c63a03598094f7f9e39218feb911d33f36cb",
-        "noticeSha256": "9cfba0208df0532333ee8102ce3b9edde25ca228098c7e9e1a96ba0907102ce9",
+        "inventorySha256": "3dc96e9f572efc231a4151004685641cdea93ac72ce2c06536f304f31455f203",
+        "noticeSha256": "300d0eb6042939a5d8f82f0df3c38f49abab8cfc5fe73b0e982500ac107a01fa",
         "binarySha256": "1963454e1799e4bdd93f2c64ef2e62db1ae2563b5fbcc3d5a44d056872b809e3"
     }
 }
@@ -63,13 +63,13 @@ MYSQL_SOURCE_MEMBER_MANIFEST_SHA256 = "4a565566abcab4711cb605658718e7fa8b86c5b8d
 CA_RECORD = {
     "sourceStage": "golang:1.26.10-alpine3.23",
     "package": "ca-certificates-bundle",
-    "version": "20260909-r0",
+    "version": "20261020-r0",
     "origin": "ca-certificates",
     "declaredLicense": "MPL-2.0 AND MIT",
-    "aportsCommit": "c733d58a9d16316e7fb6a49e65f28ecda365c56b",
+    "aportsCommit": "ac857c298f6fd212498ce76bb87836d940cdba2d",
     "bundlePath": "/etc/ssl/certs/ca-certificates.crt",
-    "bytes": 181_724,
-    "sha256": "028fca5150ee1915c4474489985d55c54fceaa680c754cc8d1301734f01b2232",
+    "bytes": 178_791,
+    "sha256": "5961c0a3c65459931c023e0075c09733f09aea4ca439cb85bc4a08bb4f3f568b",
     "reviewStatus": "metadata-bound-source-review-required",
 }
 MAX_JSON = 24 * 1024 * 1024
@@ -371,7 +371,7 @@ def verify(
     ca = manifest.get("copiedCaCertificateBundle")
     expected_ca = {
         **CA_RECORD,
-        "architecture": "x86_64" if expected_target == "linux-amd64" else "aarch64",
+        "architecture": "x86_64" if expected_target == "linux-amd64" else "noarch",
     }
     if (
         ca != expected_ca

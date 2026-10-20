@@ -14,11 +14,13 @@ files, with zero unclassified files. Package counts are 949 for arm64 and 951
 for amd64. The MPL corresponding-source member manifest is unchanged.
 
 The new readable notice SHA-256 is
-`9cfba0208df0532333ee8102ce3b9edde25ca228098c7e9e1a96ba0907102ce9`.
+`300d0eb6042939a5d8f82f0df3c38f49abab8cfc5fe73b0e982500ac107a01fa`.
 The strict verifier retains independent target counts and inventory/binary
 digests in `scripts/verify-caddy-distribution-evidence.py`. The CA source is
-the digest-verified Go image's 20260909-r0 bundle; the Alpine source lock
-retains the full matching recipe and corresponding source.
+the signed 20261020-r0 noarch package explicitly installed on the digest-pinned
+Go builder after removing its old certificate generator. The Alpine source lock
+retains the full matching recipe and corresponding source. Actual installed
+metadata is bound separately for each target, including apk's x86 normalization.
 
 The family counts are Apache-2.0 61, BSD-2-Clause 4, BSD-3-Clause 56, CC0-1.0
 1, MIT 56 and MPL-2.0 1. Counts overlap. Final native-runner image validation
