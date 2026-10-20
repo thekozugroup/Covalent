@@ -14,8 +14,8 @@ project_license="$repo_root/LICENSE"
 
 engine_version=v1.75.1
 engine_commit=687d264b689b8c49a67e2e52a8a5e0caa01c04ce
-go_mod_sha=1708132fb012d15c89e7863a79abea50c66895e78d8b85037275db213c1d103f
-go_sum_sha=801fcfc81dd2f84417d5410c04aa4fd5936387246372eaf8920c2b0492ffa89b
+go_mod_sha=eaa7a6edf41ca097fc52097c9ff7abf71a3b1e28d8b553372d54999711bf6f6d
+go_sum_sha=57f578898529d6604fcb0484cffa6f09d74e082151cd146e841b630f55d03637
 rclone_license_sha=9266eae9c6a441de0f6847f19ac8f09b280d55612b079eca03b3d49b822c1a71
 guardian_sha=c50b5cf10a287c4c061b7891978fd2681b5c96910eb2c69c922beae349140579
 source_date_epoch=1785792965
@@ -60,19 +60,19 @@ cleanup() {
 trap cleanup EXIT HUP INT TERM
 if test -n "${COVALENT_GO_ARCHIVE:-}"; then
   go_archive=$COVALENT_GO_ARCHIVE
-  test -f "$go_archive" && test ! -L "$go_archive" && test "$(size_of "$go_archive")" -eq 64772572 && \
-    test "$(sha256 "$go_archive")" = 020a1e8224811be75163e920bc77e0926a1390a6aeea19bdcf23f74b9d749f6d ||
-    fail "Go 1.26.7 archive digest or size differs"
+  test -f "$go_archive" && test ! -L "$go_archive" && test "$(size_of "$go_archive")" -eq 64669745 && \
+    test "$(sha256 "$go_archive")" = 0b5183492292ada170f9b561a834863808dd02edba599e4ad0e89899330020b3 ||
+    fail "Go 1.26.10 archive digest or size differs"
   if tar -tzf "$go_archive" | grep -Eq '(^/|(^|/)\.\.(/|$))'; then fail "Go archive contains an unsafe member"; fi
   mkdir "$private/toolchain"
   tar -xzf "$go_archive" -C "$private/toolchain"
   go_bin="$private/toolchain/go/bin/go"
 fi
 if test -z "$go_bin"; then go_bin=$(command -v go || true); fi
-test -n "$go_bin" && test -x "$go_bin" || fail "set COVALENT_GO_BIN to exact Go 1.26.7"
+test -n "$go_bin" && test -x "$go_bin" || fail "set COVALENT_GO_BIN to exact Go 1.26.10"
 go_bin=$(CDPATH='' cd -- "$(dirname -- "$go_bin")" && pwd -P)/$(basename -- "$go_bin")
-test "$($go_bin version)" = "go version go1.26.7 darwin/arm64" || fail "macOS sync engine requires exact Go 1.26.7 darwin/arm64"
-go_root=$($go_bin env GOROOT)
+test "$("$go_bin" version)" = "go version go1.26.10 darwin/arm64" || fail "macOS sync engine requires exact Go 1.26.10 darwin/arm64"
+go_root=$("$go_bin" env GOROOT)
 test -d "$go_root" && test ! -L "$go_root" || fail "Go root is unsafe"
 
 export GOPATH="$private/gopath"
@@ -109,7 +109,7 @@ test "$worker_bytes" -ge "$minimum_worker_bytes" && test "$worker_bytes" -le "$m
 graph_bytes=$(size_of "$graph")
 test "$graph_bytes" -gt 0 && test "$graph_bytes" -le "$maximum_graph_bytes" || fail "target dependency graph is outside its byte bound"
 "$go_bin" version -m "$worker" > "$output_root/go-version.txt"
-grep -Fq 'go1.26.7' "$output_root/go-version.txt" || fail "worker Go version differs"
+grep -Fq 'go1.26.10' "$output_root/go-version.txt" || fail "worker Go version differs"
 grep -Eq '^[[:space:]]*path[[:space:]]+github\.com/thekozugroup/Covalent/packaging/rclone$' "$output_root/go-version.txt" || fail "worker module path differs"
 "$worker" version | grep -Fq "rclone $engine_version" || fail "built worker reports a different version"
 
@@ -133,7 +133,7 @@ inventory_sha=$(sha256 "$inventory")
 notice_sha=$(sha256 "$combined")
 notice_manifest_sha=$(sha256 "$notice_manifest")
 cat > "$output_root/source-build.json" <<EOF
-{"schema":1,"engine":{"name":"rclone","version":"$engine_version","upstreamCommit":"$engine_commit","upstreamSourceState":"unmodified","wrapperSourceTree":"$source_tree"},"target":{"goos":"darwin","goarch":"arm64","cgoEnabled":false,"buildTags":[]},"toolchain":{"goVersion":"go1.26.7"},"evidence":{"licenseInventorySha256":"$inventory_sha","licenseInventoryBytes":$inventory_bytes,"noticeManifestSha256":"$notice_manifest_sha","combinedNoticeSha256":"$notice_sha","combinedNoticeBytes":$combined_bytes},"unsignedExecutable":{"sha256":"$worker_sha","bytes":$worker_bytes}}
+{"schema":1,"engine":{"name":"rclone","version":"$engine_version","upstreamCommit":"$engine_commit","upstreamSourceState":"unmodified","wrapperSourceTree":"$source_tree"},"target":{"goos":"darwin","goarch":"arm64","cgoEnabled":false,"buildTags":[]},"toolchain":{"goVersion":"go1.26.10"},"evidence":{"licenseInventorySha256":"$inventory_sha","licenseInventoryBytes":$inventory_bytes,"noticeManifestSha256":"$notice_manifest_sha","combinedNoticeSha256":"$notice_sha","combinedNoticeBytes":$combined_bytes},"unsignedExecutable":{"sha256":"$worker_sha","bytes":$worker_bytes}}
 EOF
 chmod 0555 "$worker"
 find "$notices" -type d -exec chmod 0555 {} +

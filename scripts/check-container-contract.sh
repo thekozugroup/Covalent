@@ -48,7 +48,7 @@ require_text "FROM alpine:3.23@$runtime_digest" "$dockerfile"
 # v2.11.4 runtime. The full delta is recorded in the security analysis.
 # The toolchain, snapshot, and module bumps are pinned by digest or exact
 # version, and go.sum must exist or -mod=readonly has nothing to verify.
-require_text "FROM golang:1.26.7-alpine3.23@sha256:" "$dockerfile"
+require_text "FROM golang:1.26.10-alpine3.23@sha256:" "$dockerfile"
 require_text "GOTOOLCHAIN=local" "$dockerfile"
 require_text "GOFLAGS=-mod=readonly" "$dockerfile"
 require_text "github.com/caddyserver/caddy/v2 v2.11.5-0.20260711231708-b2693fb63a30" "$caddy_gomod"
@@ -71,17 +71,28 @@ if grep -Fq 'github.com/caddyserver/caddy/v2/modules/standard' "$caddy_main"; th
   echo "configured Caddy build unexpectedly imports the full standard module set" >&2
   exit 1
 fi
-# Eight stdlib advisories are fixed in go1.26.6; GOTOOLCHAIN=local makes this
+# Current stdlib advisories require go1.26.10; GOTOOLCHAIN=local makes this
 # directive the floor the compiler itself enforces. Lowering it re-opens them.
-require_text "go 1.26.7" "$caddy_gomod"
+require_text "go 1.26.10" "$caddy_gomod"
 require_text "google.golang.org/grpc v1.83.2 // indirect" "$caddy_gomod"
 require_text '$2 == "google.golang.org/grpc" && $3 == "v1.83.2"' "$dockerfile"
 require_text "grpc drifted from reviewed v1.83.2" "$dockerfile"
-require_text "golang.org/x/text v0.41.0" "$caddy_gomod"
-require_text "go.opentelemetry.io/otel v1.44.0" "$caddy_gomod"
+require_text "golang.org/x/text v0.42.0" "$caddy_gomod"
+require_text "go.opentelemetry.io/otel v1.45.0" "$caddy_gomod"
 require_text "github.com/google/cel-go v0.30.0" "$caddy_gomod"
-require_text "golang.org/x/crypto v0.56.0" "$caddy_gomod"
-require_text "x/crypto drifted from reviewed v0.56.0" "$dockerfile"
+require_text "golang.org/x/crypto v0.57.0" "$caddy_gomod"
+require_text "x/crypto drifted from reviewed v0.57.0" "$dockerfile"
+require_text '"go1.26.10"' "$dockerfile"
+require_text "golang.org/x/net v0.60.0" "$caddy_gomod"
+require_text "x/net drifted from reviewed v0.60.0" "$dockerfile"
+require_text "go.opentelemetry.io/otel/sdk/log v0.21.0" "$caddy_gomod"
+require_text "OTel log SDK drifted from reviewed v0.21.0" "$dockerfile"
+require_text "go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc v0.21.0" "$caddy_gomod"
+require_text "OTel log gRPC exporter drifted from reviewed v0.21.0" "$dockerfile"
+require_text "go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.45.0" "$caddy_gomod"
+require_text "go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.45.0" "$caddy_gomod"
+require_text "go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.45.0" "$caddy_gomod"
+require_text "OTel trace exporter drifted from reviewed v1.45.0" "$dockerfile"
 require_text "github.com/klauspost/compress v1.18.7" "$caddy_gomod"
 require_text "cel-go drifted from reviewed v0.30.0" "$dockerfile"
 require_text "klauspost/compress drifted from reviewed v1.18.7" "$dockerfile"

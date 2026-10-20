@@ -6,6 +6,45 @@ sees in `packaging/docker/Dockerfile`, and what is left to decide.
 Current CI scans the immutable local image ID separately on native amd64 and
 arm64 runners. Historical measurements below retain their original scope.
 
+## 2026-10-20 remediation in progress
+
+The October database refresh rejects the previous Go 1.26.7 workers and
+`golang.org/x/net` v0.58.0 in Caddy. The maintained source now selects exact
+Go 1.26.10, x/net v0.60.0, x/crypto v0.57.0 and OpenTelemetry v1.45.0, with
+the log SDK and all log exporters aligned at v0.21.0. The trace exporters
+also select v1.45.0. These address the current standard-library/HTTP2 findings,
+[log SDK advisory](https://github.com/open-telemetry/opentelemetry-go/security/advisories/GHSA-hjf4-fphr-2h65)
+and [exporter logging advisory](https://github.com/open-telemetry/opentelemetry-go/security/advisories/GHSA-8wmf-6v46-5gfg).
+[Go's release history](https://go.dev/doc/devel/release#go1.26.10) records the
+October 19 certificate-verification fix included in 1.26.10.
+
+The Go builder is pinned to the verified official multi-platform index
+`sha256:a07f231c19b03e6106cf442f02a5bcf262147e744d15b7b5e4b6d81d420c70a0`.
+Its CA bundle is 20260909-r0, 181,724 bytes, SHA-256
+`028fca5150ee1915c4474489985d55c54fceaa680c754cc8d1301734f01b2232`.
+Both architecture manifests/layers and the complete new Alpine recipe tree
+were independently verified before updating source and expected-notice pins.
+These pins do not prove a rebuilt final runtime. The final image's installed
+database, notices, source, payload, functionality and scan must still pass the
+existing independent gates on both native CI runners.
+
+The final locally rebuilt Caddy ELF pair passes its strict distribution
+verifier and has zero findings in a binary-only Grype 0.117.0 scan, database
+v6.1.10 built 2026-10-20T06:29:49Z. Arm64 was compiled natively in Linux;
+amd64 was cross-compiled. This result excludes Alpine packages and the other
+runtime executables and therefore is not a complete-image scan result.
+
+The same refresh also exposed RUSTSEC-2026-0382 and RUSTSEC-2026-0383 in the
+shared TLS verifier/root bundle. The lockfile now selects rustls-webpki
+0.103.16 and webpki-root-certs 1.0.10; current cargo-deny advisory, ban, license
+and source checks pass without exceptions.
+
+CI run 39481535802 separately exposed an amd64 timeout in optional source
+deletion propagation after its first eight folder checks passed. Its arm64
+folder journey passed. Keep that failure open for investigation; deletion
+remains disabled for appliance links. The historical BusyBox scanner rows
+below remain visible. No scan ignore or release approval is added here.
+
 ## Where it stands
 
 | | high/critical |

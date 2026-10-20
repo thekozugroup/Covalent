@@ -16,11 +16,11 @@ project_license="$repo_root/LICENSE"
 
 engine_version=v1.75.1
 engine_commit=687d264b689b8c49a67e2e52a8a5e0caa01c04ce
-expected_go='go version go1.26.7 '
+expected_go='go version go1.26.10 '
 expected_ndk=27.1.12297006
 guardian_source_sha=c50b5cf10a287c4c061b7891978fd2681b5c96910eb2c69c922beae349140579
-expected_gomod_sha=1708132fb012d15c89e7863a79abea50c66895e78d8b85037275db213c1d103f
-expected_gosum_sha=801fcfc81dd2f84417d5410c04aa4fd5936387246372eaf8920c2b0492ffa89b
+expected_gomod_sha=eaa7a6edf41ca097fc52097c9ff7abf71a3b1e28d8b553372d54999711bf6f6d
+expected_gosum_sha=57f578898529d6604fcb0484cffa6f09d74e082151cd146e841b630f55d03637
 rclone_license_sha=9266eae9c6a441de0f6847f19ac8f09b280d55612b079eca03b3d49b822c1a71
 source_date_epoch=1785792965
 maximum_notice_bytes=$((8 * 1024 * 1024))
@@ -74,7 +74,7 @@ test "$(sha256 "$build_source/go.mod")" = "$expected_gomod_sha" && \
   fail "exported restricted rclone module differs"
 
 go_version=$(go version)
-case "$go_version" in "$expected_go"*) ;; *) echo "Expected Go 1.26.7, found: $go_version" >&2; exit 1 ;; esac
+case "$go_version" in "$expected_go"*) ;; *) echo "Expected Go 1.26.10, found: $go_version" >&2; exit 1 ;; esac
 ndk_dir=${COVALENT_ANDROID_NDK_HOME:-${ANDROID_NDK_HOME:-}}
 test -n "$ndk_dir" || fail "Set COVALENT_ANDROID_NDK_HOME to Android NDK $expected_ndk"
 ndk_dir=$(CDPATH='' cd -- "$ndk_dir" && pwd -P)
@@ -343,7 +343,7 @@ combined $combined_sha $combined_size sync-engine-notices/THIRD-PARTY-NOTICES.tx
 manifest $manifest_sha $manifest_size sync-engine-notices/manifest.json
 EOF
 cat > "$reports_root/source-build.json" <<EOF
-{"schema":1,"engine":{"name":"rclone","version":"$engine_version","upstreamCommit":"$engine_commit","upstreamSourceState":"unmodified","wrapperSourceTree":"$source_tree"},"target":{"goos":"android","cgoEnabled":true,"api":26,"buildMode":"pie","maximumPageSize":16384,"buildTags":[]},"toolchain":{"goVersion":"go1.26.7","ndkVersion":"$expected_ndk"}}
+{"schema":1,"engine":{"name":"rclone","version":"$engine_version","upstreamCommit":"$engine_commit","upstreamSourceState":"unmodified","wrapperSourceTree":"$source_tree"},"target":{"goos":"android","cgoEnabled":true,"api":26,"buildMode":"pie","maximumPageSize":16384,"buildTags":[]},"toolchain":{"goVersion":"go1.26.10","ndkVersion":"$expected_ndk"}}
 EOF
 test "$(sha256 "$build_source/go.mod")" = "$expected_gomod_sha" && test "$(sha256 "$build_source/go.sum")" = "$expected_gosum_sha" || fail "rclone module files changed during Android build"
 test "$(git -C "$repo_root" rev-parse HEAD)" = "$source_commit" || fail "repository commit changed during Android build"

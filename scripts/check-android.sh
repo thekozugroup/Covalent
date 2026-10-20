@@ -205,9 +205,9 @@ if [ "$mode" = verify-prebuilt ]; then
   fi
   echo "  verified: debug lint report records no error-severity issues"
 elif [ -n "$android_java" ]; then
-  env JAVA_HOME="$android_java" ANDROID_HOME="$android_sdk" ANDROID_SDK_ROOT="$android_sdk" COVALENT_ANDROID_NDK_HOME="$android_ndk" "$repo_root/apps/android/gradlew" -p "$repo_root/apps/android" --no-daemon -PcovalentBuildSyncEngine=true test lint assembleDebug assembleRelease assembleDebugAndroidTest generateAndroidSbom :companion:generateReleaseChecksums
+  env JAVA_HOME="$android_java" ANDROID_HOME="$android_sdk" ANDROID_SDK_ROOT="$android_sdk" COVALENT_ANDROID_NDK_HOME="$android_ndk" "$repo_root/apps/android/gradlew" -p "$repo_root/apps/android" --no-daemon -PcovalentBuildSyncEngine=true test lint lintRelease assembleDebug assembleRelease assembleDebugAndroidTest generateAndroidSbom :companion:generateReleaseChecksums
 else
-  env ANDROID_HOME="$android_sdk" ANDROID_SDK_ROOT="$android_sdk" COVALENT_ANDROID_NDK_HOME="$android_ndk" "$repo_root/apps/android/gradlew" -p "$repo_root/apps/android" --no-daemon -PcovalentBuildSyncEngine=true test lint assembleDebug assembleRelease assembleDebugAndroidTest generateAndroidSbom :companion:generateReleaseChecksums
+  env ANDROID_HOME="$android_sdk" ANDROID_SDK_ROOT="$android_sdk" COVALENT_ANDROID_NDK_HOME="$android_ndk" "$repo_root/apps/android/gradlew" -p "$repo_root/apps/android" --no-daemon -PcovalentBuildSyncEngine=true test lint lintRelease assembleDebug assembleRelease assembleDebugAndroidTest generateAndroidSbom :companion:generateReleaseChecksums
 fi
 
 # Account for every native object in both APK variants. Covalent-built objects

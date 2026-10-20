@@ -9,7 +9,7 @@ root=$(mktemp -d "${TMPDIR:-/tmp}/covalent-notice-reader.XXXXXX")
 cleanup() { rm -rf "$root"; }
 trap cleanup EXIT HUP INT TERM
 mkdir -p "$root/fixture/notices"
-printf 'Go go1.26.7 / LICENSE\nfixture notice\n' > "$root/fixture/notices/THIRD-PARTY-NOTICES.txt"
+printf 'Go go1.26.10 / LICENSE\nfixture notice\n' > "$root/fixture/notices/THIRD-PARTY-NOTICES.txt"
 printf '{}\n' > "$root/fixture/notices/manifest.json"
 
 write_index() {
@@ -35,7 +35,7 @@ struct Harness {
         let shouldSucceed = CommandLine.arguments[2] == "success"
         do {
             let value = try MacOpenSourceNotices.load(from: root)
-            guard shouldSucceed, value.contains("Go go1.26.7 / LICENSE") else { exit(1) }
+            guard shouldSucceed, value.contains("Go go1.26.10 / LICENSE") else { exit(1) }
         } catch {
             guard !shouldSucceed else { exit(1) }
         }
@@ -47,7 +47,7 @@ xcrun swiftc -target arm64-apple-macos15.0 "$source_file" "$root/Harness.swift" 
 
 printf 'trailing' >> "$root/fixture/notices/THIRD-PARTY-NOTICES.txt"
 "$root/test-notices" "$root/fixture" failure
-printf 'Go go1.26.7 / LICENSE\nfixture notice\n' > "$root/fixture/notices/THIRD-PARTY-NOTICES.txt"
+printf 'Go go1.26.10 / LICENSE\nfixture notice\n' > "$root/fixture/notices/THIRD-PARTY-NOTICES.txt"
 write_index
 mv "$root/fixture/notices/manifest.json" "$root/manifest-real.json"
 ln -s "$root/manifest-real.json" "$root/fixture/notices/manifest.json"

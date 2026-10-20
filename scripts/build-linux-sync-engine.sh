@@ -4,8 +4,8 @@ set -eu
 
 ENGINE_VERSION=v1.75.1
 ENGINE_COMMIT=687d264b689b8c49a67e2e52a8a5e0caa01c04ce
-GO_MOD_SHA256=1708132fb012d15c89e7863a79abea50c66895e78d8b85037275db213c1d103f
-GO_SUM_SHA256=801fcfc81dd2f84417d5410c04aa4fd5936387246372eaf8920c2b0492ffa89b
+GO_MOD_SHA256=eaa7a6edf41ca097fc52097c9ff7abf71a3b1e28d8b553372d54999711bf6f6d
+GO_SUM_SHA256=57f578898529d6604fcb0484cffa6f09d74e082151cd146e841b630f55d03637
 RCLONE_LICENSE_SHA256=9266eae9c6a441de0f6847f19ac8f09b280d55612b079eca03b3d49b822c1a71
 GUARDIAN_SOURCE_SHA256=c50b5cf10a287c4c061b7891978fd2681b5c96910eb2c69c922beae349140579
 MIN_WORKER_BYTES=$((8 * 1024 * 1024))
@@ -44,8 +44,8 @@ build_worker() {
     echo "Worker must be built in its exact target-platform container" >&2
     exit 69
   }
-  test "$(go version)" = "go version go1.26.7 linux/$target_arch" || {
-    echo "Linux engine build requires exact Go 1.26.7 for $target_arch" >&2
+  test "$(go version)" = "go version go1.26.10 linux/$target_arch" || {
+    echo "Linux engine build requires exact Go 1.26.10 for $target_arch" >&2
     exit 69
   }
   test -f "$source_dir/main.go" && test -f "$source_dir/go.mod" && \
@@ -76,7 +76,7 @@ build_worker() {
   test "$worker_size" -ge "$MIN_WORKER_BYTES" && test "$worker_size" -le "$MAX_WORKER_BYTES" ||
     fail "Linux engine worker size is outside its reviewed bound"
   go version -m "$output" > "$output_root/go-version.txt"
-  grep -Fq 'go1.26.7' "$output_root/go-version.txt"
+  grep -Fq 'go1.26.10' "$output_root/go-version.txt"
   grep -Eq '^[[:space:]]*path[[:space:]]+github\.com/thekozugroup/Covalent/packaging/rclone$' \
     "$output_root/go-version.txt"
   graph_size=$(size_of "$output_root/go-target-deps.ndjson")
@@ -177,7 +177,7 @@ Covalent maintained Linux folder engine
 rclone version: $ENGINE_VERSION
 Upstream commit: $ENGINE_COMMIT
 Restricted module: github.com/thekozugroup/Covalent/packaging/rclone
-Build toolchain: Go 1.26.7, CGO_ENABLED=0
+Build toolchain: Go 1.26.10, CGO_ENABLED=0
 Guardian source SHA-256: $GUARDIAN_SOURCE_SHA256
 Target architecture: $runtime_arch
 Upstream license: MIT
@@ -191,7 +191,7 @@ Notice classification and release approval: still required
 EOF
   chmod 0444 "$output_root/share/PROVENANCE.txt"
   cat > "$output_root/share/manifest.json" <<EOF
-{"schema":1,"engine":{"name":"rclone","version":"$ENGINE_VERSION","commit":"$ENGINE_COMMIT","sourceState":"upstream-unmodified","goVersion":"go1.26.7"},"guardian":{"sourceSha256":"$GUARDIAN_SOURCE_SHA256"},"notices":{"licenseSha256":"$RCLONE_LICENSE_SHA256","targetManifestSha256":"$notice_manifest_sha","combinedSha256":"$combined_notice_sha","combinedBytes":$combined_notice_size,"thirdPartyStatus":"target-texts-collected-review-required"},"targetEvidence":{"goListSha256":"$graph_sha","goListBytes":$graph_size,"goVersionSha256":"$go_version_sha","goVersionBytes":$go_version_size,"licenseInventorySha256":"$inventory_sha","licenseInventoryBytes":$inventory_size},"architecture":"$runtime_arch","executables":{"guardian":{"sha256":"$guardian_sha","bytes":$guardian_size},"worker":{"sha256":"$worker_sha","bytes":$worker_size}}}
+{"schema":1,"engine":{"name":"rclone","version":"$ENGINE_VERSION","commit":"$ENGINE_COMMIT","sourceState":"upstream-unmodified","goVersion":"go1.26.10"},"guardian":{"sourceSha256":"$GUARDIAN_SOURCE_SHA256"},"notices":{"licenseSha256":"$RCLONE_LICENSE_SHA256","targetManifestSha256":"$notice_manifest_sha","combinedSha256":"$combined_notice_sha","combinedBytes":$combined_notice_size,"thirdPartyStatus":"target-texts-collected-review-required"},"targetEvidence":{"goListSha256":"$graph_sha","goListBytes":$graph_size,"goVersionSha256":"$go_version_sha","goVersionBytes":$go_version_size,"licenseInventorySha256":"$inventory_sha","licenseInventoryBytes":$inventory_size},"architecture":"$runtime_arch","executables":{"guardian":{"sha256":"$guardian_sha","bytes":$guardian_size},"worker":{"sha256":"$worker_sha","bytes":$worker_size}}}
 EOF
   chmod 0444 "$output_root/share/manifest.json"
   test "$(size_of "$output_root/share/manifest.json")" -le 8192

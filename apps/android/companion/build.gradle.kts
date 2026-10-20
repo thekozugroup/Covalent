@@ -85,7 +85,7 @@ apply(from = rootProject.file("gradle/android-inventory.gradle"))
 val verifyInterlinkRelease = tasks.register<Exec>("verifyInterlinkRelease") {
     group = "verification"
     description = "Verifies the dedicated app identity, alignment, native bytes and its own dependency evidence."
-    dependsOn("assembleDebug", "assembleRelease", "bundleRelease", "generateAndroidSbom")
+    dependsOn("assembleDebug", "assembleRelease", "bundleRelease", "generateAndroidSbom", "lintDebug", "lintRelease")
     workingDir(rootProject.projectDir.resolve("../.."))
     commandLine("sh", "scripts/check-interlink-package.sh")
 }

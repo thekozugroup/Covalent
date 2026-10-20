@@ -3,7 +3,7 @@ Covalent maintained folder engine
 Engine: rclone v1.75.1
 Upstream source commit: 687d264b689b8c49a67e2e52a8a5e0caa01c04ce
 Restricted wrapper: github.com/thekozugroup/Covalent/packaging/rclone
-Build toolchain: Go 1.26.7, darwin/arm64, CGO disabled
+Build toolchain: Go 1.26.10, darwin/arm64, CGO disabled
 Build tags: covalent
 License: MIT
 Upstream source: https://github.com/rclone/rclone/tree/687d264b689b8c49a67e2e52a8a5e0caa01c04ce

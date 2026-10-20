@@ -1,4 +1,4 @@
-FROM golang:1.26.7-alpine3.23@sha256:b17af760035fc2f338eed92d448a6c67f2d45438844fc6c60678fa5f99e44b57 AS sync-engine-worker
+FROM golang:1.26.10-alpine3.23@sha256:a07f231c19b03e6106cf442f02a5bcf262147e744d15b7b5e4b6d81d420c70a0 AS sync-engine-worker
 ARG TARGETARCH
 ENV CGO_ENABLED=0 \
     GOTOOLCHAIN=local \
@@ -68,10 +68,10 @@ RUN build-linux-sync-engine package \
 #   - the Caddy source version and the entire module graph by
 #     packaging/docker/caddy/go.mod + go.sum, built with -mod=readonly so any
 #     drift from the committed checksums is a build failure, not a silent swap;
-#   - GOTOOLCHAIN=local, so the `go 1.26.7` directive in that go.mod is enforced
+#   - GOTOOLCHAIN=local, so the `go 1.26.10` directive in that go.mod is enforced
 #     by the image's own compiler instead of being papered over by an automatic
 #     toolchain download from the network.
-FROM golang:1.26.7-alpine3.23@sha256:b17af760035fc2f338eed92d448a6c67f2d45438844fc6c60678fa5f99e44b57 AS caddy
+FROM golang:1.26.10-alpine3.23@sha256:a07f231c19b03e6106cf442f02a5bcf262147e744d15b7b5e4b6d81d420c70a0 AS caddy
 ENV CGO_ENABLED=0 \
     GOTOOLCHAIN=local \
     GOFLAGS=-mod=readonly
@@ -89,20 +89,30 @@ RUN go build -buildvcs=false -trimpath -ldflags "-s -w" -o /caddy.unprivileged .
 # careless `go mod tidy` fails the build here rather than reaching a scanner.
 RUN set -eu; \
     go version -m /caddy.unprivileged > /tmp/buildinfo; \
-    grep -q 'go1\.26\.[6-9]' /tmp/buildinfo || grep -q 'go1\.2[7-9]\.' /tmp/buildinfo \
-      || { echo 'caddy was linked with a toolchain older than go1.26.6' >&2; exit 1; }; \
+    awk 'NR == 1 && $NF == "go1.26.10" { found = 1 } END { exit !found }' /tmp/buildinfo \
+      || { echo 'caddy toolchain drifted from reviewed go1.26.10' >&2; exit 1; }; \
     grep -q 'github.com/caddyserver/caddy/v2[[:space:]]\+v2\.11\.5-0\.20260711231708-b2693fb63a30' /tmp/buildinfo \
       || { echo 'caddy source snapshot drifted from v2.11.5-0.20260711231708-b2693fb63a30' >&2; exit 1; }; \
     awk '$1 == "dep" && $2 == "google.golang.org/grpc" && $3 == "v1.83.2" { found = 1 } END { exit !found }' /tmp/buildinfo \
       || { echo 'grpc drifted from reviewed v1.83.2 (GHSA-hrxh-6v49-42gf, GHSA-vp52-pcj8-j9qc, GHSA-2v4p-qf9q-27wj)' >&2; exit 1; }; \
-    grep -q 'golang.org/x/text[[:space:]]\+v0\.\(39\|[4-9][0-9]\)\.' /tmp/buildinfo \
-      || { echo 'x/text regressed below v0.39.0 (GO-2026-5970)' >&2; exit 1; }; \
-    grep -q 'go.opentelemetry.io/otel[[:space:]]\+v1\.\(4[4-9]\|[5-9][0-9]\)\.' /tmp/buildinfo \
-      || { echo 'OpenTelemetry regressed below v1.44.0 (GO-2026-5158)' >&2; exit 1; }; \
+    grep -q 'golang.org/x/text[[:space:]]\+v0\.42\.0' /tmp/buildinfo \
+      || { echo 'x/text drifted from reviewed v0.42.0 (GO-2026-5970)' >&2; exit 1; }; \
+    grep -q 'go.opentelemetry.io/otel[[:space:]]\+v1\.45\.0' /tmp/buildinfo \
+      || { echo 'OpenTelemetry drifted from reviewed v1.45.0 (GO-2026-5158)' >&2; exit 1; }; \
     grep -q 'github.com/google/cel-go[[:space:]]\+v0\.30\.0' /tmp/buildinfo \
       || { echo 'cel-go drifted from reviewed v0.30.0 (GO-2026-6094)' >&2; exit 1; }; \
-    grep -q 'golang.org/x/crypto[[:space:]]\+v0\.56\.0' /tmp/buildinfo \
-      || { echo 'x/crypto drifted from reviewed v0.56.0 (GO-2026-6354/6355)' >&2; exit 1; }; \
+    grep -q 'golang.org/x/crypto[[:space:]]\+v0\.57\.0' /tmp/buildinfo \
+      || { echo 'x/crypto drifted from reviewed v0.57.0 (GO-2026-6354/6355)' >&2; exit 1; }; \
+    awk '$1 == "dep" && $2 == "golang.org/x/net" && $3 == "v0.60.0" { found = 1 } END { exit !found }' /tmp/buildinfo \
+      || { echo 'x/net drifted from reviewed v0.60.0 (GO-2026-6612)' >&2; exit 1; }; \
+    awk '$1 == "dep" && $2 == "go.opentelemetry.io/otel/sdk/log" && $3 == "v0.21.0" { found = 1 } END { exit !found }' /tmp/buildinfo \
+      || { echo 'OTel log SDK drifted from reviewed v0.21.0 (GHSA-hjf4-fphr-2h65)' >&2; exit 1; }; \
+    awk '$1 == "dep" && $2 == "go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc" && $3 == "v0.21.0" { found = 1 } END { exit !found }' /tmp/buildinfo \
+      || { echo 'OTel log gRPC exporter drifted from reviewed v0.21.0 (GHSA-hjf4-fphr-2h65)' >&2; exit 1; }; \
+    for otel_module in go.opentelemetry.io/otel/exporters/otlp/otlptrace go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp; do \
+      awk -v module="$otel_module" '$1 == "dep" && $2 == module && $3 == "v1.45.0" { found = 1 } END { exit !found }' /tmp/buildinfo \
+        || { echo 'OTel trace exporter drifted from reviewed v1.45.0 (GHSA-8wmf-6v46-5gfg)' >&2; exit 1; }; \
+    done; \
     grep -q 'github.com/klauspost/compress[[:space:]]\+v1\.18\.7' /tmp/buildinfo \
       || { echo 'klauspost/compress drifted from reviewed v1.18.7 (GO-2026-5841)' >&2; exit 1; }; \
     /caddy.unprivileged version
@@ -204,7 +214,7 @@ FROM alpine:3.23@sha256:fd791d74b68913cbb027c6546007b3f0d3bc45125f797758156952bc
 # apk-tools and BusyBox ssl_client require them even though Covalent and Caddy
 # are statically linked and do not load OpenSSL. BusyBox ssl_client retains both.
 RUN apk add --no-cache --upgrade \
-      ca-certificates-bundle=20260611-r0 \
+      ca-certificates-bundle=20260909-r0 \
       libcrypto3=3.5.9-r0 \
       libssl3=3.5.9-r0 \
     && apk info -e 'libcrypto3=3.5.9-r0' \

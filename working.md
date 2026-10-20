@@ -56,6 +56,46 @@ v0.60.0; those changes and full rescan remain open. No scan was suppressed and
 no release was published. Evidence: CI run `39478832334`, private
 `artifacts/interlink-qa/hosted-go-findings.json`.
 
+October 20 dependency remediation: source milestone `33ad205` updates the
+restricted rclone and Caddy graphs, rustls-webpki to 0.103.16 and
+webpki-root-certs to 1.0.10. The full locked all-feature Rust workspace suite
+passes, as do current cargo-deny advisories/bans/licenses/sources without
+exceptions. All maintained builders now require exact Go 1.26.10. Caddy pins
+x/net v0.60.0, OpenTelemetry v1.45.0, aligned log modules v0.21.0 and patched
+trace exporters v1.45.0. The compiler caught the incompatible mixed log APIs
+before they could reach a candidate.
+
+Both Linux Caddy binaries rebuilt in an isolated arm64 Linux container
+(amd64 cross-compiled), with target-specific inventories and corresponding
+source verified against strict new byte/count pins. Their final Grype 0.117.0
+binary-only scan reports zero findings using database v6.1.10, built
+2026-10-20T06:29:49Z. This does not cover the complete container. The Go image
+and new 20260909-r0 CA provenance were verified from official registry
+manifests/layers; complete source/recipe and expected-notice pins were
+regenerated without fabricating an installed-runtime receipt. Complete native
+CI image checks/scans remain open, as does the newly observed amd64 optional
+source-deletion timeout in run 39481535802. Appliance links keep deletion off.
+
+The Mac worker rebuilt from the committed rclone tree with SHA-256
+`07cb75e9292c3c3a08322f4e34a6b1e6f91599b43ae917ae64f6d13bfb864922`.
+All six notice/package pins were regenerated from measured output. The build
+also exposed and fixed unquoted executable expansion when the toolchain path
+contains spaces. Android rebuild and installed transfer verification with
+these Go/certificate changes remain required. Evidence is private under
+`artifacts/go-security/`; no release or physical update has occurred.
+
+The real Mac packaging smoke passes, including two independently rebuilt,
+byte-identical signed bundles, unsafe-output refusal and source cleanup. The
+147 sync-engine host checks and all-feature workspace clippy also pass. The
+rebuilt Mac worker has zero findings in the same current Grype database.
+
+The clean hosted Android foundation run exposed a missing companion release
+lint report: the unqualified `lint` task had not generated it, while an older
+local report masked the omission. The dedicated verification task now depends
+on both lint variants, full Android checks explicitly request release lint,
+and candidate generation checks the lint results as well as prebuilt mode.
+The next exact-source full check must regenerate removed companion reports.
+
 Release hardening: both Android apps now use one reviewed, fail-closed Maven
 inventory generator. Covalent's output matches its previous JSON exactly;
 Interlink records its own 80 dependencies, including Material 3 Expressive.

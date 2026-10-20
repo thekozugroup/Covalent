@@ -37,8 +37,7 @@ if not apk or apk != bundle:
     raise SystemExit('Interlink AAB native bytes differ from the verified APK')
 print(f'Interlink APK/AAB native byte identity: {len(apk)} objects')
 PY
-if [ "$mode" = --verify-prebuilt ]; then
-  python3 - "$build" <<'PY'
+python3 - "$build" <<'PY'
 from pathlib import Path
 import sys, xml.etree.ElementTree as ET
 for variant in ('debug', 'release'):
@@ -47,7 +46,6 @@ for variant in ('debug', 'release'):
         raise SystemExit(f'Interlink {variant} lint is missing or failed')
 print('Interlink debug/release lint reports: no errors')
 PY
-fi
 reports="$repo_root/apps/android/app/build/generated"
 summary="$build/reports/interlink/android-native-distribution-summary.json"
 set -- --debug-package "$build/outputs/apk/debug/companion-debug.apk" --release-package "$unsigned" \
