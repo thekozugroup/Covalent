@@ -68,8 +68,12 @@ before they could reach a candidate.
 Both Linux Caddy binaries rebuilt in an isolated arm64 Linux container
 (amd64 cross-compiled), with target-specific inventories and corresponding
 source verified against strict new byte/count pins. Their final Grype 0.117.0
-binary-only scan reports zero findings using database v6.1.10, built
-2026-10-20T06:29:49Z. This does not cover the complete container. The Go image
+directory-based scan was superseded by explicit file SBOM scans: each ELF
+inventories 149 packages and reports one unknown-severity `GO-2026-5932`
+module finding, with no critical/high findings, using database v6.1.10 built
+2026-10-20T06:29:49Z. The affected OpenPGP package is absent from both exact
+target graphs (949/951 packages). No scanner finding is suppressed. This does
+not cover the complete container. The Go image
 and new 20260909-r0 CA provenance were verified from official registry
 manifests/layers; complete source/recipe and expected-notice pins were
 regenerated without fabricating an installed-runtime receipt. Complete native
@@ -80,21 +84,38 @@ The Mac worker rebuilt from the committed rclone tree with SHA-256
 `07cb75e9292c3c3a08322f4e34a6b1e6f91599b43ae917ae64f6d13bfb864922`.
 All six notice/package pins were regenerated from measured output. The build
 also exposed and fixed unquoted executable expansion when the toolchain path
-contains spaces. Android rebuild and installed transfer verification with
-these Go/certificate changes remain required. Evidence is private under
+contains spaces. The Android rebuild and installed transfer result are recorded
+below. Evidence is private under
 `artifacts/go-security/`; no release or physical update has occurred.
 
 The real Mac packaging smoke passes, including two independently rebuilt,
 byte-identical signed bundles, unsafe-output refusal and source cleanup. The
 147 sync-engine host checks and all-feature workspace clippy also pass. The
-rebuilt Mac worker has zero findings in the same current Grype database.
+rebuilt Mac worker's explicit file SBOM inventories 54 packages and reports
+the same single unknown-severity OpenPGP module finding, absent from its
+478-package target graph. The older directory-based zero is superseded.
 
 The clean hosted Android foundation run exposed a missing companion release
 lint report: the unqualified `lint` task had not generated it, while an older
 local report masked the omission. The dedicated verification task now depends
 on both lint variants, full Android checks explicitly request release lint,
 and candidate generation checks the lint results as well as prebuilt mode.
-The next exact-source full check must regenerate removed companion reports.
+The exact-source full check at `2f9bc65` regenerated both removed companion
+reports and passed, followed by prebuilt verification. Both lint variants have
+zero errors; all 14 companion release checksums match. The minified QA APK
+`ffd13846601d87ca0ef125727a13c688335ff067b2528017b1bc151c3908343b` installed
+in place with the existing Android Debug signer on the isolated API 36 emulator.
+With the updated native receiver, a new synthetic Pictures file committed in
+55.8 seconds without opening the Activity; pairing, bytes and the source
+original were preserved. This is not a production-signed or hardware release.
+
+Hosted run 39485175979 exposed a separate container foundation failure:
+Alpine no longer supplies the requested 20260909-r0 CA bundle, selecting
+20261020-r0 instead. Correct the runtime/builder CA provenance and corresponding
+source/recipe/notices together; do not loosen version or scan checks. That
+failure also blocks the API 37 fixture. Complete image acceptance remains open.
+The current core runtime is still the verified `2f9bc65`; this documentation
+follow-up does not claim rebuilt candidates from a later documentation commit.
 
 Release hardening: both Android apps now use one reviewed, fail-closed Maven
 inventory generator. Covalent's output matches its previous JSON exactly;
@@ -128,7 +149,7 @@ imports require per-volume approval, keep originals, verify bytes, publish
 atomically and retain receipts after Photos cleanup. The account-free candidate
 image removes another 37.92 MiB of APKs and passes component/filesystem checks.
 
-Open gates: current Go/networking vulnerability fixes and rescans; API 37 and
+Open gates: complete native image rebuild/scans and CA provenance repair; API 37 and
 physical companion checks; production signing and signed publication;
 physical Pi/Solstice reboot and cellular handoff; physical card/PTP/MTP camera
 compatibility; exact-cloud-proof source

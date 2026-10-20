@@ -29,10 +29,24 @@ database, notices, source, payload, functionality and scan must still pass the
 existing independent gates on both native CI runners.
 
 The final locally rebuilt Caddy ELF pair passes its strict distribution
-verifier and has zero findings in a binary-only Grype 0.117.0 scan, database
-v6.1.10 built 2026-10-20T06:29:49Z. Arm64 was compiled natively in Linux;
-amd64 was cross-compiled. This result excludes Alpine packages and the other
-runtime executables and therefore is not a complete-image scan result.
+verifier. Explicit file SBOM scans with Grype 0.117.0, database v6.1.10 built
+2026-10-20T06:29:49Z, inventory 149 packages per ELF and each report one
+unknown-severity `GO-2026-5932` module finding, with no critical/high findings.
+These scans supersede the earlier directory-based zero result; a scan must
+demonstrate that it inventoried the intended binaries before being accepted.
+The [Go advisory](https://vuln.go.dev/ID/GO-2026-5932.json) affects the deprecated
+`golang.org/x/crypto/openpgp` packages. Neither exact Caddy target graph imports
+those packages (949/951 packages inspected). No finding is filtered or ignored.
+Arm64 was compiled natively in Linux; amd64 was cross-compiled. This source-graph
+assessment excludes Alpine and other runtime executables and is not a complete
+image clearance. Explicit Mac/Android rclone scans retain the same unknown row;
+their target graphs also contain no OpenPGP imports.
+
+Hosted run 39485175979 fails before image acceptance because the signed Alpine
+repository now offers `ca-certificates-bundle=20261020-r0`, replacing the pinned
+20260909-r0. The official Go builder still contains the older bundle. Update
+builder/runtime CA identity and corresponding source, recipe and notice pins
+together before rerunning. Keep exact package and vulnerability gates intact.
 
 The same refresh also exposed RUSTSEC-2026-0382 and RUSTSEC-2026-0383 in the
 shared TLS verifier/root bundle. The lockfile now selects rustls-webpki
