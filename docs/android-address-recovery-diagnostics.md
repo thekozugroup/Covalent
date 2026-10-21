@@ -56,8 +56,11 @@ The final route gate and full local foundation suite pass. No additional JVM
 rerun is claimed: the production app source and its previously verified 222-test
 build remain unchanged in this diagnostic milestone.
 
-Hosted source 0564034 CI39635433377 is kept running. The exact historical-client
-gate correction e01dae1 is already published separately; this diagnostic change
-also stays separate until that original run is terminal. Private appliance CI
+During this diagnostic milestone, source 0564034 CI39635433377 was kept running.
+The exact historical-client gate correction e01dae1 and this diagnostic change
+were published separately until that original run became terminal. That run
+subsequently passes all 86 baseline tests and the full SAF journey; permission
+recovery fails with an exactly identified emulator graphics assertion. See
+`artifacts/evidence/api37-0564034/result.json`. Private appliance CI
 at 932eb40 cannot start because GitHub reports an account billing/spending limit.
 Release and physical-device acceptance remain open.

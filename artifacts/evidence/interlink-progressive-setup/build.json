@@ -1,0 +1,18 @@
+{
+  "command": [
+    "./apps/android/gradlew",
+    "-p",
+    "apps/android",
+    "--no-daemon",
+    "-PcovalentBuildSyncEngine=true",
+    ":companion:assembleDebug",
+    ":companion:lintDebug"
+  ],
+  "exitCode": 0,
+  "seconds": 99.76,
+  "sharedUiSha256": "8bd474f640b211c86333001c173e41f89a7b5e369ebfa1cdecf0e27d48ddb141",
+  "sourceUnchanged": true,
+  "companionApkSha256": "d357b315b9105393fedf484789212ed3a2179c3929e6ce17a969942827ea783a",
+  "debugSigner": true,
+  "releaseReady": false
+}

@@ -759,6 +759,7 @@ internal fun FolderSyncScreen(
                 snapshot?.folders?.any { it.folderId == share.folderId && it.accessUnavailable } == true)
         }
         val showSetup = snapshot != null && (creatingLink || activeShares.isEmpty())
+        val showSourceSetup = showSetup && (!photoAppliance || snapshot?.peers?.isNotEmpty() == true)
         if (snapshot != null && activeShares.isNotEmpty()) {
             item {
                 TextButton(onClick = { creatingLink = !creatingLink }, enabled = !busy,
@@ -772,7 +773,7 @@ internal fun FolderSyncScreen(
                 FolderSyncPairing(manager = manager, onPeersChanged = ::refresh, photoAppliance = photoAppliance)
             }
         }
-        if (showSetup || needsFolderChoice) {
+        if (showSourceSetup || needsFolderChoice) {
             item {
                 FolderChooser(
                     selected = selectedFolderLabel,
@@ -784,7 +785,7 @@ internal fun FolderSyncScreen(
             }
         }
         if (snapshot != null) {
-            if (showSetup && snapshot.issue != FolderSyncIssue.FOLDER_ACCESS) {
+            if (showSourceSetup && snapshot.issue != FolderSyncIssue.FOLDER_ACCESS) {
                 item {
                     OutlinedTextField(
                         value = label,
@@ -816,7 +817,7 @@ internal fun FolderSyncScreen(
                     ) { Text(stringResource(R.string.action_retry)) }
                 }
             }
-            if (showSetup && snapshot.issue != FolderSyncIssue.FOLDER_ACCESS) {
+            if (showSourceSetup && snapshot.issue != FolderSyncIssue.FOLDER_ACCESS) {
                 if (snapshot.peers.isEmpty()) {
                     item { Text(stringResource(R.string.folder_sync_pair_first)) }
                 } else {

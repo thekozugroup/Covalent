@@ -1,5 +1,31 @@
 # Interlink companion and appliance robustness — 2026-10-21
 
+The dedicated photo companion now reveals source-folder/link setup only after a
+retained confirmed peer exists. Ordinary Covalent and incoming/repair selection
+rules stay intact. Its exact new debug APK builds and passes lint, then updates
+in place on the owned emulator with the same UID and no data clear. The actual
+unpaired screen shows pairing controls and no premature source/share controls.
+Paired/offline/repair branches are reviewed in source, not exercised by this
+small UI smoke. Package alignment/signature and all eight unchanged native
+libraries verify; route and full foundation validation pass. See
+docs/interlink-progressive-setup.md.
+
+Hosted0564034 CI39635433377 is terminal: five non-device lanes, all86 baseline
+tests (73.139s) and the full SAF journey (426.305s) pass. Shared foundation fails
+at the archived-client gate already corrected in e01dae1; macOS UI is cancelled;
+permission recovery and release gates fail. CodeQL Java/Kotlin passes; Swift is
+cancelled and its policy check skipped. Swift log retrieval returns404, so its
+cancellation cause is not established. The permission report now correlates
+live capture and DropBox with system_server1785/TID2018 signal6, 1983ms after
+Open settings returns0, followed by Android's framework restart8838. Its 62-byte
+abort SHA21459e59cfa55a94251c82e5d7e559328fced4bbbff93a4f139eb68d27d56bee
+exactly matches the existing workflow's known read-color-buffer-DMA assertion.
+The native stack includes mapper.ranchu.so; all three identity digests match.
+Artifact12364873359 verifies SHA548c6b4a9de8420de0fdd3bdda09ae29b99c3cffc67942263e427ae878fa17d5
+and all73 entries. No new fault, renderer change or exemption is used to obtain
+this diagnosis. See artifacts/evidence/api37-0564034/result.json. A supported
+permission-test environment is still required; release/hardware gates stay shut.
+
 The intermittent post-address Android transfer now retains both endpoints'
 bounded state if its existing deadline fails, correlated to the exact original
 request ID. No retry, input replay, deadline change, permission/data reset or

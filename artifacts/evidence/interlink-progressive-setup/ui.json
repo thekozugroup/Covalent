@@ -1,0 +1,37 @@
+{
+  "format": 1,
+  "serial": "emulator-5610",
+  "avd": "Interlink_Address_API37",
+  "syntheticOnly": true,
+  "beforeApkSha256": "c76d5b0e1e7c1386b13d1220addc468cdc24f6eeb01e07fab0291118a24794e9",
+  "beforePackageUid": "package:life.michaelwong.interlink uid:10234",
+  "previousOnboardingReceiptSha256": "1ea7d4b629435a86d38325fd77602c56fab57928529e292de6b45037fee0ec59",
+  "before": {
+    "bootId": "8e6f07a7-a712-48b0-8812-22679d2f12c1",
+    "framework": {
+      "system_server": "610:708",
+      "surfaceflinger": "458:408"
+    }
+  },
+  "phase": "unpaired-progressive-setup-passed",
+  "passed": true,
+  "dataCleared": false,
+  "pairedPeerExpected": false,
+  "physicalDeviceAccepted": false,
+  "releaseReady": false,
+  "afterApkSha256": "d357b315b9105393fedf484789212ed3a2179c3929e6ce17a969942827ea783a",
+  "packageUidUnchanged": true,
+  "unpairedSourceControlsHidden": true,
+  "pairingControlsVisible": true,
+  "after": {
+    "bootId": "8e6f07a7-a712-48b0-8812-22679d2f12c1",
+    "framework": {
+      "system_server": "610:708",
+      "surfaceflinger": "458:408"
+    }
+  },
+  "previousOnboardingReceiptUnchanged": true,
+  "pairedSourceControlsTested": false,
+  "incomingRepairControlsTested": false,
+  "scope": "Build, lint and exact debug APK update; actual unpaired screen only. Paired/offline/repair branches reviewed in source, not exercised here."
+}

@@ -1,0 +1,11 @@
+{
+  "command": [
+    "sh",
+    "scripts/validate-foundation.sh"
+  ],
+  "exitCode": 0,
+  "logSha256": "d816189202ca5279fafef6dd2ce7b4a50937cec7cec4563dc340dcabbbfe9c2a",
+  "logBytes": 4202,
+  "rawLogLocation": "/tmp/covalent-progressive-setup-foundation.log",
+  "rawLogCommitted": false
+}

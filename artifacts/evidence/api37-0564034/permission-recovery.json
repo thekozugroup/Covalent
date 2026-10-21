@@ -1,0 +1,1398 @@
+{
+  "avd": "Covalent_API_37",
+  "serial": "emulator-5570",
+  "phases": [
+    "exact debug APK and native host ready",
+    "revoked permission shows actionable recovery"
+  ],
+  "result": "failed",
+  "harnessSha256": "97d47ee35a45ac9f0294273d94a970abb2f3539c7a59cb09c3aaa9798abef191",
+  "frameworkBefore": {
+    "bootId": "608552cc-6198-4a18-87e4-609746e71660",
+    "system_server": 1785,
+    "surfaceflinger": 1711
+  },
+  "deviceEpochSecondsBefore": 1792602381,
+  "apkSha256": "ada4d5875d17615c3f2d67eab83fddfbc2a33e854f9ffa8056ed40270320be4b",
+  "pageSize": "4096",
+  "lastAction": {
+    "kind": "tap",
+    "target": "Permissions",
+    "sourceUi": {
+      "available": true,
+      "packages": [
+        "com.android.settings"
+      ],
+      "texts": [
+        "Interlink",
+        "Permissions"
+      ],
+      "runtimeAllowVisible": false
+    }
+  },
+  "identitySha256Before": {
+    "no_backup/covalent-node/identity.json": "c9df7ec38693b96b9a91ef72cdd41a6a6e46f80e55d50028ea635f7cfea945ac",
+    "no_backup/covalent-node/tls/identity.json": "948bc1e03b9bc80d439bf9412253acd2f22b1ead85e48c1ad5e3ba467919ef35",
+    "no_backup/covalent-node-secrets/kek-envelope.v1": "821f314fce8e5c1fd478c3d61585614fad941a54c6ec6fcdfa9ce9d2af4c5987"
+  },
+  "commandFailures": [
+    {
+      "command": "shell input tap",
+      "exitCode": 20,
+      "exceptionClasses": [],
+      "signals": [
+        "missing-service"
+      ],
+      "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderrSha256": "b32c56574cb0fa514e0edb41c67c1857e4e268250df920acd9a627c81ef49882"
+    },
+    {
+      "command": "shell pidof <argument>",
+      "exitCode": 1,
+      "exceptionClasses": [],
+      "signals": [],
+      "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "command": "shell pm grant",
+      "exitCode": 20,
+      "exceptionClasses": [],
+      "signals": [
+        "missing-service"
+      ],
+      "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderrSha256": "44957256134a51ede449f7781ce3c44ce17a0c2ee7169e279db49557533c12c7"
+    }
+  ],
+  "failureClass": "RuntimeError",
+  "failureUi": {
+    "available": false
+  },
+  "frameworkAtFailure": {
+    "observationFailureClass": "RuntimeError"
+  },
+  "identitySha256AtFailure": {
+    "no_backup/covalent-node/identity.json": "c9df7ec38693b96b9a91ef72cdd41a6a6e46f80e55d50028ea635f7cfea945ac",
+    "no_backup/covalent-node/tls/identity.json": "948bc1e03b9bc80d439bf9412253acd2f22b1ead85e48c1ad5e3ba467919ef35",
+    "no_backup/covalent-node-secrets/kek-envelope.v1": "821f314fce8e5c1fd478c3d61585614fad941a54c6ec6fcdfa9ce9d2af4c5987"
+  },
+  "frameworkTrace": {
+    "sourceSha256": "cb14714892879551607de292d155d33ae7214a18df6ba48d1b6b7de09686186f",
+    "sourceChanged": false,
+    "rawLogsRetained": false,
+    "mayContainPriorRecords": true,
+    "streamStarted": true,
+    "streamReady": true,
+    "streamExitCode": -15,
+    "readerAlive": false,
+    "failureClass": null,
+    "nativeFramesOmitted": 13,
+    "nativeDetailDrainMs": 5000,
+    "linesExamined": 19356,
+    "eventsDropped": 0,
+    "events": [
+      {
+        "hostElapsedMs": 143,
+        "kind": "phase",
+        "name": "capture-started"
+      },
+      {
+        "hostElapsedMs": 4937,
+        "deviceTime": "10-21 17:06:26.467",
+        "sourcePid": 1785,
+        "sourceTid": 1816,
+        "kind": "am_proc_start",
+        "process": "life.michaelwong.interlink",
+        "victimPid": 8411
+      },
+      {
+        "hostElapsedMs": 8950,
+        "kind": "phase",
+        "name": "input-tap-started"
+      },
+      {
+        "hostElapsedMs": 8991,
+        "kind": "phase",
+        "name": "input-tap-returned",
+        "exitCode": 0
+      },
+      {
+        "hostElapsedMs": 11618,
+        "kind": "phase",
+        "name": "input-tap-started"
+      },
+      {
+        "hostElapsedMs": 11638,
+        "kind": "phase",
+        "name": "input-tap-returned",
+        "exitCode": 0
+      },
+      {
+        "hostElapsedMs": 14105,
+        "kind": "phase",
+        "name": "exact debug APK and native host ready"
+      },
+      {
+        "hostElapsedMs": 14128,
+        "deviceTime": "10-21 17:06:35.666",
+        "sourcePid": 1785,
+        "sourceTid": 1843,
+        "kind": "am_kill",
+        "process": "life.michaelwong.interlink",
+        "victimPid": 8411
+      },
+      {
+        "hostElapsedMs": 14226,
+        "deviceTime": "10-21 17:06:35.726",
+        "sourcePid": 1785,
+        "sourceTid": 1816,
+        "kind": "am_proc_start",
+        "process": "life.michaelwong.interlink",
+        "victimPid": 8549
+      },
+      {
+        "hostElapsedMs": 20539,
+        "kind": "phase",
+        "name": "revoked permission shows actionable recovery"
+      },
+      {
+        "hostElapsedMs": 20539,
+        "kind": "phase",
+        "name": "input-tap-started"
+      },
+      {
+        "hostElapsedMs": 20597,
+        "kind": "phase",
+        "name": "input-tap-returned",
+        "exitCode": 0
+      },
+      {
+        "hostElapsedMs": 22580,
+        "deviceTime": "10-21 17:06:44.074",
+        "sourcePid": 1785,
+        "sourceTid": 2018,
+        "kind": "native-fatal-signal",
+        "signal": 6,
+        "process": "system_server"
+      },
+      {
+        "hostElapsedMs": 23842,
+        "deviceTime": "10-21 17:06:45.381",
+        "sourcePid": 8678,
+        "sourceTid": 8678,
+        "kind": "native-dump-header",
+        "victimPid": 1785,
+        "victimTid": 2018,
+        "process": "system_server"
+      },
+      {
+        "hostElapsedMs": 23843,
+        "deviceTime": "10-21 17:06:45.381",
+        "sourcePid": 8678,
+        "sourceTid": 8678,
+        "victimPid": 1785,
+        "process": "system_server",
+        "kind": "native-dump-signal",
+        "signal": 6,
+        "signalCode": -1
+      },
+      {
+        "hostElapsedMs": 23843,
+        "deviceTime": "10-21 17:06:45.381",
+        "sourcePid": 8678,
+        "sourceTid": 8678,
+        "victimPid": 1785,
+        "process": "system_server",
+        "kind": "native-abort-summary",
+        "messageFamily": "unclassified",
+        "messageSha256": "21459e59cfa55a94251c82e5d7e559328fced4bbbff93a4f139eb68d27d56bee",
+        "messageBytes": 62
+      },
+      {
+        "hostElapsedMs": 23843,
+        "deviceTime": "10-21 17:06:45.381",
+        "sourcePid": 8678,
+        "sourceTid": 8678,
+        "victimPid": 1785,
+        "process": "system_server",
+        "kind": "native-frame",
+        "frame": 0,
+        "library": "libc.so",
+        "pcOffset": 367325,
+        "buildId": "aa76614279c09bc4bbbbbec6ba4a811e",
+        "knownSymbol": "abort"
+      },
+      {
+        "hostElapsedMs": 23843,
+        "deviceTime": "10-21 17:06:45.381",
+        "sourcePid": 8678,
+        "sourceTid": 8678,
+        "victimPid": 1785,
+        "process": "system_server",
+        "kind": "native-frame",
+        "frame": 1,
+        "library": "libart.so",
+        "pcOffset": 9349367,
+        "buildId": "ee39087e94b33f52a6702ae4ffb86dc0",
+        "knownSymbol": "art::Runtime::Abort(char const*)"
+      },
+      {
+        "hostElapsedMs": 23843,
+        "deviceTime": "10-21 17:06:45.381",
+        "sourcePid": 8678,
+        "sourceTid": 8678,
+        "victimPid": 1785,
+        "process": "system_server",
+        "kind": "native-frame",
+        "frame": 2,
+        "library": "libbase.so",
+        "pcOffset": 91582,
+        "buildId": "2ecca23d34d49b8e847226a61f55ed7d"
+      },
+      {
+        "hostElapsedMs": 23843,
+        "deviceTime": "10-21 17:06:45.381",
+        "sourcePid": 8678,
+        "sourceTid": 8678,
+        "victimPid": 1785,
+        "process": "system_server",
+        "kind": "native-frame",
+        "frame": 3,
+        "library": "liblog.so",
+        "pcOffset": 52875,
+        "buildId": "90d6577c9d21ddf3d77ab53737981c66",
+        "knownSymbol": "__android_log_assert"
+      },
+      {
+        "hostElapsedMs": 23843,
+        "deviceTime": "10-21 17:06:45.381",
+        "sourcePid": 8678,
+        "sourceTid": 8678,
+        "victimPid": 1785,
+        "process": "system_server",
+        "kind": "native-frame",
+        "frame": 4,
+        "library": "mapper.ranchu.so",
+        "pcOffset": 23263,
+        "buildId": "7b353e53a651ae1223cbe45b0946e22b"
+      },
+      {
+        "hostElapsedMs": 23843,
+        "deviceTime": "10-21 17:06:45.381",
+        "sourcePid": 8678,
+        "sourceTid": 8678,
+        "victimPid": 1785,
+        "process": "system_server",
+        "kind": "native-frame",
+        "frame": 5,
+        "library": "mapper.ranchu.so",
+        "pcOffset": 21936,
+        "buildId": "7b353e53a651ae1223cbe45b0946e22b"
+      },
+      {
+        "hostElapsedMs": 23843,
+        "deviceTime": "10-21 17:06:45.381",
+        "sourcePid": 8678,
+        "sourceTid": 8678,
+        "victimPid": 1785,
+        "process": "system_server",
+        "kind": "native-frame",
+        "frame": 6,
+        "library": "libui.so",
+        "pcOffset": 301263,
+        "buildId": "b1f5ff732233939b9394d7d0e4dfca13"
+      },
+      {
+        "hostElapsedMs": 23843,
+        "deviceTime": "10-21 17:06:45.381",
+        "sourcePid": 8678,
+        "sourceTid": 8678,
+        "victimPid": 1785,
+        "process": "system_server",
+        "kind": "native-frame",
+        "frame": 7,
+        "library": "libui.so",
+        "pcOffset": 211158,
+        "buildId": "b1f5ff732233939b9394d7d0e4dfca13"
+      },
+      {
+        "hostElapsedMs": 23843,
+        "deviceTime": "10-21 17:06:45.381",
+        "sourcePid": 8678,
+        "sourceTid": 8678,
+        "victimPid": 1785,
+        "process": "system_server",
+        "kind": "native-frame",
+        "frame": 8,
+        "library": "libui.so",
+        "pcOffset": 173905,
+        "buildId": "b1f5ff732233939b9394d7d0e4dfca13"
+      },
+      {
+        "hostElapsedMs": 23843,
+        "deviceTime": "10-21 17:06:45.381",
+        "sourcePid": 8678,
+        "sourceTid": 8678,
+        "victimPid": 1785,
+        "process": "system_server",
+        "kind": "native-frame",
+        "frame": 9,
+        "library": "libui.so",
+        "pcOffset": 185549,
+        "buildId": "b1f5ff732233939b9394d7d0e4dfca13"
+      },
+      {
+        "hostElapsedMs": 23843,
+        "deviceTime": "10-21 17:06:45.381",
+        "sourcePid": 8678,
+        "sourceTid": 8678,
+        "victimPid": 1785,
+        "process": "system_server",
+        "kind": "native-frame",
+        "frame": 10,
+        "library": "libandroid_runtime.so",
+        "pcOffset": 1567014,
+        "buildId": "e2564b9361f25203d4d8bb218bfef57e"
+      },
+      {
+        "hostElapsedMs": 23843,
+        "deviceTime": "10-21 17:06:45.381",
+        "sourcePid": 8678,
+        "sourceTid": 8678,
+        "victimPid": 1785,
+        "process": "system_server",
+        "kind": "native-frame",
+        "frame": 11,
+        "library": "libandroid_runtime.so",
+        "pcOffset": 1566449,
+        "buildId": "e2564b9361f25203d4d8bb218bfef57e"
+      },
+      {
+        "hostElapsedMs": 23844,
+        "deviceTime": "10-21 17:06:45.381",
+        "sourcePid": 8678,
+        "sourceTid": 8678,
+        "victimPid": 1785,
+        "process": "system_server",
+        "kind": "native-frame",
+        "frame": 12,
+        "library": "libandroid_runtime.so",
+        "pcOffset": 1048814,
+        "buildId": "e2564b9361f25203d4d8bb218bfef57e"
+      },
+      {
+        "hostElapsedMs": 23844,
+        "deviceTime": "10-21 17:06:45.381",
+        "sourcePid": 8678,
+        "sourceTid": 8678,
+        "victimPid": 1785,
+        "process": "system_server",
+        "kind": "native-frame",
+        "frame": 14,
+        "library": "libart.so",
+        "pcOffset": 2138007,
+        "buildId": "ee39087e94b33f52a6702ae4ffb86dc0"
+      },
+      {
+        "hostElapsedMs": 23844,
+        "deviceTime": "10-21 17:06:45.381",
+        "sourcePid": 8678,
+        "sourceTid": 8678,
+        "victimPid": 1785,
+        "process": "system_server",
+        "kind": "native-frame",
+        "frame": 16,
+        "library": "libart.so",
+        "pcOffset": 2136100,
+        "buildId": "ee39087e94b33f52a6702ae4ffb86dc0"
+      },
+      {
+        "hostElapsedMs": 23844,
+        "deviceTime": "10-21 17:06:45.381",
+        "sourcePid": 8678,
+        "sourceTid": 8678,
+        "victimPid": 1785,
+        "process": "system_server",
+        "kind": "native-frame",
+        "frame": 18,
+        "library": "libart.so",
+        "pcOffset": 2172374,
+        "buildId": "ee39087e94b33f52a6702ae4ffb86dc0"
+      },
+      {
+        "hostElapsedMs": 23844,
+        "deviceTime": "10-21 17:06:45.381",
+        "sourcePid": 8678,
+        "sourceTid": 8678,
+        "victimPid": 1785,
+        "process": "system_server",
+        "kind": "native-frame",
+        "frame": 19,
+        "library": "libart.so",
+        "pcOffset": 4678696,
+        "buildId": "ee39087e94b33f52a6702ae4ffb86dc0"
+      },
+      {
+        "hostElapsedMs": 23844,
+        "deviceTime": "10-21 17:06:45.381",
+        "sourcePid": 8678,
+        "sourceTid": 8678,
+        "victimPid": 1785,
+        "process": "system_server",
+        "kind": "native-frame",
+        "frame": 20,
+        "library": "libart.so",
+        "pcOffset": 6406188,
+        "buildId": "ee39087e94b33f52a6702ae4ffb86dc0"
+      },
+      {
+        "hostElapsedMs": 23844,
+        "deviceTime": "10-21 17:06:45.381",
+        "sourcePid": 8678,
+        "sourceTid": 8678,
+        "victimPid": 1785,
+        "process": "system_server",
+        "kind": "native-frame",
+        "frame": 21,
+        "library": "libart.so",
+        "pcOffset": 2314743,
+        "buildId": "ee39087e94b33f52a6702ae4ffb86dc0"
+      },
+      {
+        "hostElapsedMs": 23844,
+        "deviceTime": "10-21 17:06:45.381",
+        "sourcePid": 8678,
+        "sourceTid": 8678,
+        "victimPid": 1785,
+        "process": "system_server",
+        "kind": "native-frame",
+        "frame": 22,
+        "library": "libart.so",
+        "pcOffset": 2165845,
+        "buildId": "ee39087e94b33f52a6702ae4ffb86dc0"
+      },
+      {
+        "hostElapsedMs": 23844,
+        "deviceTime": "10-21 17:06:45.381",
+        "sourcePid": 8678,
+        "sourceTid": 8678,
+        "victimPid": 1785,
+        "process": "system_server",
+        "kind": "native-frame",
+        "frame": 24,
+        "library": "libart.so",
+        "pcOffset": 6370145,
+        "buildId": "ee39087e94b33f52a6702ae4ffb86dc0"
+      },
+      {
+        "hostElapsedMs": 23845,
+        "deviceTime": "10-21 17:06:45.381",
+        "sourcePid": 8678,
+        "sourceTid": 8678,
+        "victimPid": 1785,
+        "process": "system_server",
+        "kind": "native-frame",
+        "frame": 25,
+        "library": "libart.so",
+        "pcOffset": 10522953,
+        "buildId": "ee39087e94b33f52a6702ae4ffb86dc0"
+      },
+      {
+        "hostElapsedMs": 23845,
+        "deviceTime": "10-21 17:06:45.381",
+        "sourcePid": 8678,
+        "sourceTid": 8678,
+        "victimPid": 1785,
+        "process": "system_server",
+        "kind": "native-frame",
+        "frame": 26,
+        "library": "libart.so",
+        "pcOffset": 2281020,
+        "buildId": "ee39087e94b33f52a6702ae4ffb86dc0"
+      },
+      {
+        "hostElapsedMs": 23845,
+        "deviceTime": "10-21 17:06:45.381",
+        "sourcePid": 8678,
+        "sourceTid": 8678,
+        "victimPid": 1785,
+        "process": "system_server",
+        "kind": "native-frame",
+        "frame": 27,
+        "library": "libart.so",
+        "pcOffset": 2132529,
+        "buildId": "ee39087e94b33f52a6702ae4ffb86dc0"
+      },
+      {
+        "hostElapsedMs": 23845,
+        "deviceTime": "10-21 17:06:45.381",
+        "sourcePid": 8678,
+        "sourceTid": 8678,
+        "victimPid": 1785,
+        "process": "system_server",
+        "kind": "native-frame",
+        "frame": 29,
+        "library": "libart.so",
+        "pcOffset": 2136100,
+        "buildId": "ee39087e94b33f52a6702ae4ffb86dc0"
+      },
+      {
+        "hostElapsedMs": 23845,
+        "deviceTime": "10-21 17:06:45.381",
+        "sourcePid": 8678,
+        "sourceTid": 8678,
+        "victimPid": 1785,
+        "process": "system_server",
+        "kind": "native-frame",
+        "frame": 31,
+        "library": "libart.so",
+        "pcOffset": 2136100,
+        "buildId": "ee39087e94b33f52a6702ae4ffb86dc0"
+      },
+      {
+        "hostElapsedMs": 24063,
+        "deviceTime": "10-21 17:06:45.601",
+        "sourcePid": 2269,
+        "sourceTid": 2269,
+        "kind": "fatal-application-process"
+      },
+      {
+        "hostElapsedMs": 24065,
+        "deviceTime": "10-21 17:06:45.601",
+        "sourcePid": 2269,
+        "sourceTid": 2269,
+        "kind": "exception-class",
+        "exceptionClasses": [],
+        "unqualifiedExceptionNames": [
+          "DeadSystemException"
+        ]
+      },
+      {
+        "hostElapsedMs": 24471,
+        "kind": "phase",
+        "name": "input-tap-started"
+      },
+      {
+        "hostElapsedMs": 24497,
+        "kind": "phase",
+        "name": "input-tap-returned",
+        "exitCode": 20
+      },
+      {
+        "hostElapsedMs": 24497,
+        "kind": "phase",
+        "name": "failure-observation-started"
+      },
+      {
+        "hostElapsedMs": 24683,
+        "deviceTime": "10-21 17:06:46.221",
+        "sourcePid": 8738,
+        "sourceTid": 8738,
+        "kind": "fatal-application-process"
+      },
+      {
+        "hostElapsedMs": 24683,
+        "deviceTime": "10-21 17:06:46.221",
+        "sourcePid": 8738,
+        "sourceTid": 8738,
+        "kind": "exception-class",
+        "exceptionClasses": [
+          "java.lang.NullPointerException"
+        ]
+      },
+      {
+        "hostElapsedMs": 24684,
+        "deviceTime": "10-21 17:06:46.222",
+        "sourcePid": 8738,
+        "sourceTid": 8738,
+        "kind": "exception-class",
+        "exceptionClasses": [
+          "java.lang.NullPointerException"
+        ]
+      },
+      {
+        "hostElapsedMs": 24685,
+        "deviceTime": "10-21 17:06:46.222",
+        "sourcePid": 8738,
+        "sourceTid": 8738,
+        "kind": "exception-class",
+        "exceptionClasses": [
+          "java.lang.RuntimeException"
+        ]
+      },
+      {
+        "hostElapsedMs": 24817,
+        "kind": "phase",
+        "name": "failure-observation-completed"
+      },
+      {
+        "hostElapsedMs": 24817,
+        "kind": "phase",
+        "name": "cleanup-started"
+      },
+      {
+        "hostElapsedMs": 24870,
+        "kind": "phase",
+        "name": "cleanup-completed"
+      },
+      {
+        "hostElapsedMs": 25869,
+        "deviceTime": "10-21 17:06:47.403",
+        "sourcePid": 8838,
+        "sourceTid": 8838,
+        "kind": "framework-start",
+        "process": "system_server"
+      },
+      {
+        "hostElapsedMs": 28211,
+        "deviceTime": "10-21 17:06:49.749",
+        "sourcePid": 8838,
+        "sourceTid": 8927,
+        "kind": "am_proc_start",
+        "process": "com.android.systemui",
+        "victimPid": 9141
+      },
+      {
+        "hostElapsedMs": 28805,
+        "deviceTime": "10-21 17:06:50.344",
+        "sourcePid": 8838,
+        "sourceTid": 8927,
+        "kind": "am_proc_start",
+        "process": "com.android.settings",
+        "victimPid": 9278
+      }
+    ],
+    "streamLiveBeforeStop": true,
+    "readerAliveAfterStop": false,
+    "captureStopped": true
+  },
+  "cleanupFailures": [
+    {
+      "action": "restore QA permission",
+      "failureClass": "RuntimeError"
+    }
+  ],
+  "nativeReports": {
+    "sourceSha256": "de1298052e65573cd1bfd023e3c3a2fe19e4204382048f17666f9766f6389807",
+    "decoderSha256": "cb14714892879551607de292d155d33ae7214a18df6ba48d1b6b7de09686186f",
+    "rawReportsRetained": false,
+    "result": "matched",
+    "attempts": [
+      {
+        "tag": "system_server_native_crash",
+        "bytesRead": 99253,
+        "limitReached": false,
+        "timedOut": false,
+        "exitCode": 0,
+        "clientStopped": true,
+        "failureClass": null,
+        "complete": true,
+        "linesExamined": 936,
+        "matchingReports": 1,
+        "eventsDropped": 0,
+        "diagnosticCounts": {
+          "reportBoundaries": 2,
+          "overlongLines": 0,
+          "timestampLines": 1,
+          "timestampPrefixRejected": 0,
+          "timestampSyntaxRejected": 0,
+          "timestampParseRejected": 0,
+          "timestampBeforeWindow": 0,
+          "timestampAfterWindow": 0,
+          "timestampInWindow": 1,
+          "headerLines": 24,
+          "headerSyntaxRejected": 0,
+          "headerWithoutWindowTimestamp": 0,
+          "headerPidRejected": 0,
+          "headerTidRejected": 23,
+          "headerProcessRejected": 0,
+          "headersCorrelated": 1,
+          "signalLinesWithHeader": 1,
+          "signalSyntaxRejectedWithHeader": 0,
+          "signalRejectedWithHeader": 0
+        },
+        "nativeFramesOmitted": 13,
+        "formatRecognized": true,
+        "reportReadError": false,
+        "events": [
+          {
+            "origin": "dropbox",
+            "timestampEpochSeconds": 1792602404,
+            "kind": "native-dump-header",
+            "victimPid": 1785,
+            "victimTid": 2018,
+            "process": "system_server"
+          },
+          {
+            "origin": "dropbox",
+            "timestampEpochSeconds": 1792602404,
+            "victimPid": 1785,
+            "process": "system_server",
+            "kind": "native-dump-signal",
+            "signal": 6,
+            "signalCode": -1
+          },
+          {
+            "origin": "dropbox",
+            "timestampEpochSeconds": 1792602404,
+            "victimPid": 1785,
+            "process": "system_server",
+            "kind": "native-abort-summary",
+            "messageFamily": "unclassified",
+            "messageSha256": "21459e59cfa55a94251c82e5d7e559328fced4bbbff93a4f139eb68d27d56bee",
+            "messageBytes": 62
+          },
+          {
+            "origin": "dropbox",
+            "timestampEpochSeconds": 1792602404,
+            "victimPid": 1785,
+            "process": "system_server",
+            "kind": "native-frame",
+            "frame": 0,
+            "library": "libc.so",
+            "pcOffset": 367325,
+            "buildId": "aa76614279c09bc4bbbbbec6ba4a811e",
+            "knownSymbol": "abort"
+          },
+          {
+            "origin": "dropbox",
+            "timestampEpochSeconds": 1792602404,
+            "victimPid": 1785,
+            "process": "system_server",
+            "kind": "native-frame",
+            "frame": 1,
+            "library": "libart.so",
+            "pcOffset": 9349367,
+            "buildId": "ee39087e94b33f52a6702ae4ffb86dc0",
+            "knownSymbol": "art::Runtime::Abort(char const*)"
+          },
+          {
+            "origin": "dropbox",
+            "timestampEpochSeconds": 1792602404,
+            "victimPid": 1785,
+            "process": "system_server",
+            "kind": "native-frame",
+            "frame": 2,
+            "library": "libbase.so",
+            "pcOffset": 91582,
+            "buildId": "2ecca23d34d49b8e847226a61f55ed7d"
+          },
+          {
+            "origin": "dropbox",
+            "timestampEpochSeconds": 1792602404,
+            "victimPid": 1785,
+            "process": "system_server",
+            "kind": "native-frame",
+            "frame": 3,
+            "library": "liblog.so",
+            "pcOffset": 52875,
+            "buildId": "90d6577c9d21ddf3d77ab53737981c66",
+            "knownSymbol": "__android_log_assert"
+          },
+          {
+            "origin": "dropbox",
+            "timestampEpochSeconds": 1792602404,
+            "victimPid": 1785,
+            "process": "system_server",
+            "kind": "native-frame",
+            "frame": 4,
+            "library": "mapper.ranchu.so",
+            "pcOffset": 23263,
+            "buildId": "7b353e53a651ae1223cbe45b0946e22b"
+          },
+          {
+            "origin": "dropbox",
+            "timestampEpochSeconds": 1792602404,
+            "victimPid": 1785,
+            "process": "system_server",
+            "kind": "native-frame",
+            "frame": 5,
+            "library": "mapper.ranchu.so",
+            "pcOffset": 21936,
+            "buildId": "7b353e53a651ae1223cbe45b0946e22b"
+          },
+          {
+            "origin": "dropbox",
+            "timestampEpochSeconds": 1792602404,
+            "victimPid": 1785,
+            "process": "system_server",
+            "kind": "native-frame",
+            "frame": 6,
+            "library": "libui.so",
+            "pcOffset": 301263,
+            "buildId": "b1f5ff732233939b9394d7d0e4dfca13"
+          },
+          {
+            "origin": "dropbox",
+            "timestampEpochSeconds": 1792602404,
+            "victimPid": 1785,
+            "process": "system_server",
+            "kind": "native-frame",
+            "frame": 7,
+            "library": "libui.so",
+            "pcOffset": 211158,
+            "buildId": "b1f5ff732233939b9394d7d0e4dfca13"
+          },
+          {
+            "origin": "dropbox",
+            "timestampEpochSeconds": 1792602404,
+            "victimPid": 1785,
+            "process": "system_server",
+            "kind": "native-frame",
+            "frame": 8,
+            "library": "libui.so",
+            "pcOffset": 173905,
+            "buildId": "b1f5ff732233939b9394d7d0e4dfca13"
+          },
+          {
+            "origin": "dropbox",
+            "timestampEpochSeconds": 1792602404,
+            "victimPid": 1785,
+            "process": "system_server",
+            "kind": "native-frame",
+            "frame": 9,
+            "library": "libui.so",
+            "pcOffset": 185549,
+            "buildId": "b1f5ff732233939b9394d7d0e4dfca13"
+          },
+          {
+            "origin": "dropbox",
+            "timestampEpochSeconds": 1792602404,
+            "victimPid": 1785,
+            "process": "system_server",
+            "kind": "native-frame",
+            "frame": 10,
+            "library": "libandroid_runtime.so",
+            "pcOffset": 1567014,
+            "buildId": "e2564b9361f25203d4d8bb218bfef57e"
+          },
+          {
+            "origin": "dropbox",
+            "timestampEpochSeconds": 1792602404,
+            "victimPid": 1785,
+            "process": "system_server",
+            "kind": "native-frame",
+            "frame": 11,
+            "library": "libandroid_runtime.so",
+            "pcOffset": 1566449,
+            "buildId": "e2564b9361f25203d4d8bb218bfef57e"
+          },
+          {
+            "origin": "dropbox",
+            "timestampEpochSeconds": 1792602404,
+            "victimPid": 1785,
+            "process": "system_server",
+            "kind": "native-frame",
+            "frame": 12,
+            "library": "libandroid_runtime.so",
+            "pcOffset": 1048814,
+            "buildId": "e2564b9361f25203d4d8bb218bfef57e"
+          },
+          {
+            "origin": "dropbox",
+            "timestampEpochSeconds": 1792602404,
+            "victimPid": 1785,
+            "process": "system_server",
+            "kind": "native-frame",
+            "frame": 14,
+            "library": "libart.so",
+            "pcOffset": 2138007,
+            "buildId": "ee39087e94b33f52a6702ae4ffb86dc0"
+          },
+          {
+            "origin": "dropbox",
+            "timestampEpochSeconds": 1792602404,
+            "victimPid": 1785,
+            "process": "system_server",
+            "kind": "native-frame",
+            "frame": 16,
+            "library": "libart.so",
+            "pcOffset": 2136100,
+            "buildId": "ee39087e94b33f52a6702ae4ffb86dc0"
+          },
+          {
+            "origin": "dropbox",
+            "timestampEpochSeconds": 1792602404,
+            "victimPid": 1785,
+            "process": "system_server",
+            "kind": "native-frame",
+            "frame": 18,
+            "library": "libart.so",
+            "pcOffset": 2172374,
+            "buildId": "ee39087e94b33f52a6702ae4ffb86dc0"
+          },
+          {
+            "origin": "dropbox",
+            "timestampEpochSeconds": 1792602404,
+            "victimPid": 1785,
+            "process": "system_server",
+            "kind": "native-frame",
+            "frame": 19,
+            "library": "libart.so",
+            "pcOffset": 4678696,
+            "buildId": "ee39087e94b33f52a6702ae4ffb86dc0"
+          },
+          {
+            "origin": "dropbox",
+            "timestampEpochSeconds": 1792602404,
+            "victimPid": 1785,
+            "process": "system_server",
+            "kind": "native-frame",
+            "frame": 20,
+            "library": "libart.so",
+            "pcOffset": 6406188,
+            "buildId": "ee39087e94b33f52a6702ae4ffb86dc0"
+          },
+          {
+            "origin": "dropbox",
+            "timestampEpochSeconds": 1792602404,
+            "victimPid": 1785,
+            "process": "system_server",
+            "kind": "native-frame",
+            "frame": 21,
+            "library": "libart.so",
+            "pcOffset": 2314743,
+            "buildId": "ee39087e94b33f52a6702ae4ffb86dc0"
+          },
+          {
+            "origin": "dropbox",
+            "timestampEpochSeconds": 1792602404,
+            "victimPid": 1785,
+            "process": "system_server",
+            "kind": "native-frame",
+            "frame": 22,
+            "library": "libart.so",
+            "pcOffset": 2165845,
+            "buildId": "ee39087e94b33f52a6702ae4ffb86dc0"
+          },
+          {
+            "origin": "dropbox",
+            "timestampEpochSeconds": 1792602404,
+            "victimPid": 1785,
+            "process": "system_server",
+            "kind": "native-frame",
+            "frame": 24,
+            "library": "libart.so",
+            "pcOffset": 6370145,
+            "buildId": "ee39087e94b33f52a6702ae4ffb86dc0"
+          },
+          {
+            "origin": "dropbox",
+            "timestampEpochSeconds": 1792602404,
+            "victimPid": 1785,
+            "process": "system_server",
+            "kind": "native-frame",
+            "frame": 25,
+            "library": "libart.so",
+            "pcOffset": 10522953,
+            "buildId": "ee39087e94b33f52a6702ae4ffb86dc0"
+          },
+          {
+            "origin": "dropbox",
+            "timestampEpochSeconds": 1792602404,
+            "victimPid": 1785,
+            "process": "system_server",
+            "kind": "native-frame",
+            "frame": 26,
+            "library": "libart.so",
+            "pcOffset": 2281020,
+            "buildId": "ee39087e94b33f52a6702ae4ffb86dc0"
+          },
+          {
+            "origin": "dropbox",
+            "timestampEpochSeconds": 1792602404,
+            "victimPid": 1785,
+            "process": "system_server",
+            "kind": "native-frame",
+            "frame": 27,
+            "library": "libart.so",
+            "pcOffset": 2132529,
+            "buildId": "ee39087e94b33f52a6702ae4ffb86dc0"
+          },
+          {
+            "origin": "dropbox",
+            "timestampEpochSeconds": 1792602404,
+            "victimPid": 1785,
+            "process": "system_server",
+            "kind": "native-frame",
+            "frame": 29,
+            "library": "libart.so",
+            "pcOffset": 2136100,
+            "buildId": "ee39087e94b33f52a6702ae4ffb86dc0"
+          },
+          {
+            "origin": "dropbox",
+            "timestampEpochSeconds": 1792602404,
+            "victimPid": 1785,
+            "process": "system_server",
+            "kind": "native-frame",
+            "frame": 31,
+            "library": "libart.so",
+            "pcOffset": 2136100,
+            "buildId": "ee39087e94b33f52a6702ae4ffb86dc0"
+          }
+        ]
+      },
+      {
+        "tag": "SYSTEM_TOMBSTONE",
+        "bytesRead": 198372,
+        "limitReached": false,
+        "timedOut": false,
+        "exitCode": 0,
+        "clientStopped": true,
+        "failureClass": null,
+        "complete": true,
+        "linesExamined": 2036,
+        "matchingReports": 1,
+        "eventsDropped": 0,
+        "diagnosticCounts": {
+          "reportBoundaries": 6,
+          "overlongLines": 0,
+          "timestampLines": 3,
+          "timestampPrefixRejected": 0,
+          "timestampSyntaxRejected": 0,
+          "timestampParseRejected": 0,
+          "timestampBeforeWindow": 2,
+          "timestampAfterWindow": 0,
+          "timestampInWindow": 1,
+          "headerLines": 46,
+          "headerSyntaxRejected": 0,
+          "headerWithoutWindowTimestamp": 22,
+          "headerPidRejected": 0,
+          "headerTidRejected": 23,
+          "headerProcessRejected": 0,
+          "headersCorrelated": 1,
+          "signalLinesWithHeader": 1,
+          "signalSyntaxRejectedWithHeader": 0,
+          "signalRejectedWithHeader": 0
+        },
+        "nativeFramesOmitted": 13,
+        "formatRecognized": true,
+        "reportReadError": false,
+        "events": [
+          {
+            "origin": "dropbox",
+            "timestampEpochSeconds": 1792602404,
+            "kind": "native-dump-header",
+            "victimPid": 1785,
+            "victimTid": 2018,
+            "process": "system_server"
+          },
+          {
+            "origin": "dropbox",
+            "timestampEpochSeconds": 1792602404,
+            "victimPid": 1785,
+            "process": "system_server",
+            "kind": "native-dump-signal",
+            "signal": 6,
+            "signalCode": -1
+          },
+          {
+            "origin": "dropbox",
+            "timestampEpochSeconds": 1792602404,
+            "victimPid": 1785,
+            "process": "system_server",
+            "kind": "native-abort-summary",
+            "messageFamily": "unclassified",
+            "messageSha256": "21459e59cfa55a94251c82e5d7e559328fced4bbbff93a4f139eb68d27d56bee",
+            "messageBytes": 62
+          },
+          {
+            "origin": "dropbox",
+            "timestampEpochSeconds": 1792602404,
+            "victimPid": 1785,
+            "process": "system_server",
+            "kind": "native-frame",
+            "frame": 0,
+            "library": "libc.so",
+            "pcOffset": 367325,
+            "buildId": "aa76614279c09bc4bbbbbec6ba4a811e",
+            "knownSymbol": "abort"
+          },
+          {
+            "origin": "dropbox",
+            "timestampEpochSeconds": 1792602404,
+            "victimPid": 1785,
+            "process": "system_server",
+            "kind": "native-frame",
+            "frame": 1,
+            "library": "libart.so",
+            "pcOffset": 9349367,
+            "buildId": "ee39087e94b33f52a6702ae4ffb86dc0",
+            "knownSymbol": "art::Runtime::Abort(char const*)"
+          },
+          {
+            "origin": "dropbox",
+            "timestampEpochSeconds": 1792602404,
+            "victimPid": 1785,
+            "process": "system_server",
+            "kind": "native-frame",
+            "frame": 2,
+            "library": "libbase.so",
+            "pcOffset": 91582,
+            "buildId": "2ecca23d34d49b8e847226a61f55ed7d"
+          },
+          {
+            "origin": "dropbox",
+            "timestampEpochSeconds": 1792602404,
+            "victimPid": 1785,
+            "process": "system_server",
+            "kind": "native-frame",
+            "frame": 3,
+            "library": "liblog.so",
+            "pcOffset": 52875,
+            "buildId": "90d6577c9d21ddf3d77ab53737981c66",
+            "knownSymbol": "__android_log_assert"
+          },
+          {
+            "origin": "dropbox",
+            "timestampEpochSeconds": 1792602404,
+            "victimPid": 1785,
+            "process": "system_server",
+            "kind": "native-frame",
+            "frame": 4,
+            "library": "mapper.ranchu.so",
+            "pcOffset": 23263,
+            "buildId": "7b353e53a651ae1223cbe45b0946e22b"
+          },
+          {
+            "origin": "dropbox",
+            "timestampEpochSeconds": 1792602404,
+            "victimPid": 1785,
+            "process": "system_server",
+            "kind": "native-frame",
+            "frame": 5,
+            "library": "mapper.ranchu.so",
+            "pcOffset": 21936,
+            "buildId": "7b353e53a651ae1223cbe45b0946e22b"
+          },
+          {
+            "origin": "dropbox",
+            "timestampEpochSeconds": 1792602404,
+            "victimPid": 1785,
+            "process": "system_server",
+            "kind": "native-frame",
+            "frame": 6,
+            "library": "libui.so",
+            "pcOffset": 301263,
+            "buildId": "b1f5ff732233939b9394d7d0e4dfca13"
+          },
+          {
+            "origin": "dropbox",
+            "timestampEpochSeconds": 1792602404,
+            "victimPid": 1785,
+            "process": "system_server",
+            "kind": "native-frame",
+            "frame": 7,
+            "library": "libui.so",
+            "pcOffset": 211158,
+            "buildId": "b1f5ff732233939b9394d7d0e4dfca13"
+          },
+          {
+            "origin": "dropbox",
+            "timestampEpochSeconds": 1792602404,
+            "victimPid": 1785,
+            "process": "system_server",
+            "kind": "native-frame",
+            "frame": 8,
+            "library": "libui.so",
+            "pcOffset": 173905,
+            "buildId": "b1f5ff732233939b9394d7d0e4dfca13"
+          },
+          {
+            "origin": "dropbox",
+            "timestampEpochSeconds": 1792602404,
+            "victimPid": 1785,
+            "process": "system_server",
+            "kind": "native-frame",
+            "frame": 9,
+            "library": "libui.so",
+            "pcOffset": 185549,
+            "buildId": "b1f5ff732233939b9394d7d0e4dfca13"
+          },
+          {
+            "origin": "dropbox",
+            "timestampEpochSeconds": 1792602404,
+            "victimPid": 1785,
+            "process": "system_server",
+            "kind": "native-frame",
+            "frame": 10,
+            "library": "libandroid_runtime.so",
+            "pcOffset": 1567014,
+            "buildId": "e2564b9361f25203d4d8bb218bfef57e"
+          },
+          {
+            "origin": "dropbox",
+            "timestampEpochSeconds": 1792602404,
+            "victimPid": 1785,
+            "process": "system_server",
+            "kind": "native-frame",
+            "frame": 11,
+            "library": "libandroid_runtime.so",
+            "pcOffset": 1566449,
+            "buildId": "e2564b9361f25203d4d8bb218bfef57e"
+          },
+          {
+            "origin": "dropbox",
+            "timestampEpochSeconds": 1792602404,
+            "victimPid": 1785,
+            "process": "system_server",
+            "kind": "native-frame",
+            "frame": 12,
+            "library": "libandroid_runtime.so",
+            "pcOffset": 1048814,
+            "buildId": "e2564b9361f25203d4d8bb218bfef57e"
+          },
+          {
+            "origin": "dropbox",
+            "timestampEpochSeconds": 1792602404,
+            "victimPid": 1785,
+            "process": "system_server",
+            "kind": "native-frame",
+            "frame": 14,
+            "library": "libart.so",
+            "pcOffset": 2138007,
+            "buildId": "ee39087e94b33f52a6702ae4ffb86dc0"
+          },
+          {
+            "origin": "dropbox",
+            "timestampEpochSeconds": 1792602404,
+            "victimPid": 1785,
+            "process": "system_server",
+            "kind": "native-frame",
+            "frame": 16,
+            "library": "libart.so",
+            "pcOffset": 2136100,
+            "buildId": "ee39087e94b33f52a6702ae4ffb86dc0"
+          },
+          {
+            "origin": "dropbox",
+            "timestampEpochSeconds": 1792602404,
+            "victimPid": 1785,
+            "process": "system_server",
+            "kind": "native-frame",
+            "frame": 18,
+            "library": "libart.so",
+            "pcOffset": 2172374,
+            "buildId": "ee39087e94b33f52a6702ae4ffb86dc0"
+          },
+          {
+            "origin": "dropbox",
+            "timestampEpochSeconds": 1792602404,
+            "victimPid": 1785,
+            "process": "system_server",
+            "kind": "native-frame",
+            "frame": 19,
+            "library": "libart.so",
+            "pcOffset": 4678696,
+            "buildId": "ee39087e94b33f52a6702ae4ffb86dc0"
+          },
+          {
+            "origin": "dropbox",
+            "timestampEpochSeconds": 1792602404,
+            "victimPid": 1785,
+            "process": "system_server",
+            "kind": "native-frame",
+            "frame": 20,
+            "library": "libart.so",
+            "pcOffset": 6406188,
+            "buildId": "ee39087e94b33f52a6702ae4ffb86dc0"
+          },
+          {
+            "origin": "dropbox",
+            "timestampEpochSeconds": 1792602404,
+            "victimPid": 1785,
+            "process": "system_server",
+            "kind": "native-frame",
+            "frame": 21,
+            "library": "libart.so",
+            "pcOffset": 2314743,
+            "buildId": "ee39087e94b33f52a6702ae4ffb86dc0"
+          },
+          {
+            "origin": "dropbox",
+            "timestampEpochSeconds": 1792602404,
+            "victimPid": 1785,
+            "process": "system_server",
+            "kind": "native-frame",
+            "frame": 22,
+            "library": "libart.so",
+            "pcOffset": 2165845,
+            "buildId": "ee39087e94b33f52a6702ae4ffb86dc0"
+          },
+          {
+            "origin": "dropbox",
+            "timestampEpochSeconds": 1792602404,
+            "victimPid": 1785,
+            "process": "system_server",
+            "kind": "native-frame",
+            "frame": 24,
+            "library": "libart.so",
+            "pcOffset": 6370145,
+            "buildId": "ee39087e94b33f52a6702ae4ffb86dc0"
+          },
+          {
+            "origin": "dropbox",
+            "timestampEpochSeconds": 1792602404,
+            "victimPid": 1785,
+            "process": "system_server",
+            "kind": "native-frame",
+            "frame": 25,
+            "library": "libart.so",
+            "pcOffset": 10522953,
+            "buildId": "ee39087e94b33f52a6702ae4ffb86dc0"
+          },
+          {
+            "origin": "dropbox",
+            "timestampEpochSeconds": 1792602404,
+            "victimPid": 1785,
+            "process": "system_server",
+            "kind": "native-frame",
+            "frame": 26,
+            "library": "libart.so",
+            "pcOffset": 2281020,
+            "buildId": "ee39087e94b33f52a6702ae4ffb86dc0"
+          },
+          {
+            "origin": "dropbox",
+            "timestampEpochSeconds": 1792602404,
+            "victimPid": 1785,
+            "process": "system_server",
+            "kind": "native-frame",
+            "frame": 27,
+            "library": "libart.so",
+            "pcOffset": 2132529,
+            "buildId": "ee39087e94b33f52a6702ae4ffb86dc0"
+          },
+          {
+            "origin": "dropbox",
+            "timestampEpochSeconds": 1792602404,
+            "victimPid": 1785,
+            "process": "system_server",
+            "kind": "native-frame",
+            "frame": 29,
+            "library": "libart.so",
+            "pcOffset": 2136100,
+            "buildId": "ee39087e94b33f52a6702ae4ffb86dc0"
+          },
+          {
+            "origin": "dropbox",
+            "timestampEpochSeconds": 1792602404,
+            "victimPid": 1785,
+            "process": "system_server",
+            "kind": "native-frame",
+            "frame": 31,
+            "library": "libart.so",
+            "pcOffset": 2136100,
+            "buildId": "ee39087e94b33f52a6702ae4ffb86dc0"
+          }
+        ]
+      }
+    ],
+    "windowEpochSeconds": [
+      1792602381,
+      1792602411
+    ]
+  }
+}

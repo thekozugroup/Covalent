@@ -1,0 +1,65 @@
+{
+  "format": 1,
+  "sourceCommit": "0564034368bab5c4e1b79350ee85cfc3532c4f96",
+  "mergeCommit": "42fdd6a9478a3334288ef2fa8398eb1ccf688940",
+  "runId": 39635433377,
+  "artifactId": 12364873359,
+  "archiveSha256": "548c6b4a9de8420de0fdd3bdda09ae29b99c3cffc67942263e427ae878fa17d5",
+  "archiveBytes": 3487123,
+  "allArchiveEntriesVerified": 73,
+  "baselinePassed": true,
+  "baselineTests": 86,
+  "folderJourneyPassed": true,
+  "folderJourneySeconds": 426.305,
+  "permissionRecoveryPassed": false,
+  "assertionCandidateFromExistingWorkflowComment": "Assertion failed: !rcEnc->featureInfo()->hasReadColorBufferDma",
+  "candidateSha256": "21459e59cfa55a94251c82e5d7e559328fced4bbbff93a4f139eb68d27d56bee",
+  "candidateBytes": 62,
+  "matchesLiveAndDropBox": true,
+  "nativeAbortAfterOpenSettingsReturnedMs": 1983,
+  "frameworkVictimPid": 1785,
+  "frameworkVictimTid": 2018,
+  "automaticFrameworkRestartPid": 8838,
+  "identitiesUnchanged": true,
+  "testedHarnessSourceHashes": {
+    "scripts/interlink-api37-permission-test.py": "97d47ee35a45ac9f0294273d94a970abb2f3539c7a59cb09c3aaa9798abef191",
+    "scripts/interlink_framework_trace.py": "cb14714892879551607de292d155d33ae7214a18df6ba48d1b6b7de09686186f",
+    "scripts/interlink_native_reports.py": "de1298052e65573cd1bfd023e3c3a2fe19e4204382048f17666f9766f6389807"
+  },
+  "faultReplayedForInvestigation": false,
+  "rendererFlagsChanged": false,
+  "gateExempted": false,
+  "physicalDeviceAccepted": false,
+  "releaseReady": false,
+  "evidence": {
+    "artifacts/evidence/api37-0564034/archive-bindings.json": {
+      "sha256": "5afc3773c6ce15c9b1d8d142edad59da84447aaf8b68fb846bbd106d2e25086a",
+      "bytes": 17761
+    },
+    "artifacts/evidence/api37-0564034/instrumentation-baseline.log": {
+      "sha256": "60b81172c24b400020a2cbaa5ead33ddb78c6774441f814fc04ac481749cadf5",
+      "bytes": 59887
+    },
+    "artifacts/evidence/api37-0564034/instrumentation-folder-journey.log": {
+      "sha256": "28727141811acbc8e6c4635daa32ba71eb982bb667d18f445e7b8060fa338148",
+      "bytes": 889
+    },
+    "artifacts/evidence/api37-0564034/permission-recovery.json": {
+      "sha256": "8442de198633dc9036c5cc9f39d2b0c4d448385b5d5bbfd1be385a56daf332c3",
+      "bytes": 43431
+    },
+    "artifacts/evidence/api37-0564034/terminal-jobs.json": {
+      "sha256": "4ef77dde10c07d52cf9d4536659082c04f84ce12866b10d317ff872b4982e0c5",
+      "bytes": 1821
+    },
+    "artifacts/evidence/api37-0564034/workflow-status.json": {
+      "sha256": "2ddbfb50c72cf3e7d90bfb37877974f23ad84a57e5d3bed3c40b4b39fb1052fa",
+      "bytes": 4630
+    }
+  },
+  "codeqlJavaKotlinPassed": true,
+  "codeqlSwiftConclusion": "cancelled",
+  "codeqlPolicyConclusion": "skipped",
+  "codeqlSwiftLogsAvailable": false,
+  "codeqlSwiftLogFailure": "GitHub artifact BlobNotFound404; cancellation cause unknown"
+}
