@@ -1,0 +1,27 @@
+{
+  "command": [
+    "/Users/michaelwong/.pyenv/versions/3.11.1/bin/python3",
+    "-B",
+    "scripts/android_instrumentation_focus.py",
+    "--adb",
+    "/Users/michaelwong/Library/Android/sdk/platform-tools/adb",
+    "--serial",
+    "emulator-5622",
+    "--phase",
+    "baseline",
+    "--log",
+    "/Users/michaelwong/Developer/Covalent/artifacts/evidence/android-window-titles/shade-before/instrumentation.log",
+    "--output",
+    "/Users/michaelwong/Developer/Covalent/artifacts/evidence/android-window-titles/shade-before/focus.json",
+    "--",
+    "-e",
+    "class",
+    "life.michaelwong.covalent.CovalentAppTest#firstLaunchOffersDirectFolderSyncAndBackPreservesBackupDraft",
+    "life.michaelwong.covalent.test/androidx.test.runner.AndroidJUnitRunner"
+  ],
+  "exitCode": 0,
+  "seconds": 20.592,
+  "recorderSha256": "af65286e7f88230803ad685dd8307f1fdfa92853512052ef51bdfcd316de0a4e",
+  "deliberatelyExpandedShade": true,
+  "originalTestUnchanged": true
+}

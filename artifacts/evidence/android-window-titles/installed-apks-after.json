@@ -1,0 +1,10 @@
+{
+  "life.michaelwong.covalent": {
+    "sha256": "d46aa67c755bb087b4b0b8f57e787a23f6a808c41a11bead6830b6dbed918ce9",
+    "bytes": 58756385
+  },
+  "life.michaelwong.covalent.test": {
+    "sha256": "20ef253cf37922980768e39b189da9d0086c861a274b4158958c8cc809beccec",
+    "bytes": 1340440
+  }
+}

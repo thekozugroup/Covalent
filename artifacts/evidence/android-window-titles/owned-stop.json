@@ -1,0 +1,10 @@
+{
+  "emulator": "Interlink_Back_Focus_API37",
+  "serial": "emulator-5622",
+  "adbUnavailableAfterShutdown": true,
+  "diskRetained": true,
+  "verificationVmStopped": true,
+  "defaultVmRunning": true,
+  "defaultDockerContext": "colima",
+  "otherEmulatorsTouched": false
+}

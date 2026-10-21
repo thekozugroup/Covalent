@@ -19,12 +19,18 @@ SAMPLE_SECONDS = .5
 MAX_SAMPLES, MAX_FAILURES, FAILURE_HISTORY = 256, 16, 32
 MAX_LOG_CHUNK, MAX_LINE = 256 * 1024, 8192
 FLAGS = ("mShowingDream", "mDreamingLockscreen", "mShowingLockscreen", "mKeyguardShowing",
-         "mAwake", "mScreenOnEarly", "mScreenOnFully", "mDisplayFrozen")
+         "mAwake", "mScreenOnEarly", "mScreenOnFully", "mDisplayFrozen",
+         "mKeyguardOccluded", "mPendingKeyguardOccluded")
 
 
 def owner(value):
     if value == "null":
         return "none"
+    # WindowState prints its title, which need not be a package/component.
+    # Admit only exact public platform titles; never retain arbitrary titles.
+    title = re.fullmatch(r"Window\{[a-fA-F0-9]+ u[0-9]+ (NotificationShade|StatusBar)(?: EXITING)?\}", value)
+    if title:
+        return {"NotificationShade": "notification-shade", "StatusBar": "status-bar"}[title[1]]
     match = re.search(r"(?:^|\s)([A-Za-z0-9_.]+)/([A-Za-z0-9_.$]+)(?:\s|\})", value)
     if not match:
         return "unrecognized"
@@ -47,6 +53,7 @@ def owner(value):
 class WindowFields:
     def __init__(self):
         self.values = {}
+        self.keyguard_indent = None
 
     def add(self, key, value):
         previous = self.values.get(key)
@@ -54,7 +61,20 @@ class WindowFields:
 
     def consume(self, line):
         if len(line) > MAX_LINE:
+            self.keyguard_indent = None
             return
+        indent = len(line) - len(line.lstrip(" "))
+        if line.strip() == "KeyguardServiceDelegate":
+            self.keyguard_indent = indent
+            return
+        if line.strip() and self.keyguard_indent is not None:
+            if indent <= self.keyguard_indent:
+                self.keyguard_indent = None
+            else:
+                guard = re.fullmatch(r"\s*(showing|inputRestricted|occluded)=(true|false)", line)
+                if guard and indent == self.keyguard_indent + 2:
+                    self.add({"showing": "keyguardShowing", "inputRestricted": "keyguardInputRestricted",
+                              "occluded": "keyguardOccluded"}[guard[1]], guard[2] == "true")
         match = re.fullmatch(r"\s*(mCurrentFocus|mFocusedApp)=(.{1,1024})", line)
         if match:
             self.add(match[1], owner(match[2]))
@@ -69,6 +89,16 @@ class WindowFields:
         return {"currentFocus": self.values.get("mCurrentFocus", "unreported"),
                 "focusedApp": self.values.get("mFocusedApp", "unreported"),
                 **{key: value for key, value in self.values.items() if key not in {"mCurrentFocus", "mFocusedApp"}}}
+
+
+def read_window(adb, serial):
+    fields = WindowFields()
+    read = bounded_read([adb, "-s", serial, "shell", "dumpsys", "window"],
+                        fields.consume, max_bytes=256 * 1024, timeout=2)
+    complete = read["exitCode"] == 0 and read["clientStopped"] and not any(
+        read[key] for key in ("timedOut", "limitReached", "failureClass"))
+    return {"read": read, "window": fields.result() if complete else {
+        "currentFocus": "unavailable", "focusedApp": "unavailable"}}
 
 
 class FocusRecorder:
@@ -139,14 +169,9 @@ class FocusRecorder:
             self.pending, self.discard = b"", True
 
     def sample(self):
-        fields = WindowFields()
         before = self.elapsed()
-        read = bounded_read([self.adb, "-s", self.serial, "shell", "dumpsys", "window"],
-                            fields.consume, max_bytes=256 * 1024, timeout=2)
-        complete = read["exitCode"] == 0 and read["clientStopped"] and not any(
-            read[key] for key in ("timedOut", "limitReached", "failureClass"))
-        sample = {"hostElapsedMs": before, "completedElapsedMs": self.elapsed(), "read": read,
-                  "window": fields.result() if complete else {"currentFocus": "unavailable", "focusedApp": "unavailable"}}
+        observation = read_window(self.adb, self.serial)
+        sample = {"hostElapsedMs": before, "completedElapsedMs": self.elapsed(), **observation}
         if len(self.samples) == MAX_SAMPLES:
             self.samples_dropped += 1
         self.samples.append(sample)

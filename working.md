@@ -1,3 +1,33 @@
+# Android display admission — 2026-10-21
+
+An expanded notification shade reproduces the unchanged onboarding Back failure
+on the owned API37 ARM64 emulator. The old recorder reports unrecognized focus
+for all33 samples, matching the shape of hosted8b3cb32's144 unrecognized samples.
+The hosted raw title was discarded, so its actual cause remains unproved.
+
+The recorder now recognizes exact public shade/status-bar titles and scoped
+keyguard booleans. Before instrumentation, one owned-emulator setup wakes the
+screen, dismisses keyguard and closes panels; two complete consistent observations
+must prove an interactive display. Unknown/incomplete/locked states, command
+failure or a changed boot stop the gate before tests. No action repairs a running
+test; Back, test deadlines, original commands and JUnit verdicts stay unchanged.
+
+The deliberate shade case fails in20.592s and remains rejected by the original
+validator. Preparation clears that fixture; the test passes in7.503s. A confirmed
+sleep fixture then wakes with final-source setup, and the final unchanged test
+passes in5.964s with9 complete samples and stable boot/framework identities.
+A prior POWER observation did not prove sleep and remains separately retained.
+All214 APK source inputs and both installed APK hashes remain unchanged.
+
+All31 recorder/setup checks pass on macOS and isolated Linux; existing reader35,
+verdict87, foundation and shell checks pass. Owned emulator/VM are stopped with
+disks retained; the default VM/context and other emulators are preserved. See
+docs/android-test-display-readiness.md and its source-bound evidence manifest.
+Hosted acceptance, physical devices, production signing and final release remain
+open. No production app, ROM, account, pairing or original-media changes.
+
+---
+
 # Android focus failure evidence — 2026-10-21
 
 The existing baseline and SAF device phases now record bounded window-focus

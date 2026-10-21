@@ -1,0 +1,39 @@
+[
+  {
+    "command": [
+      "python3",
+      "-B",
+      "-W",
+      "error::ResourceWarning",
+      "scripts/test-android-instrumentation-focus.py"
+    ],
+    "exitCode": 0,
+    "seconds": 0.14,
+    "log": "artifacts/evidence/android-window-titles/host-0.log",
+    "sha256": "d4faf86a3e0e3f034891f8e187cca6a2b8bc14006bb329295d67d71150c8a5a5"
+  },
+  {
+    "command": [
+      "python3",
+      "-B",
+      "-W",
+      "error::ResourceWarning",
+      "scripts/test-android-test-display.py"
+    ],
+    "exitCode": 0,
+    "seconds": 0.09,
+    "log": "artifacts/evidence/android-window-titles/host-1.log",
+    "sha256": "84d8772355e571485804666521d02c4d9d3dc524b3389ba7950c37dc4c70d799"
+  },
+  {
+    "command": [
+      "sh",
+      "-n",
+      "scripts/android-api37-device-test.sh"
+    ],
+    "exitCode": 0,
+    "seconds": 0.009,
+    "log": "artifacts/evidence/android-window-titles/host-2.log",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+]

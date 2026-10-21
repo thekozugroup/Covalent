@@ -1,0 +1,20 @@
+{
+  "head": "8b3cb32f1af3287124584e70d98660f10f50ade4",
+  "run": 39681087839,
+  "job": 119503433706,
+  "url": "https://github.com/thekozugroup/Covalent/actions/runs/39681087839",
+  "baselineTests": 86,
+  "failures": 1,
+  "currentFocusCounts": {
+    "unrecognized": 144
+  },
+  "focusedAppCounts": {
+    "settings": 35,
+    "compose-activity": 95,
+    "test-invoker": 14
+  },
+  "originalFocusJsonSha256": "e75e4b6927a575fc9f7fa60aed0105d5bbb0df5202b7cf3e19ada8d0ac187f5f",
+  "jobLogSha256": "e2b0a0e0bd4d64142c8a7ed143e87c82d49174b9e6f6d9839bf9a693a60601d2",
+  "rawTitlesRecoverable": false,
+  "localReproductionProvesHostedCause": false
+}

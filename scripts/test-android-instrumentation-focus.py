@@ -59,6 +59,35 @@ class WindowRedaction(unittest.TestCase):
         self.assertEqual(parser.result()["mAwake"], "ambiguous")
         self.assertNotIn(SECRET, json.dumps(parser.result()))
 
+    def test_system_window_titles_require_exact_platform_descriptor(self):
+        for title, expected in (("NotificationShade", "notification-shade"), ("StatusBar", "status-bar")):
+            for suffix in ("}", " EXITING}"):
+                self.assertEqual(focus.owner("Window{Ab13 u0 " + title + suffix), expected)
+            for value in (title, "Window{9 u0 " + title + SECRET + "}",
+                          "ActivityRecord{9 u0 " + title + "}", "Window{nothex u0 " + title + "}"):
+                self.assertNotIn(focus.owner(value), {"notification-shade", "status-bar"})
+
+    def test_keyguard_fields_are_scoped_and_conflicts_remain_explicit(self):
+        parser = focus.WindowFields()
+        for line in ("showing=true", "    KeyguardServiceDelegate", "      showing=false",
+                     "      inputRestricted=false", "      occluded=false",
+                     "        showing=true", "    Looper state:", "      showing=true"):
+            parser.consume(line)
+        self.assertEqual(parser.result()["keyguardShowing"], False)
+        self.assertEqual(parser.result()["keyguardInputRestricted"], False)
+        self.assertEqual(parser.result()["keyguardOccluded"], False)
+        parser.consume("    KeyguardServiceDelegate"); parser.consume("      showing=true")
+        self.assertEqual(parser.result()["keyguardShowing"], "ambiguous")
+
+    def test_keyguard_malformed_overlong_and_private_fields_are_not_retained(self):
+        parser = focus.WindowFields()
+        for line in ("    KeyguardServiceDelegate", "      showing=false " + SECRET,
+                     "      inputRestricted=false" + SECRET, "      userId=" + SECRET,
+                     "x" * (focus.MAX_LINE + 1), "      occluded=false"):
+            parser.consume(line)
+        self.assertEqual(parser.result(), {"currentFocus": "unreported", "focusedApp": "unreported"})
+        self.assertNotIn(SECRET, json.dumps(parser.result()))
+
     def test_overlong_and_non_boolean_payloads_never_become_evidence(self):
         parser = focus.WindowFields()
         for line in ("mCurrentFocus=" + "x" * 9000, "mAwake=true" + SECRET, "mTopFocusedDisplayId=-1"):

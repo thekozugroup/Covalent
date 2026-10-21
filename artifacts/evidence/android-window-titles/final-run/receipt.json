@@ -1,0 +1,53 @@
+{
+  "command": [
+    "/Users/michaelwong/.pyenv/versions/3.11.1/bin/python3",
+    "-B",
+    "scripts/android_instrumentation_focus.py",
+    "--adb",
+    "/Users/michaelwong/Library/Android/sdk/platform-tools/adb",
+    "--serial",
+    "emulator-5622",
+    "--phase",
+    "baseline",
+    "--log",
+    "/Users/michaelwong/Developer/Covalent/artifacts/evidence/android-window-titles/final-run/instrumentation.log",
+    "--output",
+    "/Users/michaelwong/Developer/Covalent/artifacts/evidence/android-window-titles/final-run/focus.json",
+    "--",
+    "-e",
+    "class",
+    "life.michaelwong.covalent.CovalentAppTest#firstLaunchOffersDirectFolderSyncAndBackPreservesBackupDraft",
+    "life.michaelwong.covalent.test/androidx.test.runner.AndroidJUnitRunner"
+  ],
+  "exitCode": 0,
+  "seconds": 5.964,
+  "before": {
+    "bootId": "169706f8-5a79-45cf-a7a2-99c8e8230ebe",
+    "system_server": "607:376",
+    "surfaceflinger": "464:221"
+  },
+  "after": {
+    "bootId": "169706f8-5a79-45cf-a7a2-99c8e8230ebe",
+    "system_server": "607:376",
+    "surfaceflinger": "464:221"
+  },
+  "frameworkUnchanged": true,
+  "sourceHashes": {
+    "scripts/android_instrumentation_focus.py": "f49cff86435141258735608cbffbf3913be421736af31e2c73bba70350482673",
+    "scripts/prepare-android-test-display.py": "5cc578797a10672a63391f03cabd1676e304fba4f11252f98dfe6edcde017009",
+    "scripts/android-api37-device-test.sh": "c0c2ccab077bceb334ff7564d590f161154e0658627ad2ea305ca0fa7d7f65a8",
+    "scripts/test-android-instrumentation-focus.py": "b352166006f3366fb62adb79ba7d860052389b8f53bb378e3f735497c83f8554",
+    "scripts/test-android-test-display.py": "592487ad04f988683899812cc704c6b46f1e30376aca4d24f211fc8bc72662d9",
+    ".github/workflows/ci.yml": "b98ffc8103a7c8f8f41e5461a0e4955d692ad9de342cb37698f4c2d515d62726"
+  },
+  "apkSourceBindingsVerified": 214,
+  "apkRebuiltOrInstalled": false,
+  "originalTestUnchanged": true,
+  "preparationBeforeInstrumentationOnly": true,
+  "controlledCasesDistinct": true,
+  "physicalAccepted": false,
+  "hostedCauseProven": false,
+  "samples": 9,
+  "samplerStopped": true,
+  "readsComplete": true
+}

@@ -1,0 +1,344 @@
+{
+  "format": 1,
+  "sourceSha256": "f49cff86435141258735608cbffbf3913be421736af31e2c73bba70350482673",
+  "boundedReaderSha256": "de1298052e65573cd1bfd023e3c3a2fe19e4204382048f17666f9766f6389807",
+  "readerDependencySha256": "cb14714892879551607de292d155d33ae7214a18df6ba48d1b6b7de09686186f",
+  "rawWindowDumpsRetained": false,
+  "rawInstrumentationTextRetained": false,
+  "sampleIntervalMs": 500,
+  "failureClass": null,
+  "samplerAliveAfterStop": false,
+  "samplesDropped": 0,
+  "failuresDropped": 0,
+  "samples": [
+    {
+      "hostElapsedMs": 0,
+      "completedElapsedMs": 51,
+      "read": {
+        "bytesRead": 47708,
+        "limitReached": false,
+        "timedOut": false,
+        "exitCode": 0,
+        "clientStopped": true,
+        "failureClass": null
+      },
+      "window": {
+        "currentFocus": "launcher",
+        "focusedApp": "launcher",
+        "mKeyguardOccluded": false,
+        "mPendingKeyguardOccluded": false,
+        "keyguardShowing": false,
+        "keyguardInputRestricted": false,
+        "keyguardOccluded": false,
+        "mAwake": true,
+        "mScreenOnEarly": true,
+        "mScreenOnFully": true,
+        "mShowingDream": false,
+        "mDreamingLockscreen": false,
+        "mTopFocusedDisplayId": 0
+      }
+    },
+    {
+      "hostElapsedMs": 562,
+      "completedElapsedMs": 634,
+      "read": {
+        "bytesRead": 47708,
+        "limitReached": false,
+        "timedOut": false,
+        "exitCode": 0,
+        "clientStopped": true,
+        "failureClass": null
+      },
+      "window": {
+        "currentFocus": "launcher",
+        "focusedApp": "launcher",
+        "mKeyguardOccluded": false,
+        "mPendingKeyguardOccluded": false,
+        "keyguardShowing": false,
+        "keyguardInputRestricted": false,
+        "keyguardOccluded": false,
+        "mAwake": true,
+        "mScreenOnEarly": true,
+        "mScreenOnFully": true,
+        "mShowingDream": false,
+        "mDreamingLockscreen": false,
+        "mTopFocusedDisplayId": 0
+      }
+    },
+    {
+      "hostElapsedMs": 1135,
+      "completedElapsedMs": 1174,
+      "read": {
+        "bytesRead": 47708,
+        "limitReached": false,
+        "timedOut": false,
+        "exitCode": 0,
+        "clientStopped": true,
+        "failureClass": null
+      },
+      "window": {
+        "currentFocus": "launcher",
+        "focusedApp": "launcher",
+        "mKeyguardOccluded": false,
+        "mPendingKeyguardOccluded": false,
+        "keyguardShowing": false,
+        "keyguardInputRestricted": false,
+        "keyguardOccluded": false,
+        "mAwake": true,
+        "mScreenOnEarly": true,
+        "mScreenOnFully": true,
+        "mShowingDream": false,
+        "mDreamingLockscreen": false,
+        "mTopFocusedDisplayId": 0
+      }
+    },
+    {
+      "hostElapsedMs": 1687,
+      "completedElapsedMs": 1999,
+      "read": {
+        "bytesRead": 49166,
+        "limitReached": false,
+        "timedOut": false,
+        "exitCode": 0,
+        "clientStopped": true,
+        "failureClass": null
+      },
+      "window": {
+        "currentFocus": "none",
+        "focusedApp": "compose-activity",
+        "mKeyguardOccluded": false,
+        "mPendingKeyguardOccluded": false,
+        "keyguardShowing": false,
+        "keyguardInputRestricted": false,
+        "keyguardOccluded": false,
+        "mAwake": true,
+        "mScreenOnEarly": true,
+        "mScreenOnFully": true,
+        "mShowingDream": false,
+        "mDreamingLockscreen": false,
+        "mTopFocusedDisplayId": 0
+      }
+    },
+    {
+      "hostElapsedMs": 2505,
+      "completedElapsedMs": 2747,
+      "read": {
+        "bytesRead": 48775,
+        "limitReached": false,
+        "timedOut": false,
+        "exitCode": 0,
+        "clientStopped": true,
+        "failureClass": null
+      },
+      "window": {
+        "currentFocus": "none",
+        "focusedApp": "compose-activity",
+        "mKeyguardOccluded": false,
+        "mPendingKeyguardOccluded": false,
+        "keyguardShowing": false,
+        "keyguardInputRestricted": false,
+        "keyguardOccluded": false,
+        "mAwake": true,
+        "mScreenOnEarly": true,
+        "mScreenOnFully": true,
+        "mShowingDream": false,
+        "mDreamingLockscreen": false,
+        "mTopFocusedDisplayId": 0
+      }
+    },
+    {
+      "hostElapsedMs": 3258,
+      "completedElapsedMs": 3560,
+      "read": {
+        "bytesRead": 50438,
+        "limitReached": false,
+        "timedOut": false,
+        "exitCode": 0,
+        "clientStopped": true,
+        "failureClass": null
+      },
+      "window": {
+        "currentFocus": "compose-activity",
+        "focusedApp": "compose-activity",
+        "mKeyguardOccluded": false,
+        "mPendingKeyguardOccluded": false,
+        "keyguardShowing": false,
+        "keyguardInputRestricted": false,
+        "keyguardOccluded": false,
+        "mAwake": true,
+        "mScreenOnEarly": true,
+        "mScreenOnFully": true,
+        "mShowingDream": false,
+        "mDreamingLockscreen": false,
+        "mTopFocusedDisplayId": 0
+      }
+    },
+    {
+      "hostElapsedMs": 4061,
+      "completedElapsedMs": 4115,
+      "read": {
+        "bytesRead": 49084,
+        "limitReached": false,
+        "timedOut": false,
+        "exitCode": 0,
+        "clientStopped": true,
+        "failureClass": null
+      },
+      "window": {
+        "currentFocus": "compose-activity",
+        "focusedApp": "compose-activity",
+        "mKeyguardOccluded": false,
+        "mPendingKeyguardOccluded": false,
+        "keyguardShowing": false,
+        "keyguardInputRestricted": false,
+        "keyguardOccluded": false,
+        "mAwake": true,
+        "mScreenOnEarly": true,
+        "mScreenOnFully": true,
+        "mShowingDream": false,
+        "mDreamingLockscreen": false,
+        "mTopFocusedDisplayId": 0
+      }
+    },
+    {
+      "hostElapsedMs": 4617,
+      "completedElapsedMs": 4680,
+      "read": {
+        "bytesRead": 49083,
+        "limitReached": false,
+        "timedOut": false,
+        "exitCode": 0,
+        "clientStopped": true,
+        "failureClass": null
+      },
+      "window": {
+        "currentFocus": "compose-activity",
+        "focusedApp": "compose-activity",
+        "mKeyguardOccluded": false,
+        "mPendingKeyguardOccluded": false,
+        "keyguardShowing": false,
+        "keyguardInputRestricted": false,
+        "keyguardOccluded": false,
+        "mAwake": true,
+        "mScreenOnEarly": true,
+        "mScreenOnFully": true,
+        "mShowingDream": false,
+        "mDreamingLockscreen": false,
+        "mTopFocusedDisplayId": 0
+      }
+    },
+    {
+      "hostElapsedMs": 5183,
+      "completedElapsedMs": 5229,
+      "read": {
+        "bytesRead": 49084,
+        "limitReached": false,
+        "timedOut": false,
+        "exitCode": 0,
+        "clientStopped": true,
+        "failureClass": null
+      },
+      "window": {
+        "currentFocus": "compose-activity",
+        "focusedApp": "compose-activity",
+        "mKeyguardOccluded": false,
+        "mPendingKeyguardOccluded": false,
+        "keyguardShowing": false,
+        "keyguardInputRestricted": false,
+        "keyguardOccluded": false,
+        "mAwake": true,
+        "mScreenOnEarly": true,
+        "mScreenOnFully": true,
+        "mShowingDream": false,
+        "mDreamingLockscreen": false,
+        "mTopFocusedDisplayId": 0
+      }
+    },
+    {
+      "hostElapsedMs": 5740,
+      "completedElapsedMs": 6010,
+      "read": {
+        "bytesRead": 53304,
+        "limitReached": false,
+        "timedOut": false,
+        "exitCode": 0,
+        "clientStopped": true,
+        "failureClass": null
+      },
+      "window": {
+        "currentFocus": "test-invoker",
+        "focusedApp": "test-invoker",
+        "mKeyguardOccluded": false,
+        "mPendingKeyguardOccluded": false,
+        "keyguardShowing": false,
+        "keyguardInputRestricted": false,
+        "keyguardOccluded": false,
+        "mAwake": true,
+        "mScreenOnEarly": true,
+        "mScreenOnFully": true,
+        "mShowingDream": false,
+        "mDreamingLockscreen": false,
+        "mTopFocusedDisplayId": 0
+      }
+    },
+    {
+      "hostElapsedMs": 6516,
+      "completedElapsedMs": 6732,
+      "read": {
+        "bytesRead": 54767,
+        "limitReached": false,
+        "timedOut": false,
+        "exitCode": 0,
+        "clientStopped": true,
+        "failureClass": null
+      },
+      "window": {
+        "currentFocus": "launcher",
+        "focusedApp": "launcher",
+        "mKeyguardOccluded": false,
+        "mPendingKeyguardOccluded": false,
+        "keyguardShowing": false,
+        "keyguardInputRestricted": false,
+        "keyguardOccluded": false,
+        "mAwake": true,
+        "mScreenOnEarly": true,
+        "mScreenOnFully": true,
+        "mShowingDream": false,
+        "mDreamingLockscreen": false,
+        "mTopFocusedDisplayId": 0
+      }
+    },
+    {
+      "hostElapsedMs": 7237,
+      "completedElapsedMs": 7381,
+      "read": {
+        "bytesRead": 50598,
+        "limitReached": false,
+        "timedOut": false,
+        "exitCode": 0,
+        "clientStopped": true,
+        "failureClass": null
+      },
+      "window": {
+        "currentFocus": "launcher",
+        "focusedApp": "launcher",
+        "mKeyguardOccluded": false,
+        "mPendingKeyguardOccluded": false,
+        "keyguardShowing": false,
+        "keyguardInputRestricted": false,
+        "keyguardOccluded": false,
+        "mAwake": true,
+        "mScreenOnEarly": true,
+        "mScreenOnFully": true,
+        "mShowingDream": false,
+        "mDreamingLockscreen": false,
+        "mTopFocusedDisplayId": 0
+      }
+    }
+  ],
+  "failures": [],
+  "phase": "baseline",
+  "instrumentationExitCode": 0,
+  "instrumentationRetried": false,
+  "resultReinterpreted": false
+}
