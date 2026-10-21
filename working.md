@@ -1,5 +1,26 @@
 # Interlink companion and appliance robustness — 2026-10-20
 
+Software work continues first at the user's request. Hosted source 126cec9
+run 39520547422 is terminal: seven lanes pass; the API37 lane passes all 86
+baseline tests plus the SAF journey, then fails at the permission harness's
+Open settings tap (exit 20). The combined release gate fails. Its error output
+was discarded; cause and tap delivery remain unknown, not an established app
+regression. Private evidence: hosted-126cec9-failure.json and the retained ZIP.
+
+The permission harness now records safe failure categories, exit codes and
+output hashes, then observes fresh allowlisted UI state, framework IDs and
+identity hashes before cleanup. Nonzero input still fails; there is no input
+replay, guest restart or bypass of either recovery route. Cleanup failures no
+longer discard the primary error/receipt. Nine no-device regression checks pass
+and join Android foundation CI. The final headed API37 ARM64 run passes both
+real grant routes, native ready/foreground-service checks, unchanged three
+identity hashes and stable boot/system_server/surfaceflinger. Its receipt binds
+the actual harness SHA-256. App runtime/APK bytes are unchanged. Evidence:
+artifacts/interlink-qa/api37-input-diagnostics-final.log and
+api37-input-diagnostics-final/permission-recovery.json.
+Latest-source hosted acceptance remains required. See
+docs/interlink-permission-qa.md for what the diagnostics can establish.
+
 Hosted 1481c16 run 39514337288 passes Android foundation, Rust/contracts, both
 containers, dependencies and both macOS jobs. Its device job passes all 86
 baseline tests and the SAF journey, then fails at the added permission

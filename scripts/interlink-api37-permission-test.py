@@ -28,6 +28,59 @@ IDENTITIES = (
     "no_backup/covalent-node/tls/identity.json",
     "no_backup/covalent-node-secrets/kek-envelope.v1",
 )
+SAFE_TEXTS = frozenset((
+    "Get started", "Interlink", "Pair your Pi to continue", "Nearby devices access is off",
+    "Allow access", "Open settings", "Permissions", "Nearby devices", "Allow", "Don't allow",
+))
+SAFE_PACKAGES = frozenset((PACKAGE, "com.android.settings", "com.android.permissioncontroller",
+                           "com.google.android.permissioncontroller", "com.android.systemui"))
+
+
+def command_diagnostic(command, result):
+    """Retain error categories and hashes, never arbitrary adb output or arguments."""
+    verbs = {"shell", "input", "tap", "keyevent", "pm", "grant", "revoke", "path", "am", "start",
+             "force-stop", "run-as", "sha256sum", "getprop", "getconf", "pidof", "cat", "rm",
+             "uiautomator", "dump", "dumpsys", "activity", "package", "install", "emu", "avd", "name"}
+    label = " ".join(token if token in verbs else "<argument>" for token in command[:3])
+    output = (result.stdout or "") + "\n" + (result.stderr or "")
+    exceptions = ("java.lang.SecurityException", "java.lang.IllegalArgumentException",
+                  "java.lang.IllegalStateException", "java.lang.NullPointerException",
+                  "android.os.DeadObjectException", "android.os.RemoteException",
+                  "android.os.ServiceSpecificException")
+    signals = {
+        "inject-events-permission": "INJECT_EVENTS",
+        "permission-denial": "Permission Denial",
+        "input-injection-failed": "Failed to inject",
+        "missing-service": "Can't find service",
+        "device-offline": "device offline",
+        "device-not-found": "device not found",
+        "unknown-command": "Unknown command",
+        "security-exception": "Security exception",
+        "broken-pipe": "Broken pipe",
+        "timed-out": "timed out",
+    }
+    return {
+        "command": label, "exitCode": result.returncode,
+        "exceptionClasses": [name for name in exceptions if name in output],
+        "signals": [name for name, marker in signals.items() if marker in output],
+        "stdoutSha256": hashlib.sha256((result.stdout or "").encode()).hexdigest(),
+        "stderrSha256": hashlib.sha256((result.stderr or "").encode()).hexdigest(),
+    }
+
+
+def ui_diagnostic(tree):
+    """Allowlisted UI observations only; no arbitrary labels, account names or URLs."""
+    if tree is None:
+        return {"available": False}
+    return {
+        "available": True,
+        "packages": sorted({n.get("package") for n in tree.iter("node") if n.get("package") in SAFE_PACKAGES}),
+        "texts": sorted({n.get("text") for n in tree.iter("node") if n.get("text") in SAFE_TEXTS}),
+        "runtimeAllowVisible": any(n.get("resource-id") in {
+            "com.android.permissioncontroller:id/permission_allow_button",
+            "com.google.android.permissioncontroller:id/permission_allow_button",
+        } for n in tree.iter("node")),
+    }
 
 
 def main():
@@ -47,7 +100,8 @@ def main():
         parser.error("build :companion:assembleDebug before booting the emulator")
     evidence = args.evidence_dir.resolve()
     evidence.mkdir(parents=True, exist_ok=True)
-    receipt = {"avd": args.avd, "serial": args.serial, "phases": [], "result": "failed"}
+    receipt = {"avd": args.avd, "serial": args.serial, "phases": [], "result": "failed",
+               "harnessSha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest()}
     ui_path = f"/data/local/tmp/interlink-permission-{uuid.uuid4().hex}.xml"
     permission_mutated = False
     fixture_owned = False
@@ -57,8 +111,10 @@ def main():
             [adb, "-s", args.serial, *command], capture_output=True, text=True, timeout=timeout,
         )
         if check and result.returncode:
-            # Avoid echoing adb output: private paths/process diagnostics can contain secrets.
-            raise RuntimeError(f"adb command failed: {' '.join(command[:3])} (exit {result.returncode})")
+            diagnostic = command_diagnostic(command, result)
+            receipt.setdefault("commandFailures", []).append(diagnostic)
+            print("ADB failure: " + json.dumps(diagnostic, sort_keys=True), flush=True)
+            raise RuntimeError(f"adb command failed: {diagnostic['command']} (exit {result.returncode})")
         return result.stdout.strip()
 
     def mark(phase):
@@ -101,6 +157,8 @@ def main():
         x1, y1, x2, y2 = map(int, bounds.groups())
         if x2 <= x1 or y2 <= y1:
             raise RuntimeError("UI action is outside the viewport")
+        receipt["lastAction"] = {"kind": "tap", "target": text if text in SAFE_TEXTS else "runtime permission allow",
+                                 "sourceUi": ui_diagnostic(tree)}
         run("shell", "input", "tap", str((x1 + x2) // 2), str((y1 + y2) // 2))
 
     def launch():
@@ -121,6 +179,18 @@ def main():
             if not re.fullmatch(r"[0-9a-f]{64}", digest):
                 raise RuntimeError("invalid identity hash receipt")
             values[name] = digest
+        return values
+
+    def framework():
+        boot = run("shell", "cat", "/proc/sys/kernel/random/boot_id")
+        if not re.fullmatch(r"[0-9a-f-]{36}", boot):
+            raise RuntimeError("invalid boot identity")
+        values = {"bootId": boot}
+        for name in ("system_server", "surfaceflinger"):
+            pid = run("shell", "pidof", name)
+            if not re.fullmatch(r"[1-9][0-9]*", pid):
+                raise RuntimeError("expected one Android framework process")
+            values[name] = int(pid)
         return values
 
     def revoke_and_open():
@@ -176,6 +246,7 @@ def main():
             raise RuntimeError("physical devices are not accepted")
         if run("shell", "getprop", "ro.build.version.sdk") != "37" or run("shell", "getprop", "sys.boot_completed") != "1":
             raise RuntimeError("fixture must be a booted API 37 emulator")
+        receipt["frameworkBefore"] = framework()
         if run("shell", "pm", "path", PACKAGE, check=False):
             run("shell", "run-as", PACKAGE, "true")  # Refuse an existing non-debug installation.
         run("install", "-r", str(apk), timeout=120)
@@ -233,13 +304,42 @@ def main():
         receipt["identitySha256After"] = after
         permission_mutated = False  # Both real grant routes already restored it.
         mark("runtime grant restarts native host and preserves identities")
+        receipt["frameworkAfter"] = framework()
+        if receipt["frameworkAfter"] != receipt["frameworkBefore"]:
+            raise RuntimeError("Android framework restarted during permission recovery")
+        mark("Android framework remained stable through both recovery routes")
         receipt["result"] = "passed"
-    finally:
+    except (RuntimeError, subprocess.SubprocessError, OSError, ET.ParseError) as error:
+        receipt["failureClass"] = type(error).__name__
+        # Observe the existing guest before cleanup. A failing input command
+        # might have delivered the tap; keep that distinction without accepting
+        # its nonzero exit, replaying input, or restarting the emulator.
         if fixture_owned:
+            for name, observe in (("failureUi", lambda: ui_diagnostic(dump())),
+                                  ("frameworkAtFailure", framework), ("identitySha256AtFailure", hashes)):
+                try:
+                    receipt[name] = observe()
+                except (RuntimeError, subprocess.SubprocessError, OSError, ET.ParseError) as observation_error:
+                    receipt[name] = {"observationFailureClass": type(observation_error).__name__}
+        raise
+    finally:
+        cleanup_failures = []
+        if fixture_owned:
+            actions = [("remove owned UI dump", ("shell", "rm", "-f", ui_path))]
             if permission_mutated:
-                run("shell", "pm", "grant", PACKAGE, PERMISSION, check=False)
-            run("shell", "rm", "-f", ui_path, check=False)
+                actions.insert(0, ("restore QA permission", ("shell", "pm", "grant", PACKAGE, PERMISSION)))
+            for name, command in actions:
+                try:
+                    run(*command)
+                except (RuntimeError, subprocess.SubprocessError, OSError) as cleanup_error:
+                    cleanup_failures.append({"action": name, "failureClass": type(cleanup_error).__name__})
+        cleanup_invalidated_pass = bool(cleanup_failures) and receipt["result"] == "passed"
+        if cleanup_failures:
+            receipt["cleanupFailures"] = cleanup_failures
+            receipt["result"] = "failed"
         (evidence / "permission-recovery.json").write_text(json.dumps(receipt, indent=2) + "\n")
+        if cleanup_invalidated_pass:
+            raise RuntimeError("QA fixture cleanup failed; failure receipt retained")
 
 
 if __name__ == "__main__":

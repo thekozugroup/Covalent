@@ -211,6 +211,7 @@ jobs:
         run: |
           python3 -B scripts/test-android-inventory.py
           python3 -B scripts/test-interlink-release.py
+          python3 -B scripts/test-interlink-permission-harness.py
       - run: ./scripts/check-android.sh
       - name: Verify dedicated release signing with disposable test keys
         run: |
