@@ -875,6 +875,7 @@ class SafFolderSyncJourneyInstrumentedTest {
         var lastAccessUnavailable = "none"
         var lastErrorClass = "none"
         var lastHttpStatus = "none"
+        var lastHttpCode = "none"
         while (System.nanoTime() < deadline) {
             val current = manager.liveConnection()
             val changedConnection = current?.takeIf { it.baseUrl != excludedBaseUrl }
@@ -892,13 +893,22 @@ class SafFolderSyncJourneyInstrumentedTest {
                     lastSharePhase = share?.phase?.toString() ?: "none"
                     lastFolderState = folder?.state ?: "none"
                     lastAccessUnavailable = folder?.accessUnavailable?.toString() ?: "none"
+                    lastErrorClass = "none"
+                    lastHttpStatus = "none"
+                    lastHttpCode = "none"
+                    // A repaired manual link is available but STOPPED until its
+                    // next explicit run. Requiring a worker here deadlocks the
+                    // test before the very mutation that starts that worker.
                     status.availability == FolderSyncAvailability.AVAILABLE &&
-                        status.lifecycle == FolderSyncLifecycle.RUNNING &&
+                        status.lifecycle in setOf(FolderSyncLifecycle.STOPPED, FolderSyncLifecycle.RUNNING) &&
                         status.issue == null &&
                         accepts(status)
                 } catch (error: Throwable) {
                     lastErrorClass = error.javaClass.name
                     lastHttpStatus = (error as? NodeApiException)?.statusCode?.toString() ?: "none"
+                    lastHttpCode = (error as? NodeApiException)?.code?.takeIf {
+                        it in setOf("folder_sync_busy", "folder_sync_unavailable", "folder_sync_needs_attention")
+                    } ?: "unrecognized"
                     false
                 }
             } == true
@@ -927,7 +937,8 @@ class SafFolderSyncJourneyInstrumentedTest {
                 "lastAvailability=$lastAvailability lastIssue=$lastIssue " +
                 "lastSharePhase=$lastSharePhase lastFolderState=$lastFolderState " +
                 "lastAccessUnavailable=$lastAccessUnavailable persistedPermission=$persistedPermission " +
-                "pendingRepair=$pendingRepair lastErrorClass=$lastErrorClass lastHttpStatus=$lastHttpStatus",
+                "pendingRepair=$pendingRepair lastErrorClass=$lastErrorClass lastHttpStatus=$lastHttpStatus " +
+                "lastHttpCode=$lastHttpCode",
         )
     }
 

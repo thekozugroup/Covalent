@@ -10,8 +10,7 @@ missing endpoint/certificate refusals, authentication, reuse of the same valid
 invitation after endpoint restoration and unchanged identity/trust settings.
 All 303 node library tests and 10 actual network-pairing tests pass. API route
 inventory, OpenAPI lint and Rust formatting pass. No APK/device update or
-release is published by these tests. The existing 2c5fe4d hosted run is retained
-while its API37 job remains active; its seven non-device jobs pass.
+release is published by these tests. The 07f1295 hosted run remains active; no passing device result is claimed.
 
 Software work continues first at the user's request. Hosted 97bf199 run
 39541339765 is terminal: seven non-device lanes and all 86 baseline device
@@ -22,16 +21,29 @@ retained with verified ZIP SHA-256
 6f04dd0b96400d406ffd2335db78f4be4fcb9808a0e02a0579c121309f562867.
 No cause is assigned to the unavailable repaired API.
 
-The follow-up fixes a confirmed test gap: its refreshed-connection predicate
-previously accepted saved share/folder state without requiring native sync to
-be available and running. It now requires AVAILABLE, RUNNING and no issue for
-the unchanged five-second stability window and 90-second overall deadline.
-If the single manual-run mutation is rejected, a read-only observation records
-the current connection match and safe availability/lifecycle/issue values.
-No mutation replay, guest restart, deadline extension or app-runtime change is
-introduced. The instrumentation APK builds successfully in 16 seconds (53
-tasks). This is compile/package validation, not an executed device-journey pass;
-current hosted/device acceptance remains required.
+The 2c5fe4d run 39546668502 is now terminal: seven non-device lanes and all
+86 baseline instrumentation tests pass, but the SAF journey fails before its
+manual mutation. The exact repaired grant and READY share are present; sync is
+AVAILABLE, STOPPED and has no issue. The added RUNNING requirement is wrong for
+an idle manual link, whose worker starts only after the explicit run. Native
+service tests and Android status contracts both define that valid idle state.
+This finding does not explain the older 97bf199 manual-run rejection.
+The downloaded artifact 12321909085 is retained with verified SHA-256
+fa22c9f93935222acd693d50194f0be5bc4b22b1456055e73a609d6718642b83.
+Its native diagnostic log is empty; the permission journey is not reached.
+
+The corrected observation accepts only AVAILABLE with STOPPED or RUNNING and
+no issue, together with the exact repaired grant/share checks. The same refreshed
+connection must satisfy all conditions for the unchanged five seconds within
+90 seconds. Transient errors reset that interval; no manual mutation is retried.
+Safe errors now identify the allowlisted API code and clear prior errors after
+a successful read, so historical 503 responses cannot masquerade as the latest
+sample. The test APK builds in 11 seconds, all 18 focused Android lifecycle/status
+unit tests pass, and the native idle/manual-batch contract test passes. Test APK
+SHA-256: 82f8813947c6d99c030886cdbb8efe1de5f4e6feaab1ca2c6b9e22bb1b6b8885.
+This is a test-observation correction, not an app-runtime change or a full SAF,
+permission-journey, physical-device or release pass. The retained 07f1295 hosted
+run continues undisturbed before this follow-up is pushed.
 
 Earlier hosted source d9eb263, run 39526795075, is terminal: seven non-device lanes and all 87
 baseline/SAF tests pass, but the permission tap reports exit20/missing-service.
