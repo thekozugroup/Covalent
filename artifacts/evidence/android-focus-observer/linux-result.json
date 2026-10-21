@@ -1,0 +1,15 @@
+{
+  "format": 1,
+  "exitCode": 0,
+  "seconds": 0.723,
+  "sourceHashes": {
+    "scripts/android_instrumentation_focus.py": "af65286e7f88230803ad685dd8307f1fdfa92853512052ef51bdfcd316de0a4e",
+    "scripts/test-android-instrumentation-focus.py": "acea76c4ed1cd204241062e05529c6203a969a88236b15dfaaf1d53cebab5c2f",
+    "scripts/interlink_native_reports.py": "de1298052e65573cd1bfd023e3c3a2fe19e4204382048f17666f9766f6389807",
+    "scripts/interlink_framework_trace.py": "cb14714892879551607de292d155d33ae7214a18df6ba48d1b6b7de09686186f"
+  },
+  "snapshot": "/Users/michaelwong/Library/Caches/Covalent/focus-observer-1792618753531163000",
+  "snapshotUnchanged": true,
+  "workspaceSourceMatches": true,
+  "logSha256": "4f94d9ec9b70a36700c67f2ff2200ad1e5dcc0056286daf204523dd071672f1c"
+}

@@ -836,7 +836,9 @@ run_instrumentation_phase() {
   phase_expectation=$2
   shift 2
   phase_log="$evidence_dir/instrumentation-$phase_name.log"
-  if ! "$adb" -s "$serial" shell am instrument -w -r "$@" \
+  if ! python3 -B "$repo_root/scripts/android_instrumentation_focus.py" \
+    --adb "$adb" --serial "$serial" --phase "$phase_name" --log "$phase_log" \
+    --output "$evidence_dir/window-focus-$phase_name.json" -- "$@" \
     life.michaelwong.covalent.test/androidx.test.runner.AndroidJUnitRunner >"$phase_log" 2>&1; then
     cat "$phase_log" >&2
     echo "Android instrumentation phase '$phase_name' failed on $serial." >&2

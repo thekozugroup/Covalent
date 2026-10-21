@@ -1,0 +1,25 @@
+  accepted as designed: a run where every derived test reported OK
+  accepted as designed: the same run with CRLF line endings
+  rejected as designed: a new test added to source but absent from the device run
+  accepted as designed: the same new test once it actually runs and passes
+  rejected as designed: a derived test that never ran on the device
+  rejected as designed: a test that reported the FAILURE status code
+  rejected as designed: a test that was skipped at runtime instead of passing
+  rejected as designed: a test that started and never concluded
+  rejected as designed: a failing test whose output also contains an OK status code
+  rejected as designed: a stale test APK running tests absent from source
+  rejected as designed: a JUnit summary that disagrees with the per-test records
+  rejected as designed: a bare summary line with no per-test status records
+  rejected as designed: a run that executed zero tests
+  rejected as designed: an empty instrumentation log
+  rejected as designed: a run that did not return runner success code -1
+  rejected as designed: a run whose JUnit summary announced failures
+  rejected as designed: a run the instrumentation aborted
+  rejected as designed: an empty expected-suite file
+  rejected as designed: a malformed expected-suite file
+  rejected as designed: a missing expected-suite file
+  rejected as designed: a missing instrumentation log
+  accepted as designed: a synthetic clean run of the repository's own 87-test suite
+  accepted as designed: the exact non-journey suite in its own process
+  accepted as designed: the exact SAF journey suite in its own process
+Android instrumentation result contract: ok (87 tests derived from source)

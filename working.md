@@ -1,3 +1,38 @@
+# Android focus failure evidence — 2026-10-21
+
+The existing baseline and SAF device phases now record bounded window-focus
+metadata while their original instrumentation command runs. Failure statuses
+freeze preceding observations, so a later recovered window cannot erase the
+focus history. Only fixed owner/state categories are retained. Original test
+arguments, output, JUnit validator, Back behavior and deadlines are unchanged.
+No production app, APK or ROM is changed.
+
+All16 observer tests pass on macOS and isolated Linux; existing bounded-reader
+checks pass35 tests, and the unchanged named-test verdict mutation battery
+passes for all87 required tests. Foundation and shell syntax pass. Real hermetic
+clients preserve exit0 for JUnit failure and17 for transport failure; cancellation
+returns143 and stops the owned client/sampler, with one launch per case. The
+original validator rejects the failed JUnit log. These fixtures are not device
+failure reproductions.
+
+The current-source observer identifies deliberate launcher/app/Settings focus
+changes on the owned API37 ARM64 fixture. The unchanged onboarding Back test
+passes in5.811s with10 complete samples and the same boot/framework processes.
+The debug APKs are retained byte-for-byte; all214 relevant APK source inputs
+match their earlier build. Final-run/ carries current-source proof; the first
+passing capture retains its earlier source hash before the ordinal reset guard.
+The emulator and separate Linux verification VM are stopped with disks retained.
+
+Hosted6944b16 still fails one of86 baseline tests at RootViewWithoutFocusException;
+SAF/permission journeys are not reached. The cause remains unproved. The new
+recorder is intended to identify the active focus owner during a future failure;
+local passing tests do not repair that failure or the earlier mapper abort.
+Physical checks remain deferred. See docs/android-focus-evidence.md and
+artifacts/evidence/android-focus-observer/. Full hosted/device/release acceptance
+remains open; accounts, pairing and original media are preserved.
+
+---
+
 # Repeated Android address handoffs — 2026-10-21
 
 The companion now has an explicit diagnostic mode that proves three receiver

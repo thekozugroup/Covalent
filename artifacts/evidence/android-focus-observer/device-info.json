@@ -1,0 +1,19 @@
+{
+  "status": "ok",
+  "data": {
+    "device": {
+      "id": "Interlink_Back_Focus_API37",
+      "name": "Interlink Back Focus API37",
+      "platform": "android",
+      "type": "emulator",
+      "version": "17",
+      "state": "online",
+      "model": "sdk_gphone64_arm64",
+      "screenSize": {
+        "width": 1080,
+        "height": 2400,
+        "scale": 1
+      }
+    }
+  }
+}

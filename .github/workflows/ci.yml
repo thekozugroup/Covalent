@@ -232,6 +232,7 @@ jobs:
           python3 -B scripts/test-android-inventory.py
           python3 -B scripts/test-interlink-release.py
           python3 -B scripts/test-interlink-permission-harness.py
+          python3 -B -W error::ResourceWarning scripts/test-android-instrumentation-focus.py
           python3 -B scripts/test-interlink-native-reports.py
           python3 -B scripts/test-interlink-reboot-harness.py
       - run: ./scripts/check-android.sh

@@ -1,0 +1,85 @@
+{
+  "format": 1,
+  "sourceSha256": "af65286e7f88230803ad685dd8307f1fdfa92853512052ef51bdfcd316de0a4e",
+  "bootId": "ab65d276-41a8-443c-9c0a-fcde57e602c1",
+  "rolesObserved": [
+    {
+      "role": "launcher",
+      "sample": {
+        "hostElapsedMs": 0,
+        "completedElapsedMs": 55,
+        "read": {
+          "bytesRead": 47557,
+          "limitReached": false,
+          "timedOut": false,
+          "exitCode": 0,
+          "clientStopped": true,
+          "failureClass": null
+        },
+        "window": {
+          "currentFocus": "launcher",
+          "focusedApp": "launcher",
+          "mAwake": true,
+          "mScreenOnEarly": true,
+          "mScreenOnFully": true,
+          "mShowingDream": false,
+          "mDreamingLockscreen": false,
+          "mTopFocusedDisplayId": 0
+        }
+      }
+    },
+    {
+      "role": "app-main",
+      "sample": {
+        "hostElapsedMs": 2454,
+        "completedElapsedMs": 2540,
+        "read": {
+          "bytesRead": 50329,
+          "limitReached": false,
+          "timedOut": false,
+          "exitCode": 0,
+          "clientStopped": true,
+          "failureClass": null
+        },
+        "window": {
+          "currentFocus": "app-main",
+          "focusedApp": "app-main",
+          "mAwake": true,
+          "mScreenOnEarly": true,
+          "mScreenOnFully": true,
+          "mShowingDream": false,
+          "mDreamingLockscreen": false,
+          "mTopFocusedDisplayId": 0
+        }
+      }
+    },
+    {
+      "role": "settings",
+      "sample": {
+        "hostElapsedMs": 3609,
+        "completedElapsedMs": 3818,
+        "read": {
+          "bytesRead": 53399,
+          "limitReached": false,
+          "timedOut": false,
+          "exitCode": 0,
+          "clientStopped": true,
+          "failureClass": null
+        },
+        "window": {
+          "currentFocus": "settings",
+          "focusedApp": "settings",
+          "mAwake": true,
+          "mScreenOnEarly": true,
+          "mScreenOnFully": true,
+          "mShowingDream": false,
+          "mDreamingLockscreen": false,
+          "mTopFocusedDisplayId": 0
+        }
+      }
+    }
+  ],
+  "allOwnedReadClientsStopped": true,
+  "thisIsDeliberateForegroundClassificationNotReproductionOfHostedFailure": true,
+  "accountOrOriginalMediaChanged": false
+}

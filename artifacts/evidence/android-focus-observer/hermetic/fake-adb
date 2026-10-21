@@ -1,0 +1,24 @@
+#!/Users/michaelwong/.pyenv/versions/3.11.1/bin/python3
+import os,sys,time
+from pathlib import Path
+base=Path(__file__).parent
+args=sys.argv[3:]
+if args==['emu','avd','name']:
+ print('Interlink_Back_Focus_API37');print('OK')
+elif args==['shell','dumpsys','window']:
+ print('mCurrentFocus=Window{abc u0 com.android.settings/.Settings}')
+ print('mFocusedApp=null')
+ print('title=PRIVATE_TOKEN private-account@example.test secret/photo.jpg')
+elif args[:3]==['shell','am','instrument']:
+ mode=(base/'mode').read_text()
+ with (base/'starts').open('a') as log:log.write(str(os.getpid())+'\n')
+ if mode=='cancel':
+  (base/'live.pid').write_text(str(os.getpid()));time.sleep(60)
+ print('INSTRUMENTATION_STATUS: current=25',flush=True)
+ print('INSTRUMENTATION_STATUS_CODE: 1',flush=True)
+ time.sleep(.6)
+ print('INSTRUMENTATION_STATUS: stack=androidx.test.espresso.base.RootViewPicker$RootViewWithoutFocusException: PRIVATE_TOKEN',flush=True)
+ print('INSTRUMENTATION_STATUS_CODE: -2',flush=True)
+ print('FAILURES!!!',flush=True)
+ sys.exit(17 if mode=='transport' else 0)
+else: sys.exit(99)

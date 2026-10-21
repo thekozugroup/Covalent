@@ -1,0 +1,57 @@
+{
+  "format": 1,
+  "sourceHashes": {
+    "scripts/android_instrumentation_focus.py": "af65286e7f88230803ad685dd8307f1fdfa92853512052ef51bdfcd316de0a4e",
+    "scripts/test-android-instrumentation-focus.py": "acea76c4ed1cd204241062e05529c6203a969a88236b15dfaaf1d53cebab5c2f",
+    "scripts/android-api37-device-test.sh": "3b842e3cd8e7889b6931741c96ad877141eadbec97ed3dec6d74d5a599223986",
+    ".github/workflows/ci.yml": "1d1396b6aeefcea0fe04e88af95b5b753835f9982d5eb005078fa5e231b049db",
+    "scripts/interlink_native_reports.py": "de1298052e65573cd1bfd023e3c3a2fe19e4204382048f17666f9766f6389807",
+    "scripts/interlink_framework_trace.py": "cb14714892879551607de292d155d33ae7214a18df6ba48d1b6b7de09686186f"
+  },
+  "before": {
+    "bootId": "ab65d276-41a8-443c-9c0a-fcde57e602c1",
+    "system_server": "614:410",
+    "surfaceflinger": "467:266"
+  },
+  "apkSourceBindingsVerified": 214,
+  "priorSuccessfulRunSha256": "2a67bd9673e749feb55bae36fc0dc1d820facf75254c381bff005c12ba67b0d1",
+  "reasonForNewValidation": "Recorder now clears completed test ordinals; earlier passing capture retains its own source hash",
+  "instrumentationRetriedToTurnFailureIntoPass": false,
+  "physicalAccepted": false,
+  "releaseReady": false,
+  "command": [
+    "/Users/michaelwong/.pyenv/versions/3.11.1/bin/python3",
+    "-B",
+    "scripts/android_instrumentation_focus.py",
+    "--adb",
+    "/Users/michaelwong/Library/Android/sdk/platform-tools/adb",
+    "--serial",
+    "emulator-5622",
+    "--phase",
+    "baseline",
+    "--log",
+    "/Users/michaelwong/Developer/Covalent/artifacts/evidence/android-focus-observer/final-run/instrumentation.log",
+    "--output",
+    "/Users/michaelwong/Developer/Covalent/artifacts/evidence/android-focus-observer/final-run/focus.json",
+    "--",
+    "-e",
+    "class",
+    "life.michaelwong.covalent.CovalentAppTest#firstLaunchOffersDirectFolderSyncAndBackPreservesBackupDraft",
+    "life.michaelwong.covalent.test/androidx.test.runner.AndroidJUnitRunner"
+  ],
+  "exitCode": 0,
+  "seconds": 5.811,
+  "after": {
+    "bootId": "ab65d276-41a8-443c-9c0a-fcde57e602c1",
+    "system_server": "614:410",
+    "surfaceflinger": "467:266"
+  },
+  "sourceBytesUnchanged": true,
+  "recorderSourceMatches": true,
+  "originalTestPassed": true,
+  "samplerStopped": true,
+  "frameworkUnchanged": true,
+  "focusSamples": 10,
+  "allReadClientsStopped": true,
+  "allReadsComplete": true
+}
