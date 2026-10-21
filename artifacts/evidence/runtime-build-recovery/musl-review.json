@@ -1,0 +1,14 @@
+{
+  "commit": "fd05fc094264bce4fb76efc6c7f61ba4abfcb609",
+  "version": "1.2.5-r24",
+  "recipeTreeSHA1": "ac111a3e906e374f6296091894ba3eb26348ee36",
+  "recipeFiles": 24,
+  "checksumsMatch": true,
+  "upstreamPatch": "7813e9119eb5fe681b6750b8a033a0490bca0941",
+  "securityFix": "CVE-2026-107891",
+  "initialPrimaryFetchFailure": "HTTP 429 with six concurrent reads; missing unchanged bytes reused only after old lock SHA256 and new APKBUILD SHA512 verification",
+  "verifiedCacheReused": [
+    "loongarch64-Add-lsx-and-lasx-vector-structure-defini.patch",
+    "loongarch64-add-TLSDESC-support.patch"
+  ]
+}

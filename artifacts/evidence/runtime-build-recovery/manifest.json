@@ -1,0 +1,441 @@
+{
+  "schema": 1,
+  "milestone": "runtime-build-recovery",
+  "parentCommit": "1a2874eec4e0107c7516d912a5d7fb01e4e0b69b",
+  "sourceLockSHA256": "3f66f233ed4eb174b4b3c1b0a1b8165a3f33011e22e96d5705883f80807badc8",
+  "packagedLockSHA256": "1da2397744d92ed03049d641c1355e8f6b89e2a2d7c25ed0309d35688ccd50d2",
+  "sources": [
+    {
+      "path": ".gitattributes",
+      "bytes": 592,
+      "sha256": "0691b83c3516f79e23e68f8a44ca91fadf5f8fcce345f92da24c9b0183126b02"
+    },
+    {
+      "path": "docs/security/alpine-runtime-source.md",
+      "bytes": 12851,
+      "sha256": "499c1ea7c34eb3af88d3e9b068fca1ef1f489e254a2f208565e7363f36951f5a"
+    },
+    {
+      "path": "docs/security/runtime-build-recovery.md",
+      "bytes": 4887,
+      "sha256": "fd54a2fcc6b367090767552a781f0ac96a28ceb52240000d2372400b1c42dfe8"
+    },
+    {
+      "path": "packaging/docker/Dockerfile",
+      "bytes": 23193,
+      "sha256": "fb8b68b0ec958e88ac2d0855f8c592c2d6ed1cf60b6a735af5fa2dc205945434"
+    },
+    {
+      "path": "packaging/docker/alpine/musl-1.2.5-r24/README.md",
+      "bytes": 1356,
+      "sha256": "35814e90e81ab845d8181186e67991ba588121165b7fa1064120d09869e0c688"
+    },
+    {
+      "path": "packaging/docker/alpine/musl-1.2.5-r24/aport/0001-add-stub-for-pthread_mutexattr_setprioceiling.patch",
+      "bytes": 896,
+      "sha256": "b2067680c66af9eb9f4fdc1fa5d9337a9fd62bdab2c437b416aa97d79eb884ee"
+    },
+    {
+      "path": "packaging/docker/alpine/musl-1.2.5-r24/aport/APKBUILD",
+      "bytes": 9073,
+      "sha256": "f0002dae236af650ce9003f3c10176a98e8e88e7f2247f43fecef49ab3e4be0d"
+    },
+    {
+      "path": "packaging/docker/alpine/musl-1.2.5-r24/aport/CVE-2025-26519.patch",
+      "bytes": 2832,
+      "sha256": "ab382da2bb5e1cc32d8904be28fb13f8ad3ce813967bd4bf7f5b1c6baee33e17"
+    },
+    {
+      "path": "packaging/docker/alpine/musl-1.2.5-r24/aport/CVE-2026-107891.patch",
+      "bytes": 5943,
+      "sha256": "0cf0090ab433e8f9ed08ae03a0c93aff557c1d3e347260f62a61a10281f5333b"
+    },
+    {
+      "path": "packaging/docker/alpine/musl-1.2.5-r24/aport/CVE-2026-40200.patch",
+      "bytes": 5594,
+      "sha256": "1ee29f64f9ca8e8ad7c349779d661ff6b52126a27575d3586981357a52c406fb"
+    },
+    {
+      "path": "packaging/docker/alpine/musl-1.2.5-r24/aport/CVE-2026-6042.patch",
+      "bytes": 7506,
+      "sha256": "1d0be2e72b9d5bd16546b923aa8af861d271322f01644716a81823bec4065c99"
+    },
+    {
+      "path": "packaging/docker/alpine/musl-1.2.5-r24/aport/LoongArch64-add-new-reloc-types-and-NT_LOONGARCH_HW_.patch",
+      "bytes": 2569,
+      "sha256": "8a9b516a62b5d7f2fd739ac4f67080a6a9137a1074429e23be5d5b69e5cc4280"
+    },
+    {
+      "path": "packaging/docker/alpine/musl-1.2.5-r24/aport/__NR_riscv_hwprobe.patch",
+      "bytes": 984,
+      "sha256": "8dc4d0771e915149a3b75205e4611f0093a57f1fe0f8365362c697dbec83655c"
+    },
+    {
+      "path": "packaging/docker/alpine/musl-1.2.5-r24/aport/__stack_chk_fail_local.c",
+      "bytes": 133,
+      "sha256": "299a7d75a09de3e2e11e7fb4acc3182e4a14e868093d2f30938fce9bfcff13da"
+    },
+    {
+      "path": "packaging/docker/alpine/musl-1.2.5-r24/aport/backport-posix_getdents.patch",
+      "bytes": 3587,
+      "sha256": "b49cee4c3c095a30855d788cccb84436868e5c568f821967437c73004f330025"
+    },
+    {
+      "path": "packaging/docker/alpine/musl-1.2.5-r24/aport/fix-loongarch64-zero-len-extcontext.patch",
+      "bytes": 738,
+      "sha256": "92c8e965798ed516c15cb2a4e7c4ac45ec1eb68b6abff16c73adff2a3bae1b14"
+    },
+    {
+      "path": "packaging/docker/alpine/musl-1.2.5-r24/aport/getconf.c",
+      "bytes": 11614,
+      "sha256": "d87d0cbb3690ae2c5d8cc218349fd8278b93855dd625deaf7ae50e320aad247c"
+    },
+    {
+      "path": "packaging/docker/alpine/musl-1.2.5-r24/aport/getent.c",
+      "bytes": 11656,
+      "sha256": "a6171c2db641cdd99c164169d3c5c6ca323617483cedec4cbbe3eb39c5834df0"
+    },
+    {
+      "path": "packaging/docker/alpine/musl-1.2.5-r24/aport/handle-aux-at_base.patch",
+      "bytes": 1214,
+      "sha256": "2a65e03b94217063d72fe998e5fb2e25cd01716078a3ba1b0ab574ab205111e6"
+    },
+    {
+      "path": "packaging/docker/alpine/musl-1.2.5-r24/aport/iconv.c",
+      "bytes": 2577,
+      "sha256": "f79a2930a2e5bb0624321589edf8b889d1e9b603e01e6b7ae214616605b3fdd7"
+    },
+    {
+      "path": "packaging/docker/alpine/musl-1.2.5-r24/aport/isatty-glibc-align.patch",
+      "bytes": 456,
+      "sha256": "1321d542b40921a4c248bb2d15dbd03fcbbf008c8725eb2043d3cab62faeba48"
+    },
+    {
+      "path": "packaging/docker/alpine/musl-1.2.5-r24/aport/ldconfig",
+      "bytes": 393,
+      "sha256": "7065021e04a5060957b5c6907af671a7028230d91927fb0c25892cadd9312b7c"
+    },
+    {
+      "path": "packaging/docker/alpine/musl-1.2.5-r24/aport/ldso-fix-non-functional-fix-to-early-dynamic-PAGE_SI.patch",
+      "bytes": 1486,
+      "sha256": "7f5806124d4a89536e53a07bfe95fcd0a8f1b7a27fc0dfc89c78c724dea1c924"
+    },
+    {
+      "path": "packaging/docker/alpine/musl-1.2.5-r24/aport/loongarch64-Add-lsx-and-lasx-vector-structure-defini.patch",
+      "bytes": 907,
+      "sha256": "28efacd507c01b89e1725ed33723f3f9fdfe6cb83eb78ffea1e2acb7fda8a52c"
+    },
+    {
+      "path": "packaging/docker/alpine/musl-1.2.5-r24/aport/loongarch64-add-TLSDESC-support.patch",
+      "bytes": 2527,
+      "sha256": "1efb4604e0b28b84e10faf37d17bad448510e73f6a3db89c8be47d38b9e85138"
+    },
+    {
+      "path": "packaging/docker/alpine/musl-1.2.5-r24/aport/loongarch64-add-bits-hwcap.h.patch",
+      "bytes": 1406,
+      "sha256": "8849080b49dff046b1f29db24e54ffe6262b5884078091994db77efdafca2505"
+    },
+    {
+      "path": "packaging/docker/alpine/musl-1.2.5-r24/aport/loongarch64-add-fpu-and-simd-context-to-signal.h.patch",
+      "bytes": 2142,
+      "sha256": "d73f85a90fe52930dd8b5d16cb7f3369a994918c0e41ae3c3dc9a25df4b45099"
+    },
+    {
+      "path": "packaging/docker/alpine/musl-1.2.5-r24/aport/s390x-dont-allow-br-r0-in-crtjmp.patch",
+      "bytes": 1031,
+      "sha256": "3568d09f086e1d8957542d195e7a5f14d17ae8805e4d793fd30a3b331eafe537"
+    },
+    {
+      "path": "packaging/docker/alpine/musl-1.2.5-r24/aport/stdio-skip-empty-iovec-when-buffering-is-disabled.patch",
+      "bytes": 1157,
+      "sha256": "7b405d6faf271cf13b415bc9688c1fbd728510fdef25d134fbd4a1b93db83e18"
+    },
+    {
+      "path": "packaging/docker/alpine/packaged-evidence-lock.json",
+      "bytes": 1659,
+      "sha256": "1da2397744d92ed03049d641c1355e8f6b89e2a2d7c25ed0309d35688ccd50d2"
+    },
+    {
+      "path": "packaging/docker/alpine/runtime-source-lock.json",
+      "bytes": 120646,
+      "sha256": "3f66f233ed4eb174b4b3c1b0a1b8165a3f33011e22e96d5705883f80807badc8"
+    },
+    {
+      "path": "scripts/check-container-contract.sh",
+      "bytes": 23634,
+      "sha256": "68482225096db242a15c0502a4c638734af27c47b685a65399c61fa0508864cb"
+    },
+    {
+      "path": "scripts/check-openapi-routes.mjs",
+      "bytes": 59303,
+      "sha256": "e4eabe8f7b46530bdce79469f240df6d1334c5f7826442ec98281ab5ac4dc905"
+    },
+    {
+      "path": "scripts/collect-alpine-runtime-evidence.py",
+      "bytes": 43905,
+      "sha256": "4449659ac94cc9c1516dafce413d27fa73a2fb0dd632d58635cd965be820bed5"
+    },
+    {
+      "path": "scripts/test-collect-alpine-runtime-evidence.py",
+      "bytes": 28927,
+      "sha256": "f7f7bbf1d411f385b5b64cda8203e66dc9ff1cdb39013c1ead9b01550e211b12"
+    },
+    {
+      "path": "scripts/test-openapi-routes.sh",
+      "bytes": 6169,
+      "sha256": "e5f909b8481ee3a663a0efddd99767ae70473623129fb2d54eca66a76e17aee2"
+    },
+    {
+      "path": "scripts/test-verify-alpine-runtime-evidence.py",
+      "bytes": 9184,
+      "sha256": "aa63bc69d01f4281575072c9f6101234e683fd77f7ea2f8bc8a5ecc1529fcf56"
+    },
+    {
+      "path": "working.md",
+      "bytes": 57536,
+      "sha256": "7955deb6c2544420f91409b29e5b71579c9228ad302d785b11103569a6b6b0f6"
+    }
+  ],
+  "evidence": [
+    {
+      "path": "artifacts/evidence/runtime-build-recovery/Dockerfile.evidence",
+      "bytes": 23469,
+      "sha256": "3ffee9b7c932ac1f76ba7be2060c092064ea9dafe40c4ce4d7014aeba8455599"
+    },
+    {
+      "path": "artifacts/evidence/runtime-build-recovery/stage-docker-inputs.txt",
+      "bytes": 55721,
+      "sha256": "1ad83bd27ac695a6384e73faf3559d42b7e831f5bd110c2752f58f8dbb0920ca"
+    },
+    {
+      "path": "artifacts/evidence/runtime-build-recovery/stage-packaged-evidence-lock.json",
+      "bytes": 1699,
+      "sha256": "ecee6cf14a5c102159298a79f7da903ba068a3fb85f95690753e9ab1c84243b1"
+    },
+    {
+      "path": "artifacts/evidence/runtime-build-recovery/source-retrieval.json",
+      "bytes": 779,
+      "sha256": "05acef0f0894c90b1665d5f35c27cf4d372c468f827cda16a6098df236bbaaf0"
+    },
+    {
+      "path": "artifacts/evidence/runtime-build-recovery/musl-review.json",
+      "bytes": 603,
+      "sha256": "25c8d4e7ede74e5f74641ee7fe42c69b6c96fa72dd689c04dd0205a044770b73"
+    },
+    {
+      "path": "artifacts/evidence/runtime-build-recovery/stage-arm64.json",
+      "bytes": 619,
+      "sha256": "411a6a4a3baff6d03c9adeb445f31723cb70b6775a722d947b703c4bb7806632"
+    },
+    {
+      "path": "artifacts/evidence/runtime-build-recovery/stage-amd64.json",
+      "bytes": 618,
+      "sha256": "391962dc972e8ce9f15377df17493604b50fbea872c0366e485d7df1fb6a3573"
+    },
+    {
+      "path": "artifacts/evidence/runtime-build-recovery/build-vm-start.json",
+      "bytes": 306,
+      "sha256": "6bac8b5d5f7fe10747aecf880ca10ea07116ffb92b7801d3ba3643731a961091"
+    },
+    {
+      "path": "artifacts/evidence/runtime-build-recovery/isolated-stage-arm64.json",
+      "bytes": 686,
+      "sha256": "cb226ef04fbb6a7ed2d5903c60757a17507b64f1bc44eeb9c058900094cb178d"
+    },
+    {
+      "path": "artifacts/evidence/runtime-build-recovery/isolated-stage-amd64.json",
+      "bytes": 686,
+      "sha256": "36987a17d0ee2937b77227b60ca638b31b378a31f0935f9aa16d5970308d6840"
+    },
+    {
+      "path": "artifacts/evidence/runtime-build-recovery/packaged-verification.json",
+      "bytes": 2926,
+      "sha256": "5c286edd0559a8d51584d25fee050d665547b9bf1159332566a85110a66edccb"
+    },
+    {
+      "path": "artifacts/evidence/runtime-build-recovery/hosted-address-failure.json",
+      "bytes": 985,
+      "sha256": "ae3825cb7061442f41e034d8fdd8c5aa098685abc448fc587ad96b71646d94af"
+    },
+    {
+      "path": "artifacts/evidence/runtime-build-recovery/hosted-permission-analysis.json",
+      "bytes": 893,
+      "sha256": "e1064b96b38c83039294be4f7a54f74cd30b16e4371c09eae6b436597bf27e80"
+    },
+    {
+      "path": "artifacts/evidence/runtime-build-recovery/hosted-permission-recovery.json",
+      "bytes": 44185,
+      "sha256": "9f898b0c38291f99dfb8e5a9edfa6ee39fa62307c4769c727477309d36152835"
+    },
+    {
+      "path": "artifacts/evidence/runtime-build-recovery/sandbox-probe.json",
+      "bytes": 1594,
+      "sha256": "976b4800f04791d97dc4fc24f6150c971afbc2f893282798f5063659a3824016"
+    },
+    {
+      "path": "artifacts/evidence/runtime-build-recovery/checks.json",
+      "bytes": 5277,
+      "sha256": "29730beca945289851f2865027d8ad63d0f5492ad1fbe13a1945fa133b91e831"
+    },
+    {
+      "path": "artifacts/evidence/runtime-build-recovery/whitespace.json",
+      "bytes": 1441,
+      "sha256": "c2537a1cad4ade228fb707a2583bbf9ebe6aa05b8c0b38fe84185b5f77941994"
+    },
+    {
+      "path": "artifacts/evidence/runtime-build-recovery/isolated-arm64/installed",
+      "bytes": 13354,
+      "sha256": "23ac20eb851b14f1f95945ba1835e1f52ab38460503a52489cd4e606aed7fefa"
+    },
+    {
+      "path": "artifacts/evidence/runtime-build-recovery/isolated-arm64/builder-installed",
+      "bytes": 15104,
+      "sha256": "e5a0daace4fae865d4c7525f7f6d36f0c29d48f397ad3c37ae4eeb0c1dc36f85"
+    },
+    {
+      "path": "artifacts/evidence/runtime-build-recovery/isolated-arm64/bundle/inventory.json",
+      "bytes": 121724,
+      "sha256": "62855c0e4a915edda29e3a0ca6ed7b247c379241661a739b248e313567fb98ed"
+    },
+    {
+      "path": "artifacts/evidence/runtime-build-recovery/isolated-amd64/installed",
+      "bytes": 13420,
+      "sha256": "e0c2b996867a84c98f80f18489501af11172c5cc643cc059a50e2429a8e2b08e"
+    },
+    {
+      "path": "artifacts/evidence/runtime-build-recovery/isolated-amd64/builder-installed",
+      "bytes": 15163,
+      "sha256": "42cfd3516bf53219c041785cc5319b4951484c3d1562d0e18838e81f5e1c60bd"
+    },
+    {
+      "path": "artifacts/evidence/runtime-build-recovery/isolated-amd64/bundle/inventory.json",
+      "bytes": 121713,
+      "sha256": "fef90fba649a9749cb05c629a8b7ab693ec6ce8ec7de689abeed0643917184a9"
+    }
+  ],
+  "localExternalArtifacts": [
+    {
+      "path": "artifacts/evidence/runtime-build-recovery/build-vm-start.log",
+      "bytes": 5279,
+      "sha256": "89d5dcccf2de77ec96ebff91857dba542aeb9e4030d397d9180da60faaf5bca1"
+    },
+    {
+      "path": "artifacts/evidence/runtime-build-recovery/collector-tests.log",
+      "bytes": 129,
+      "sha256": "1e6a3de6dad4024c5241ec3c691a5a34727d2080e7d3e293e288edb3d02e38b7"
+    },
+    {
+      "path": "artifacts/evidence/runtime-build-recovery/foundation.log",
+      "bytes": 4210,
+      "sha256": "116c8697e360759507bd54e9708c83d778093afd6921fa0f55797be0b4a29002"
+    },
+    {
+      "path": "artifacts/evidence/runtime-build-recovery/hosted-arm64-119424576883.log",
+      "bytes": 564296,
+      "sha256": "c5e25119185835ba63e1bf60d6e25a48cd7739a91203d22926c78c5b5cbb6266"
+    },
+    {
+      "path": "artifacts/evidence/runtime-build-recovery/hosted-contracts-119424577180.log",
+      "bytes": 43101,
+      "sha256": "81a2e974c8e1678cce4a17ff0e6aa698123fed6fd1815b783b6113bdb5dd70c6"
+    },
+    {
+      "path": "artifacts/evidence/runtime-build-recovery/hosted-macos-bundle-119424577060.log",
+      "bytes": 611266,
+      "sha256": "6db3cabd5cdbbc85968e001f18e5bb37001fadb1edc3e0815b788e02cb94f43b"
+    },
+    {
+      "path": "artifacts/evidence/runtime-build-recovery/isolated-stage-amd64.log",
+      "bytes": 276090,
+      "sha256": "61666a32aa4d87beeb7328b048127a17943feb35c01568c998234ad092d6847e"
+    },
+    {
+      "path": "artifacts/evidence/runtime-build-recovery/isolated-stage-arm64.log",
+      "bytes": 277456,
+      "sha256": "a1f29d04650c2e94515b03ed7bee478505003110e638e4be3cad85b70ff7b120"
+    },
+    {
+      "path": "artifacts/evidence/runtime-build-recovery/route-fixtures.log",
+      "bytes": 35,
+      "sha256": "b47bed805bd1ca6f4915eddbb4ed67ecf12e3d18fb05522deb9a62217feefc6a"
+    },
+    {
+      "path": "artifacts/evidence/runtime-build-recovery/stage-amd64.log",
+      "bytes": 6609,
+      "sha256": "e74349a4142b09093c5f04577c903dbcbcbb97b9e8d8cd05f23e561ce50c7691"
+    },
+    {
+      "path": "artifacts/evidence/runtime-build-recovery/stage-arm64.log",
+      "bytes": 5860,
+      "sha256": "7d3840ef74db99e778975c5d58cf776dafc091c4b96f9a97f3e8625198fc54c4"
+    },
+    {
+      "path": "artifacts/evidence/runtime-build-recovery/verifier-tests.log",
+      "bytes": 111,
+      "sha256": "b98d97a30579f4bb7543e8bde1fe2372ee04d8b02c0cf619d3b918fed1ac8f4e"
+    },
+    {
+      "path": "artifacts/evidence/runtime-build-recovery/verify-amd64.log",
+      "bytes": 427,
+      "sha256": "7e6d6941acd3825add0cfe9721f0f34253f2e683bdd3b905cee4fab5e4d91d4e"
+    },
+    {
+      "path": "artifacts/evidence/runtime-build-recovery/verify-arm64.log",
+      "bytes": 427,
+      "sha256": "80593d552b2a96a994fce2fde37aeea6164c73bac4da2df9bba8627fcdd42b40"
+    },
+    {
+      "path": "artifacts/evidence/runtime-build-recovery/whitespace-initial.log",
+      "bytes": 22959,
+      "sha256": "4d3a2b5b2aa4cdac63f94056afbc21529fed5ac164bcc9254ed9a475bf9a8585"
+    },
+    {
+      "path": "artifacts/evidence/runtime-build-recovery/isolated-arm64/bundle/THIRD-PARTY-NOTICES.txt",
+      "bytes": 130956,
+      "sha256": "c15a208bac276d95fcb38ae2ee6061a965baec6fb7b074fae9a53dd4bd81c308"
+    },
+    {
+      "path": "artifacts/evidence/runtime-build-recovery/isolated-arm64/bundle/runtime-source.tar.gz",
+      "bytes": 4141238,
+      "sha256": "392f28bcc96a62527c3e3ebd27ed4c7bf40791f538afc2a3b0be16b3a23f4499"
+    },
+    {
+      "path": "artifacts/evidence/runtime-build-recovery/isolated-amd64/bundle/THIRD-PARTY-NOTICES.txt",
+      "bytes": 130945,
+      "sha256": "fd22d9aae5a91344b8a331fe5bf58037dc3ea499864c1360493f5a4f1ce74db0"
+    },
+    {
+      "path": "artifacts/evidence/runtime-build-recovery/isolated-amd64/bundle/runtime-source.tar.gz",
+      "bytes": 4141238,
+      "sha256": "392f28bcc96a62527c3e3ebd27ed4c7bf40791f538afc2a3b0be16b3a23f4499"
+    }
+  ],
+  "verification": {
+    "arm64StageExportSeconds": 145.365,
+    "amd64StageExportSeconds": 665.422,
+    "independentPackagedVerification": "passed on both targets; 13 packages and 156 source inputs",
+    "foundationSeconds": 47.812,
+    "foundation": "passed",
+    "collectorTests": 30,
+    "verifierTests": 13,
+    "routeNegativeFixtures": "passed",
+    "whitespace": "passed with scoped preservation of exact upstream patches and four raw APK record delimiters"
+  },
+  "stageSnapshotScope": "Input snapshot was captured after ARM64 export and during AMD64 export. It includes the prior packaged review lock, which the collector does not consume. Actual exported inventories bind the current source lock; this is not a full application image source/build acceptance claim.",
+  "remaining": [
+    "complete application images: installed database/source/notices/payload/functional/size/vulnerability gates",
+    "valid sandboxed launch context for the packaged macOS worker gate",
+    "successful supported Android permission recovery",
+    "older intermittent Android post-address transfer stall",
+    "physical Pi/Solstice roaming and imports/cameras",
+    "exact Google Photos-confirmed cleanup",
+    "production signing and natural private updates",
+    "gold image cold boot and flash/readback"
+  ],
+  "unchanged": [
+    "Pi runtime and image",
+    "APK",
+    "physical devices and accounts",
+    "original media"
+  ]
+}

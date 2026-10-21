@@ -1,6 +1,6 @@
 # Alpine runtime source and notices
 
-Current October 20 follow-up: both runtime and Go builder explicitly install the
+October 20 CA follow-up: both runtime and Go builder explicitly install the
 checksum-pinned, official signed CA 20261020-r0 bundle; the old build-stage
 certificate generator is removed. The full recipe and original GitLab archive
 are hash-bound together. `architectureByTarget` is allowed only for this CA
@@ -21,7 +21,9 @@ updates and the three Covalent-local BusyBox 1.37.0-r1000 packages to the pinned
 Alpine 3.23.5 base. Schema 2 declares those three local packages explicitly:
 their `installedDatabaseCommit` is null because their actual APK records omit
 `c`, and only `busybox-binsh` overrides the target architecture with `noarch`.
-The other ten package identities retain their upstream requirements.
+The other ten package identities retain their upstream requirements. The October
+21 follow-up explicitly pins musl and musl-utils 1.2.5-r24, including the signed
+upstream regex security fix and its complete source recipe.
 An empty `c:` value does not equal an absent field. Notices distinguish the
 absent package commit from the recorded original Alpine recipe commit.
 The installed package database from the actual
@@ -29,16 +31,14 @@ runtime stage must match this list completely. An added, removed or changed
 package fails collection instead of inheriting an old classification.
 
 The CA file copied from the Go/Caddy builder has separate provenance. Both
-architecture manifests of the pinned Go 1.26.7 Alpine image contain
-`ca-certificates-bundle 20260611-r0`, origin `ca-certificates`, aports commit
-`6e30aafe4fa807ba70797509731f1e7d644dc8f3`. The copied CA file is 179,359 bytes,
-SHA-256 `b8d837841b88bfaa1a0fa827cbca8e2576418dd47c9fc4bb7f1f9d89c83111b9`.
-Collection checks the actual builder's installed record and the copied file,
-not only the final Alpine package record.
+architectures now install the exact signed CA 20261020-r0 package before building
+Caddy; the older certificate generator is removed. The copied file is 178,791
+bytes, SHA256 `5961c0a3c65459931c023e0075c09733f09aea4ca439cb85bc4a08bb4f3f568b`.
+Collection checks the actual builder's installed record and copied file.
 
 ## Source selection
 
-The reviewed lock contains 155 distinct inputs: complete files from the eight
+The reviewed lock contains 156 distinct inputs: complete files from the eight
 exact aports recipe directories, upstream source archives, and the netbase
 inputs declared by the baselayout recipe. Each input has an exact HTTPS URL,
 size and SHA-256. Recipe entries also record their Git blob identity and original mode. Each origin
@@ -54,7 +54,7 @@ After the final APK installation and package checks, the runtime stage removes
 The build checks the installed database and filesystem before packaging the
 runtime image; Covalent does not install packages after this point.
 
-The final `runtime-source.tar.gz` contains 155 inputs across seven origins:
+The final `runtime-source.tar.gz` contains 156 inputs across seven origins:
 
 - `alpine-base`, `alpine-baselayout` and `alpine-keys`;
 - `busybox` and `ca-certificates`;
@@ -88,6 +88,27 @@ copyright notice and `mk-ca-bundle.pl` curl notice. The canonical supplemental
 [MIT terms](https://opensource.org/license/mit) are pinned separately with
 source URLs and content hashes. Generic MIT terms do not invent copyright
 holders; the component sources retain their actual notices.
+
+## October 21 musl security revision
+
+Alpine's signed musl 1.2.5-r24 and musl-utils 1.2.5-r24 packages identify aports
+commit `fd05fc094264bce4fb76efc6c7f61ba4abfcb609`. The complete primary-server recipe
+contains the upstream regex overflow patch for CVE-2026-107891. It also renames
+the unchanged iconv patch to its CVE name. All24 recipe files, their complete
+Git tree, blobs, sizes, SHA256 and APKBUILD SHA512 checksums are retained. The
+musl 1.2.5 upstream archive is unchanged.
+
+The primary server publishes this commit before its GitHub mirror. Its exact
+HTTPS file path and locked commit query are accepted; alternate files, hosts,
+commits, query fields, fragments, credentials and ports refuse. Redirect policy
+is unchanged. The24 files are vendored under
+`packaging/docker/alpine/musl-1.2.5-r24/aport/` and checked before use, so builds
+can read them independently of mirror propagation or source-server rate limits.
+Runtime packages still require Alpine signature verification. Source recipes
+are never executed. Explicit package pins prevent a future dependency solve
+from silently selecting another libc version; the complete installed-database
+comparison remains mandatory.
+
 
 ## Collection and verification
 

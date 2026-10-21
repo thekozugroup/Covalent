@@ -1,0 +1,20 @@
+{
+  "runId": 39651980156,
+  "headCommit": "9330537ed737098b8055252828d8773425e3d661",
+  "artifactId": 12372048269,
+  "archiveBytes": 3487298,
+  "archiveSha256": "4aa171da3613b58ca46e5060ae68d3e0a0cd18ca85392777f9c02c4a4375fbec",
+  "member": "_temp/covalent-android-api37/interlink/permission-recovery.json",
+  "receiptSha256": "9f898b0c38291f99dfb8e5a9edfa6ee39fa62307c4769c727477309d36152835",
+  "result": "failed",
+  "identityBeforeEqualsFailure": true,
+  "liveSignalBeforeFailedTap": true,
+  "nativeReportResult": "matched",
+  "correlatedReportTags": [
+    "system_server_native_crash",
+    "SYSTEM_TOMBSTONE"
+  ],
+  "knownAbortMessageBytes": 62,
+  "knownAbortMessageSHA256": "21459e59cfa55a94251c82e5d7e559328fced4bbbff93a4f139eb68d27d56bee",
+  "scope": "Identifies the known emulator assertion and ordering; does not establish its initiating trigger or permission recovery acceptance."
+}

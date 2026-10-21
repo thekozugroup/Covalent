@@ -37,6 +37,16 @@ def archive_bytes(kind='regular'):
 
 
 class EvidenceTests(unittest.TestCase):
+    def test_vendored_musl_recipe_is_complete_and_matches_reviewed_lock(self):
+        base = Path(__file__).resolve().parent.parent / 'packaging/docker/alpine'
+        lock, _ = M.load_lock(base / 'runtime-source-lock.json')
+        rows = [r for r in lock['files'] if r['origin'] == 'musl' and 'gitBlob' in r]
+        recipe = base / 'musl-1.2.5-r24/aport'
+        self.assertEqual({p.name for p in recipe.iterdir()}, {r['name'] for r in rows})
+        self.assertEqual(len(rows), 24)
+        for row in rows:
+            M.check_bytes(M.regular(recipe / row['name'], M.MAX_FILE), row)
+
     def test_vendored_ca_source_matches_locked_archive_and_recipe(self):
         base = Path(__file__).resolve().parent.parent / 'packaging/docker/alpine'
         lock, _ = M.load_lock(base / 'runtime-source-lock.json')
@@ -403,6 +413,30 @@ class EvidenceTests(unittest.TestCase):
         self.save_lock()
         with self.assertRaisesRegex(M.EvidenceError, 'image pin is malformed'):
             M.load_lock(self.args.lock)
+
+    def test_primary_recipe_requires_exact_file_and_locked_commit(self):
+        recipe = next(row for row in self.lock['files'] if row['name'] == 'APKBUILD')
+        valid = ('https://git.alpinelinux.org/aports/plain/main/ca-certificates/'
+                 'APKBUILD?id=' + 'a' * 40)
+        recipe['url'] = valid
+        self.save_lock()
+        M.load_lock(self.args.lock)
+        # The original cached bytes still require every digest and recipe check.
+        self.run_collector()
+        invalid = [valid.replace('id=' + 'a' * 40, 'id=' + 'b' * 40),
+                   valid.replace('/APKBUILD?', '/other-file?'),
+                   valid.replace('/ca-certificates/', '/musl/'),
+                   valid + '&h=3.23-stable', valid + '#fragment',
+                   valid.replace('https://', 'http://'),
+                   valid.replace('git.alpinelinux.org', 'git.alpinelinux.org:443'),
+                   valid.replace('git.alpinelinux.org', 'user@git.alpinelinux.org'),
+                   valid.replace('git.alpinelinux.org', 'unreviewed.example')]
+        for url in invalid:
+            with self.subTest(url=url):
+                recipe['url'] = url
+                self.save_lock()
+                with self.assertRaisesRegex(M.EvidenceError, 'reviewed upstream location'):
+                    M.load_lock(self.args.lock)
 
     def test_parent_swap_after_open_does_not_redirect_input(self):
         origin = self.cache / self.origin

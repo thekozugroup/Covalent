@@ -1,0 +1,22 @@
+{
+  "command": [
+    "colima",
+    "start",
+    "--profile",
+    "covalent-verify",
+    "--activate=false",
+    "--cpus",
+    "4",
+    "--memory",
+    "4",
+    "--disk",
+    "30",
+    "--root-disk",
+    "10",
+    "--vm-type",
+    "vz",
+    "--vz-rosetta"
+  ],
+  "exitCode": 0,
+  "elapsedSeconds": 24.993
+}

@@ -79,17 +79,17 @@
     },
     {
       "name": "musl",
-      "version": "1.2.5-r23",
+      "version": "1.2.5-r24",
       "origin": "musl",
       "license": "MIT",
-      "aportsCommit": "8aef0c37b0ad23dc4137f0e4755b97a59dc698b8"
+      "aportsCommit": "fd05fc094264bce4fb76efc6c7f61ba4abfcb609"
     },
     {
       "name": "musl-utils",
-      "version": "1.2.5-r23",
+      "version": "1.2.5-r24",
       "origin": "musl",
       "license": "MIT AND BSD-2-Clause AND GPL-2.0-or-later",
-      "aportsCommit": "8aef0c37b0ad23dc4137f0e4755b97a59dc698b8"
+      "aportsCommit": "fd05fc094264bce4fb76efc6c7f61ba4abfcb609"
     },
     {
       "name": "scanelf",
@@ -1225,7 +1225,7 @@
     {
       "origin": "musl",
       "name": "0001-add-stub-for-pthread_mutexattr_setprioceiling.patch",
-      "url": "https://raw.githubusercontent.com/alpinelinux/aports/8aef0c37b0ad23dc4137f0e4755b97a59dc698b8/main/musl/0001-add-stub-for-pthread_mutexattr_setprioceiling.patch",
+      "url": "https://git.alpinelinux.org/aports/plain/main/musl/0001-add-stub-for-pthread_mutexattr_setprioceiling.patch?id=fd05fc094264bce4fb76efc6c7f61ba4abfcb609",
       "bytes": 896,
       "sha256": "b2067680c66af9eb9f4fdc1fa5d9337a9fd62bdab2c437b416aa97d79eb884ee",
       "gitBlob": "0afb1fbc2e96c3f6a41d02635d64115184b8e614",
@@ -1234,15 +1234,15 @@
     {
       "origin": "musl",
       "name": "APKBUILD",
-      "url": "https://raw.githubusercontent.com/alpinelinux/aports/8aef0c37b0ad23dc4137f0e4755b97a59dc698b8/main/musl/APKBUILD",
-      "bytes": 8830,
-      "sha256": "e8425e24c5c3c6d8f74b4412b11c6990fda6dbf7648c79ec6e2efa082fc5adcf",
-      "gitBlob": "a32f2d25e53fe961bd4f1130bbddbeb7195f638f"
+      "url": "https://git.alpinelinux.org/aports/plain/main/musl/APKBUILD?id=fd05fc094264bce4fb76efc6c7f61ba4abfcb609",
+      "bytes": 9073,
+      "sha256": "f0002dae236af650ce9003f3c10176a98e8e88e7f2247f43fecef49ab3e4be0d",
+      "gitBlob": "dcb4d8edd07b4db7ed056209b3bd504cf1321c14"
     },
     {
       "origin": "musl",
       "name": "CVE-2025-26519.patch",
-      "url": "https://raw.githubusercontent.com/alpinelinux/aports/8aef0c37b0ad23dc4137f0e4755b97a59dc698b8/main/musl/CVE-2025-26519.patch",
+      "url": "https://git.alpinelinux.org/aports/plain/main/musl/CVE-2025-26519.patch?id=fd05fc094264bce4fb76efc6c7f61ba4abfcb609",
       "bytes": 2832,
       "sha256": "ab382da2bb5e1cc32d8904be28fb13f8ad3ce813967bd4bf7f5b1c6baee33e17",
       "gitBlob": "8d5ba6cc8390c322cac11070911df61f48572172",
@@ -1250,8 +1250,17 @@
     },
     {
       "origin": "musl",
+      "name": "CVE-2026-107891.patch",
+      "url": "https://git.alpinelinux.org/aports/plain/main/musl/CVE-2026-107891.patch?id=fd05fc094264bce4fb76efc6c7f61ba4abfcb609",
+      "bytes": 5943,
+      "sha256": "0cf0090ab433e8f9ed08ae03a0c93aff557c1d3e347260f62a61a10281f5333b",
+      "gitBlob": "2abae19db458c2b3e9b45281a6f4867347c7c26f",
+      "apkbuildSHA512": "df73a35b9da531021ad5b1a6aad12b9d8d69de2bed7fc91b1156d9727476ab25c0d3c2341d60488152ee8ccbddb83786e91fff950cdb177b9b04673da98fdc4e"
+    },
+    {
+      "origin": "musl",
       "name": "CVE-2026-40200.patch",
-      "url": "https://raw.githubusercontent.com/alpinelinux/aports/8aef0c37b0ad23dc4137f0e4755b97a59dc698b8/main/musl/CVE-2026-40200.patch",
+      "url": "https://git.alpinelinux.org/aports/plain/main/musl/CVE-2026-40200.patch?id=fd05fc094264bce4fb76efc6c7f61ba4abfcb609",
       "bytes": 5594,
       "sha256": "1ee29f64f9ca8e8ad7c349779d661ff6b52126a27575d3586981357a52c406fb",
       "gitBlob": "88298ca471d38b2c8861f817caf394a591fcdc26",
@@ -1259,8 +1268,17 @@
     },
     {
       "origin": "musl",
+      "name": "CVE-2026-6042.patch",
+      "url": "https://git.alpinelinux.org/aports/plain/main/musl/CVE-2026-6042.patch?id=fd05fc094264bce4fb76efc6c7f61ba4abfcb609",
+      "bytes": 7506,
+      "sha256": "1d0be2e72b9d5bd16546b923aa8af861d271322f01644716a81823bec4065c99",
+      "gitBlob": "4c52c0a3211ec70c5010bc6bce0446c183914380",
+      "apkbuildSHA512": "f7849abeab0e4eab992a80464afa07b9c8aae5cee76040523b9dbc0931435f28ea8f5792b8a4a0cd6d608ac2f37e3225e89afcb3171a0a6df44450ed57cee83b"
+    },
+    {
+      "origin": "musl",
       "name": "LoongArch64-add-new-reloc-types-and-NT_LOONGARCH_HW_.patch",
-      "url": "https://raw.githubusercontent.com/alpinelinux/aports/8aef0c37b0ad23dc4137f0e4755b97a59dc698b8/main/musl/LoongArch64-add-new-reloc-types-and-NT_LOONGARCH_HW_.patch",
+      "url": "https://git.alpinelinux.org/aports/plain/main/musl/LoongArch64-add-new-reloc-types-and-NT_LOONGARCH_HW_.patch?id=fd05fc094264bce4fb76efc6c7f61ba4abfcb609",
       "bytes": 2569,
       "sha256": "8a9b516a62b5d7f2fd739ac4f67080a6a9137a1074429e23be5d5b69e5cc4280",
       "gitBlob": "699ffd7f6d4c3bcc6c4170be4585d3d440076d88",
@@ -1269,7 +1287,7 @@
     {
       "origin": "musl",
       "name": "__NR_riscv_hwprobe.patch",
-      "url": "https://raw.githubusercontent.com/alpinelinux/aports/8aef0c37b0ad23dc4137f0e4755b97a59dc698b8/main/musl/__NR_riscv_hwprobe.patch",
+      "url": "https://git.alpinelinux.org/aports/plain/main/musl/__NR_riscv_hwprobe.patch?id=fd05fc094264bce4fb76efc6c7f61ba4abfcb609",
       "bytes": 984,
       "sha256": "8dc4d0771e915149a3b75205e4611f0093a57f1fe0f8365362c697dbec83655c",
       "gitBlob": "68c2237e4d6e6006eb499351b2a41115cdfc0cce",
@@ -1278,7 +1296,7 @@
     {
       "origin": "musl",
       "name": "__stack_chk_fail_local.c",
-      "url": "https://raw.githubusercontent.com/alpinelinux/aports/8aef0c37b0ad23dc4137f0e4755b97a59dc698b8/main/musl/__stack_chk_fail_local.c",
+      "url": "https://git.alpinelinux.org/aports/plain/main/musl/__stack_chk_fail_local.c?id=fd05fc094264bce4fb76efc6c7f61ba4abfcb609",
       "bytes": 133,
       "sha256": "299a7d75a09de3e2e11e7fb4acc3182e4a14e868093d2f30938fce9bfcff13da",
       "gitBlob": "2b403a6e046fb288af4b3d16eda76980a599aea4",
@@ -1287,7 +1305,7 @@
     {
       "origin": "musl",
       "name": "backport-posix_getdents.patch",
-      "url": "https://raw.githubusercontent.com/alpinelinux/aports/8aef0c37b0ad23dc4137f0e4755b97a59dc698b8/main/musl/backport-posix_getdents.patch",
+      "url": "https://git.alpinelinux.org/aports/plain/main/musl/backport-posix_getdents.patch?id=fd05fc094264bce4fb76efc6c7f61ba4abfcb609",
       "bytes": 3587,
       "sha256": "b49cee4c3c095a30855d788cccb84436868e5c568f821967437c73004f330025",
       "gitBlob": "ebb7543d6531e07630bebe37eb8adfa691932147",
@@ -1296,7 +1314,7 @@
     {
       "origin": "musl",
       "name": "fix-loongarch64-zero-len-extcontext.patch",
-      "url": "https://raw.githubusercontent.com/alpinelinux/aports/8aef0c37b0ad23dc4137f0e4755b97a59dc698b8/main/musl/fix-loongarch64-zero-len-extcontext.patch",
+      "url": "https://git.alpinelinux.org/aports/plain/main/musl/fix-loongarch64-zero-len-extcontext.patch?id=fd05fc094264bce4fb76efc6c7f61ba4abfcb609",
       "bytes": 738,
       "sha256": "92c8e965798ed516c15cb2a4e7c4ac45ec1eb68b6abff16c73adff2a3bae1b14",
       "gitBlob": "7955bddd4db379bdf668d80666a141cbf175c986",
@@ -1305,7 +1323,7 @@
     {
       "origin": "musl",
       "name": "getconf.c",
-      "url": "https://raw.githubusercontent.com/alpinelinux/aports/8aef0c37b0ad23dc4137f0e4755b97a59dc698b8/main/musl/getconf.c",
+      "url": "https://git.alpinelinux.org/aports/plain/main/musl/getconf.c?id=fd05fc094264bce4fb76efc6c7f61ba4abfcb609",
       "bytes": 11614,
       "sha256": "d87d0cbb3690ae2c5d8cc218349fd8278b93855dd625deaf7ae50e320aad247c",
       "gitBlob": "c4235242b0ef70bb7a99cb210a134d19c15dc0b9",
@@ -1314,7 +1332,7 @@
     {
       "origin": "musl",
       "name": "getent.c",
-      "url": "https://raw.githubusercontent.com/alpinelinux/aports/8aef0c37b0ad23dc4137f0e4755b97a59dc698b8/main/musl/getent.c",
+      "url": "https://git.alpinelinux.org/aports/plain/main/musl/getent.c?id=fd05fc094264bce4fb76efc6c7f61ba4abfcb609",
       "bytes": 11656,
       "sha256": "a6171c2db641cdd99c164169d3c5c6ca323617483cedec4cbbe3eb39c5834df0",
       "gitBlob": "bcc8b81c10bef1de5af8db7053dac48547c8e14d",
@@ -1323,7 +1341,7 @@
     {
       "origin": "musl",
       "name": "handle-aux-at_base.patch",
-      "url": "https://raw.githubusercontent.com/alpinelinux/aports/8aef0c37b0ad23dc4137f0e4755b97a59dc698b8/main/musl/handle-aux-at_base.patch",
+      "url": "https://git.alpinelinux.org/aports/plain/main/musl/handle-aux-at_base.patch?id=fd05fc094264bce4fb76efc6c7f61ba4abfcb609",
       "bytes": 1214,
       "sha256": "2a65e03b94217063d72fe998e5fb2e25cd01716078a3ba1b0ab574ab205111e6",
       "gitBlob": "7c9f2dc5fc05abaf82f2e7b59704862b325c0aab",
@@ -1331,17 +1349,8 @@
     },
     {
       "origin": "musl",
-      "name": "iconv-gb18030-fix.patch",
-      "url": "https://raw.githubusercontent.com/alpinelinux/aports/8aef0c37b0ad23dc4137f0e4755b97a59dc698b8/main/musl/iconv-gb18030-fix.patch",
-      "bytes": 7506,
-      "sha256": "1d0be2e72b9d5bd16546b923aa8af861d271322f01644716a81823bec4065c99",
-      "gitBlob": "4c52c0a3211ec70c5010bc6bce0446c183914380",
-      "apkbuildSHA512": "f7849abeab0e4eab992a80464afa07b9c8aae5cee76040523b9dbc0931435f28ea8f5792b8a4a0cd6d608ac2f37e3225e89afcb3171a0a6df44450ed57cee83b"
-    },
-    {
-      "origin": "musl",
       "name": "iconv.c",
-      "url": "https://raw.githubusercontent.com/alpinelinux/aports/8aef0c37b0ad23dc4137f0e4755b97a59dc698b8/main/musl/iconv.c",
+      "url": "https://git.alpinelinux.org/aports/plain/main/musl/iconv.c?id=fd05fc094264bce4fb76efc6c7f61ba4abfcb609",
       "bytes": 2577,
       "sha256": "f79a2930a2e5bb0624321589edf8b889d1e9b603e01e6b7ae214616605b3fdd7",
       "gitBlob": "f5d5ce2aa730461df126cdf8bc8b084b4ebb881c",
@@ -1350,7 +1359,7 @@
     {
       "origin": "musl",
       "name": "isatty-glibc-align.patch",
-      "url": "https://raw.githubusercontent.com/alpinelinux/aports/8aef0c37b0ad23dc4137f0e4755b97a59dc698b8/main/musl/isatty-glibc-align.patch",
+      "url": "https://git.alpinelinux.org/aports/plain/main/musl/isatty-glibc-align.patch?id=fd05fc094264bce4fb76efc6c7f61ba4abfcb609",
       "bytes": 456,
       "sha256": "1321d542b40921a4c248bb2d15dbd03fcbbf008c8725eb2043d3cab62faeba48",
       "gitBlob": "d73ee79a92373d6c6b9e4e7afeb54a5f2fc172c1",
@@ -1359,7 +1368,7 @@
     {
       "origin": "musl",
       "name": "ldconfig",
-      "url": "https://raw.githubusercontent.com/alpinelinux/aports/8aef0c37b0ad23dc4137f0e4755b97a59dc698b8/main/musl/ldconfig",
+      "url": "https://git.alpinelinux.org/aports/plain/main/musl/ldconfig?id=fd05fc094264bce4fb76efc6c7f61ba4abfcb609",
       "bytes": 393,
       "sha256": "7065021e04a5060957b5c6907af671a7028230d91927fb0c25892cadd9312b7c",
       "gitBlob": "9a6c05978d1bfae6871fb96a862dfd3e7bb9c326",
@@ -1368,7 +1377,7 @@
     {
       "origin": "musl",
       "name": "ldso-fix-non-functional-fix-to-early-dynamic-PAGE_SI.patch",
-      "url": "https://raw.githubusercontent.com/alpinelinux/aports/8aef0c37b0ad23dc4137f0e4755b97a59dc698b8/main/musl/ldso-fix-non-functional-fix-to-early-dynamic-PAGE_SI.patch",
+      "url": "https://git.alpinelinux.org/aports/plain/main/musl/ldso-fix-non-functional-fix-to-early-dynamic-PAGE_SI.patch?id=fd05fc094264bce4fb76efc6c7f61ba4abfcb609",
       "bytes": 1486,
       "sha256": "7f5806124d4a89536e53a07bfe95fcd0a8f1b7a27fc0dfc89c78c724dea1c924",
       "gitBlob": "05bbd99d7f483bf57ccbd5083c8530126fc5c273",
@@ -1377,7 +1386,7 @@
     {
       "origin": "musl",
       "name": "loongarch64-Add-lsx-and-lasx-vector-structure-defini.patch",
-      "url": "https://raw.githubusercontent.com/alpinelinux/aports/8aef0c37b0ad23dc4137f0e4755b97a59dc698b8/main/musl/loongarch64-Add-lsx-and-lasx-vector-structure-defini.patch",
+      "url": "https://git.alpinelinux.org/aports/plain/main/musl/loongarch64-Add-lsx-and-lasx-vector-structure-defini.patch?id=fd05fc094264bce4fb76efc6c7f61ba4abfcb609",
       "bytes": 907,
       "sha256": "28efacd507c01b89e1725ed33723f3f9fdfe6cb83eb78ffea1e2acb7fda8a52c",
       "gitBlob": "4cc1d296ae339af698d277c3f63e1582d50ae8e9",
@@ -1386,7 +1395,7 @@
     {
       "origin": "musl",
       "name": "loongarch64-add-TLSDESC-support.patch",
-      "url": "https://raw.githubusercontent.com/alpinelinux/aports/8aef0c37b0ad23dc4137f0e4755b97a59dc698b8/main/musl/loongarch64-add-TLSDESC-support.patch",
+      "url": "https://git.alpinelinux.org/aports/plain/main/musl/loongarch64-add-TLSDESC-support.patch?id=fd05fc094264bce4fb76efc6c7f61ba4abfcb609",
       "bytes": 2527,
       "sha256": "1efb4604e0b28b84e10faf37d17bad448510e73f6a3db89c8be47d38b9e85138",
       "gitBlob": "17b07138d95bab71b860f01dd8958fb8630db273",
@@ -1395,7 +1404,7 @@
     {
       "origin": "musl",
       "name": "loongarch64-add-bits-hwcap.h.patch",
-      "url": "https://raw.githubusercontent.com/alpinelinux/aports/8aef0c37b0ad23dc4137f0e4755b97a59dc698b8/main/musl/loongarch64-add-bits-hwcap.h.patch",
+      "url": "https://git.alpinelinux.org/aports/plain/main/musl/loongarch64-add-bits-hwcap.h.patch?id=fd05fc094264bce4fb76efc6c7f61ba4abfcb609",
       "bytes": 1406,
       "sha256": "8849080b49dff046b1f29db24e54ffe6262b5884078091994db77efdafca2505",
       "gitBlob": "92581675627e46b48367091a468b16c2a94fddf0",
@@ -1404,7 +1413,7 @@
     {
       "origin": "musl",
       "name": "loongarch64-add-fpu-and-simd-context-to-signal.h.patch",
-      "url": "https://raw.githubusercontent.com/alpinelinux/aports/8aef0c37b0ad23dc4137f0e4755b97a59dc698b8/main/musl/loongarch64-add-fpu-and-simd-context-to-signal.h.patch",
+      "url": "https://git.alpinelinux.org/aports/plain/main/musl/loongarch64-add-fpu-and-simd-context-to-signal.h.patch?id=fd05fc094264bce4fb76efc6c7f61ba4abfcb609",
       "bytes": 2142,
       "sha256": "d73f85a90fe52930dd8b5d16cb7f3369a994918c0e41ae3c3dc9a25df4b45099",
       "gitBlob": "9eea20e136e949dc5ba6acdd1c6c1520c2d12e96",
@@ -1421,7 +1430,7 @@
     {
       "origin": "musl",
       "name": "s390x-dont-allow-br-r0-in-crtjmp.patch",
-      "url": "https://raw.githubusercontent.com/alpinelinux/aports/8aef0c37b0ad23dc4137f0e4755b97a59dc698b8/main/musl/s390x-dont-allow-br-r0-in-crtjmp.patch",
+      "url": "https://git.alpinelinux.org/aports/plain/main/musl/s390x-dont-allow-br-r0-in-crtjmp.patch?id=fd05fc094264bce4fb76efc6c7f61ba4abfcb609",
       "bytes": 1031,
       "sha256": "3568d09f086e1d8957542d195e7a5f14d17ae8805e4d793fd30a3b331eafe537",
       "gitBlob": "93e947bd6cd694258856dfa337cd7a142b140df1",
@@ -1430,7 +1439,7 @@
     {
       "origin": "musl",
       "name": "stdio-skip-empty-iovec-when-buffering-is-disabled.patch",
-      "url": "https://raw.githubusercontent.com/alpinelinux/aports/8aef0c37b0ad23dc4137f0e4755b97a59dc698b8/main/musl/stdio-skip-empty-iovec-when-buffering-is-disabled.patch",
+      "url": "https://git.alpinelinux.org/aports/plain/main/musl/stdio-skip-empty-iovec-when-buffering-is-disabled.patch?id=fd05fc094264bce4fb76efc6c7f61ba4abfcb609",
       "bytes": 1157,
       "sha256": "7b405d6faf271cf13b415bc9688c1fbd728510fdef25d134fbd4a1b93db83e18",
       "gitBlob": "461ff4c32cec035b7f520a209e39c90d54722dae",
@@ -2261,8 +2270,8 @@
     },
     {
       "origin": "musl",
-      "aportsCommit": "8aef0c37b0ad23dc4137f0e4755b97a59dc698b8",
-      "treeSHA1": "a6909a71d0bc6e13917b628abb7ffc272a508808",
+      "aportsCommit": "fd05fc094264bce4fb76efc6c7f61ba4abfcb609",
+      "treeSHA1": "ac111a3e906e374f6296091894ba3eb26348ee36",
       "entries": [
         {
           "name": "0001-add-stub-for-pthread_mutexattr_setprioceiling.patch",
@@ -2272,7 +2281,7 @@
         {
           "name": "APKBUILD",
           "mode": "100644",
-          "gitBlob": "a32f2d25e53fe961bd4f1130bbddbeb7195f638f"
+          "gitBlob": "dcb4d8edd07b4db7ed056209b3bd504cf1321c14"
         },
         {
           "name": "CVE-2025-26519.patch",
@@ -2280,9 +2289,19 @@
           "gitBlob": "8d5ba6cc8390c322cac11070911df61f48572172"
         },
         {
+          "name": "CVE-2026-107891.patch",
+          "mode": "100644",
+          "gitBlob": "2abae19db458c2b3e9b45281a6f4867347c7c26f"
+        },
+        {
           "name": "CVE-2026-40200.patch",
           "mode": "100644",
           "gitBlob": "88298ca471d38b2c8861f817caf394a591fcdc26"
+        },
+        {
+          "name": "CVE-2026-6042.patch",
+          "mode": "100644",
+          "gitBlob": "4c52c0a3211ec70c5010bc6bce0446c183914380"
         },
         {
           "name": "LoongArch64-add-new-reloc-types-and-NT_LOONGARCH_HW_.patch",
@@ -2323,11 +2342,6 @@
           "name": "handle-aux-at_base.patch",
           "mode": "100644",
           "gitBlob": "7c9f2dc5fc05abaf82f2e7b59704862b325c0aab"
-        },
-        {
-          "name": "iconv-gb18030-fix.patch",
-          "mode": "100644",
-          "gitBlob": "4c52c0a3211ec70c5010bc6bce0446c183914380"
         },
         {
           "name": "iconv.c",
