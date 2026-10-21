@@ -1,5 +1,41 @@
 # Android permission recovery checks
 
+Hosted run 39609173300 at d09d08e is terminal. Seven non-device lanes, 86 baseline
+tests and the SAF journey pass. Permission recovery and the release gate fail.
+The recorder sees native signal 6 in the observed system_server1823/TID2059,
+2.188 seconds after Open settings returns 0 and 1.655 seconds before the failed
+Permissions tap returns 20. Android starts a new framework process; the harness
+requests no restart. All three synthetic identity hashes remain unchanged.
+
+The original live stream examines 19,175 lines with no event drops and drains
+for five seconds without recognized native dump details. Both independent
+DropBox reads complete successfully: 99,253 bytes/931 lines and 195,379 bytes/2002
+lines. Neither yields a timestamp/PID/TID/process/signal-correlated report.
+This proves the stores were readable and nonempty, not that the observed
+crash's report was present, parseable or absent. Its cause and the reason for
+the report mismatch remain unknown. Artifact 12352067988 has verified ZIP
+SHA-256 `4ab147806460971083683d5e962d81ef169f740598f2c1b3a4489ddc0089df65`;
+all 72 retained files and the tested harness sources are bound by
+`artifacts/evidence/api37-d09d08e/result.json`.
+
+The follow-up reader now retains fixed rejection counts for report boundaries,
+timestamps before/within/after the capture window, unsupported timestamp/header
+syntax, mismatched PID/TID/process and unrecognized/mismatched signal lines.
+Counts saturate at 65535 and contain no rejected values, timestamps, names,
+paths, messages or raw report text. Existing exact correlation and complete-read
+requirements remain unchanged. These counts distinguish reasons on a future
+observation; they cannot reconstruct or relabel the old failed artifact.
+
+All 70 focused checks pass on both macOS and Linux: 32 report-reader/parser,
+32 permission-harness and six forward-cleanup tests, with resource warnings
+treated as errors. Five new regressions cover each rejection category, strict
+prefix refusal, unchanged admission/privacy and bounded counts. The prior
+API37 read-only smoke remains evidence for the earlier reader only. The new
+read-only probe cannot start because emulator5592 is currently absent; it is
+not a passing Android check, and no accepted fixture is restarted or replaced.
+No APK, app runtime, renderer flags, input replay, deadline, acceptance rule,
+production signing or release gate is changed by this diagnostic follow-up.
+
 The API37 gate exercises permission loss and both ways to restore access:
 the app's runtime prompt and Settings → Permissions → Nearby devices → Allow.
 Returning from Settings must restart the opted-in native host itself. The test

@@ -34,6 +34,17 @@ class ReportParser(NativeDumpDecoder):
         self.dropped = 0
         self.lines = 0
         self.reports = 0
+        self.diagnostic_counts = dict.fromkeys((
+            "reportBoundaries", "overlongLines", "timestampLines", "timestampPrefixRejected",
+            "timestampSyntaxRejected", "timestampParseRejected", "timestampBeforeWindow",
+            "timestampAfterWindow", "timestampInWindow", "headerLines", "headerSyntaxRejected",
+            "headerWithoutWindowTimestamp", "headerPidRejected", "headerTidRejected",
+            "headerProcessRejected", "headersCorrelated", "signalLinesWithHeader",
+            "signalSyntaxRejectedWithHeader", "signalRejectedWithHeader"), 0)
+
+    def count(self, name):
+        # Fixed categories and bounded integers only; rejected text stays private.
+        self.diagnostic_counts[name] = min(65535, self.diagnostic_counts[name] + 1)
 
     def reset(self):
         self.timestamp = self.pending = None
@@ -43,12 +54,17 @@ class ReportParser(NativeDumpDecoder):
     def consume(self, line):
         self.lines += 1
         if len(line) > MAX_LINE:
+            self.count("overlongLines")
             self.reset()
             return
         if line.startswith("*** ***") or line.startswith("========================================"):
+            self.count("reportBoundaries")
             self.reset()
             return
+        if not line.startswith("Timestamp:") and line.lstrip().startswith("Timestamp:"):
+            self.count("timestampPrefixRejected")
         if line.startswith("Timestamp:"):
+            self.count("timestampLines")
             self.reset()
             match = STAMP.fullmatch(line)
             if match:
@@ -56,28 +72,52 @@ class ReportParser(NativeDumpDecoder):
                     epoch = int(datetime.fromisoformat(match[1]).timestamp())
                     if self.start <= epoch <= self.end:
                         self.timestamp = epoch
+                        self.count("timestampInWindow")
+                    else:
+                        self.count("timestampBeforeWindow" if epoch < self.start else "timestampAfterWindow")
                 except (ValueError, OverflowError):
-                    pass
+                    self.count("timestampParseRejected")
+            else:
+                self.count("timestampSyntaxRejected")
             return
         if line.lstrip().startswith("pid:"):
+            self.count("headerLines")
             self.admitted = False
             self.pending = None
             self.native_dumps.clear()
             match = HEADER.fullmatch(line)
+            if not match:
+                self.count("headerSyntaxRejected")
+            if self.timestamp is None:
+                self.count("headerWithoutWindowTimestamp")
             if self.timestamp is None or not match:
                 return
             fault = self.faults.get(int(match[1]))
-            if not fault or fault["tid"] != int(match[2]) or fault["process"] != match[3]:
+            if not fault:
+                self.count("headerPidRejected")
+                return
+            if fault["tid"] != int(match[2]):
+                self.count("headerTidRejected")
+                return
+            if fault["process"] != match[3]:
+                self.count("headerProcessRejected")
                 return
             self.pending = self._native_dump(0, line, {"origin": "dropbox", "timestampEpochSeconds": self.timestamp})
+            if self.pending:
+                self.count("headersCorrelated")
             return
         if not self.pending:
             return
         event = self._native_dump(0, line, {"origin": "dropbox", "timestampEpochSeconds": self.timestamp})
+        if line.lstrip().startswith("signal "):
+            self.count("signalLinesWithHeader")
+            if event is None:
+                self.count("signalSyntaxRejectedWithHeader")
         if event is None:
             return
         if event["kind"] == "native-dump-signal":
             if event["signal"] != self.faults[event["victimPid"]]["signal"]:
+                self.count("signalRejectedWithHeader")
                 self.reset()
                 return
             if not self.admitted:
@@ -206,6 +246,7 @@ def collect(adb, serial, boot_id, start, trace):
             complete = state["exitCode"] == 0 and state["clientStopped"] and recognized and not format_seen["reportReadError"] and not any(state[k] for k in ("timedOut", "limitReached", "failureClass"))
             result["attempts"].append({"tag": tag, **state, "complete": complete, "linesExamined": parser.lines,
                 "matchingReports": parser.reports, "eventsDropped": parser.dropped,
+                "diagnosticCounts": dict(parser.diagnostic_counts),
                 "nativeFramesOmitted": parser.native_frames_omitted, "formatRecognized": recognized,
                 "reportReadError": format_seen["reportReadError"], "events": parser.events})
         if scalar("cat", "/proc/sys/kernel/random/boot_id") != boot_id:

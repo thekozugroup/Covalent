@@ -1,5 +1,23 @@
 # Interlink companion and appliance robustness — 2026-10-21
 
+Hosted d09d08e run 39609173300 is terminal: seven non-device lanes, 86 baseline
+tests and SAF pass; permission recovery and the release gate fail. The observed
+system_server1823/TID2059 receives signal 6 after Open settings returns 0 and
+before the failed Permissions tap. Android restarts the framework. Three
+synthetic identity hashes remain unchanged. Both DropBox reads are complete
+and nonempty but neither correlates a report. The cause and mismatch reason
+remain unknown. Artifact 12352067988 verifies ZIP SHA-256
+4ab147806460971083683d5e962d81ef169f740598f2c1b3a4489ddc0089df65;
+all 72 files/tested sources are bound in artifacts/evidence/api37-d09d08e/result.json.
+
+The diagnostic follow-up adds bounded fixed rejection counts without retaining
+rejected text or changing admission. All 70 focused macOS/Linux checks pass,
+including five new counter/privacy/strictness cases. The local API37 probe is
+unavailable because its exact emulator5592 transport is absent; no fixture is
+restarted, and the earlier smoke is not relabeled. See
+docs/interlink-permission-qa.md. No app/runtime or release change is claimed;
+physical devices, image, accounts, pairing and media remain unchanged.
+
 Hosted bf25758 run39601425204 is terminal: seven non-device jobs, 86 baseline
 tests and SAF pass, while permission recovery and the release gate fail.
 The live recorder sees system_server1775 signal6 after Open settings returns0

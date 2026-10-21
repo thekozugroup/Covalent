@@ -30,7 +30,7 @@ class ParserTests(unittest.TestCase):
         parser = reports.ReportParser(FAULTS, start, end)
         for line in lines:
             parser.consume(line)
-        self.assertNotIn(SECRET, json.dumps(parser.events))
+        self.assertNotIn(SECRET, json.dumps({"events": parser.events, "counts": parser.diagnostic_counts}))
         return parser
 
     def test_exact_time_pid_tid_process_and_signal_retains_only_approved_details(self):
@@ -81,6 +81,51 @@ class ParserTests(unittest.TestCase):
         parser = self.parse(lines)
         self.assertEqual(len(parser.events), 2)
         self.assertEqual(parser.native_frames_omitted, 3)
+
+    def test_counts_distinguish_stale_future_and_current_timestamps(self):
+        for start, end, category in ((EPOCH+1, EPOCH+5, "timestampBeforeWindow"),
+                                     (EPOCH-5, EPOCH-1, "timestampAfterWindow"),
+                                     (EPOCH-1, EPOCH+1, "timestampInWindow")):
+            parser = self.parse(start=start, end=end)
+            self.assertEqual(parser.diagnostic_counts[category], 1)
+            self.assertEqual(parser.diagnostic_counts["timestampLines"], 1)
+            self.assertEqual(parser.diagnostic_counts["headerWithoutWindowTimestamp"], int(category!="timestampInWindow"))
+
+    def test_counts_distinguish_malformed_time_and_strict_prefix_refusal(self):
+        for replacement, category in (("Timestamp: " + SECRET, "timestampSyntaxRejected"),
+                                      ("Timestamp: 2026-99-21 13:13:58+0000", "timestampParseRejected"),
+                                      ("  Timestamp: " + STAMP, "timestampPrefixRejected")):
+            parser = self.parse([replacement if line.startswith("Timestamp:") else line for line in GOOD])
+            self.assertEqual(parser.events, [])
+            self.assertEqual(parser.diagnostic_counts[category], 1)
+            self.assertEqual(parser.diagnostic_counts["headerWithoutWindowTimestamp"], 1)
+
+    def test_counts_explain_each_rejected_header_without_retaining_values(self):
+        for old, new, category in (("pid: 1775", "pid: 1776", "headerPidRejected"),
+                                  ("tid: 1991", "tid: 1992", "headerTidRejected"),
+                                  (">>> system_server <<<", ">>> " + SECRET + " <<<", "headerProcessRejected"),
+                                  ("pid: 1775", "  pid: 1775", "headerSyntaxRejected")):
+            parser = self.parse([line.replace(old, new) for line in GOOD])
+            self.assertEqual(parser.events, [])
+            self.assertEqual(parser.diagnostic_counts[category], 1)
+            self.assertEqual(parser.diagnostic_counts["headersCorrelated"], 0)
+
+    def test_counts_distinguish_unrecognized_and_mismatched_signals(self):
+        for replacement, category in (("signal " + SECRET, "signalSyntaxRejectedWithHeader"),
+                                      (GOOD[3].replace("signal 6", "signal 11"), "signalRejectedWithHeader")):
+            parser = self.parse(GOOD[:3]+[replacement]+GOOD[4:])
+            self.assertEqual(parser.events, [])
+            self.assertEqual(parser.diagnostic_counts["headersCorrelated"], 1)
+            self.assertEqual(parser.diagnostic_counts[category], 1)
+
+    def test_diagnostic_counts_saturate_without_growing_event_storage(self):
+        parser = reports.ReportParser(FAULTS, EPOCH-1, EPOCH+1)
+        for _ in range(65540):parser.consume("Timestamp: " + SECRET)
+        self.assertEqual(parser.events, [])
+        self.assertEqual(parser.diagnostic_counts["timestampLines"], 65535)
+        self.assertEqual(parser.diagnostic_counts["timestampSyntaxRejected"], 65535)
+        self.assertTrue(all(type(value) is int and 0 <= value <= 65535 for value in parser.diagnostic_counts.values()))
+        self.assertNotIn(SECRET, json.dumps(parser.diagnostic_counts))
 
 
 class BoundedClientTests(unittest.TestCase):
@@ -165,6 +210,7 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(len(commands), 5)
         self.assertEqual([a["tag"] for a in result["attempts"]], list(reports.TAGS))
         self.assertTrue(all(a["complete"] for a in result["attempts"]))
+        self.assertTrue(all(a["diagnosticCounts"]["headersCorrelated"] == 1 for a in result["attempts"]))
         self.assertFalse(result["rawReportsRetained"])
 
     def test_incomplete_output_cannot_become_matched(self):
