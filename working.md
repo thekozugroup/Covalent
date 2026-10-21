@@ -21,11 +21,20 @@ is not proof of the API37 cause or permission recovery. Its source-bound receipt
 is artifacts/interlink-qa/native-framework-smoke-1792566867768376000.json;
 the earlier-source smoke is retained separately. See docs/interlink-permission-qa.md.
 
-Hosted 1e54976 run39558337954 remains active at its API37 device step at the
-last authoritative check; all seven non-device jobs pass. This local follow-up
-is held from pushing while that exact run finishes, because workflow concurrency
-would cancel it. Its earlier recorder remains unchanged in that run; no passing
-permission journey is inferred from the local metadata tests.
+Hosted 1e54976 run39558337954 is terminal: seven non-device jobs, all 86
+baseline tests and the full SAF journey pass (415.979 seconds). Permission
+recovery fails while opening app settings. Its Open settings tap returns0;
+2.024 host seconds later the known system_server651 receives native signal6,
+and Android starts system_server8025 on the same boot. All three synthetic
+identity digests remain unchanged. Timing establishes no cause or trigger.
+The previous e0dfc1c abort preceded its failed tap; the two runs are retained
+separately. Artifact12327728727 has verified ZIP SHA-256
+3fd06c816c2d000efac7ecb971306c7be264f1739326d7586ecdf8636e67a404;
+artifacts/evidence/api37-1e54976/result.json binds the source and distinct gates.
+The recorder follow-up was pushed separately as codex/native-framework-details
+while this exact run remained active, avoiding concurrency cancellation. It
+can now advance the review branch for a new exact-source hosted check. That
+future check, permission recovery and the release gate remain unaccepted.
 
 Hosted e0dfc1c run 39552976561 is terminal. All seven non-device lanes,
 all 86 baseline instrumentation tests and the complete SAF folder journey pass

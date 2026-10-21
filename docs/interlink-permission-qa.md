@@ -99,6 +99,17 @@ not certify phone roaming, pairing, production signing or Pi hardware.
 
 ## Native framework abort details
 
+The 1e54976 hosted run39558337954 separately passes all 86 baseline tests and
+the full SAF journey in 415.979 seconds. Permission recovery fails while opening
+app settings. Here the Open settings tap returns0 before system_server651's
+native signal6, by 2.024 host seconds. Android starts PID8025 on the same boot;
+three synthetic identity digests remain unchanged. The preceding e0dfc1c abort
+occurred before its failed tap. Neither ordering establishes a crash cause or
+trigger. Both runs use the previous recorder without native dump details;
+the new recorder still needs its own full hosted check. The verified artifact
+and source-bound outcome are retained under artifacts/evidence/api37-1e54976/.
+
+
 The e0dfc1c hosted recording establishes a native signal6 in the previously
 observed system_server PID657 before the failed Permissions tap. It establishes
 neither the initiating cause nor the trigger. The old recorder discarded the
