@@ -1,0 +1,41 @@
+INSTRUMENTATION_STATUS: class=life.michaelwong.covalent.node.SafFolderSyncJourneyInstrumentedTest
+INSTRUMENTATION_STATUS: current=1
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=1
+INSTRUMENTATION_STATUS: stream=
+life.michaelwong.covalent.node.SafFolderSyncJourneyInstrumentedTest:
+INSTRUMENTATION_STATUS: test=nativeManualSafRunRegistersAcrossRestartAndIsolatesLostGrant
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=life.michaelwong.covalent.node.SafFolderSyncJourneyInstrumentedTest
+INSTRUMENTATION_STATUS: current=1
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=1
+INSTRUMENTATION_STATUS: stack=java.lang.AssertionError: Manual Run Now after native address refresh did not complete before its deadline.
+	at life.michaelwong.covalent.node.SafFolderSyncJourneyInstrumentedTest.await(SafFolderSyncJourneyInstrumentedTest.kt:1596)
+	at life.michaelwong.covalent.node.SafFolderSyncJourneyInstrumentedTest.awaitSafFile(SafFolderSyncJourneyInstrumentedTest.kt:1214)
+	at life.michaelwong.covalent.node.SafFolderSyncJourneyInstrumentedTest.nativeManualSafRunRegistersAcrossRestartAndIsolatesLostGrant(SafFolderSyncJourneyInstrumentedTest.kt:267)
+
+INSTRUMENTATION_STATUS: stream=
+Error in nativeManualSafRunRegistersAcrossRestartAndIsolatesLostGrant(life.michaelwong.covalent.node.SafFolderSyncJourneyInstrumentedTest):
+java.lang.AssertionError: Manual Run Now after native address refresh did not complete before its deadline.
+	at life.michaelwong.covalent.node.SafFolderSyncJourneyInstrumentedTest.await(SafFolderSyncJourneyInstrumentedTest.kt:1596)
+	at life.michaelwong.covalent.node.SafFolderSyncJourneyInstrumentedTest.awaitSafFile(SafFolderSyncJourneyInstrumentedTest.kt:1214)
+	at life.michaelwong.covalent.node.SafFolderSyncJourneyInstrumentedTest.nativeManualSafRunRegistersAcrossRestartAndIsolatesLostGrant(SafFolderSyncJourneyInstrumentedTest.kt:267)
+
+INSTRUMENTATION_STATUS: test=nativeManualSafRunRegistersAcrossRestartAndIsolatesLostGrant
+INSTRUMENTATION_STATUS_CODE: -2
+INSTRUMENTATION_RESULT: stream=
+
+Time: 198.698
+There was 1 failure:
+1) nativeManualSafRunRegistersAcrossRestartAndIsolatesLostGrant(life.michaelwong.covalent.node.SafFolderSyncJourneyInstrumentedTest)
+java.lang.AssertionError: Manual Run Now after native address refresh did not complete before its deadline.
+	at life.michaelwong.covalent.node.SafFolderSyncJourneyInstrumentedTest.await(SafFolderSyncJourneyInstrumentedTest.kt:1596)
+	at life.michaelwong.covalent.node.SafFolderSyncJourneyInstrumentedTest.awaitSafFile(SafFolderSyncJourneyInstrumentedTest.kt:1214)
+	at life.michaelwong.covalent.node.SafFolderSyncJourneyInstrumentedTest.nativeManualSafRunRegistersAcrossRestartAndIsolatesLostGrant(SafFolderSyncJourneyInstrumentedTest.kt:267)
+
+FAILURES!!!
+Tests run: 1,  Failures: 1
+
+
+INSTRUMENTATION_CODE: -1

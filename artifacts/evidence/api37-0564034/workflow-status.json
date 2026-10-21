@@ -1,0 +1,146 @@
+{
+  "runs": {
+    "workflow_runs": [
+      {
+        "id": 39635433510,
+        "name": "Release version sync",
+        "status": "completed",
+        "conclusion": "success",
+        "run_number": 373,
+        "jobs_url": "https://api.github.com/repos/thekozugroup/Covalent/actions/runs/39635433510/jobs",
+        "logs_url": "https://api.github.com/repos/thekozugroup/Covalent/actions/runs/39635433510/logs",
+        "workflow_id": 339078786
+      },
+      {
+        "id": 39635433507,
+        "name": "CodeQL",
+        "status": "completed",
+        "conclusion": "failure",
+        "run_number": 418,
+        "jobs_url": "https://api.github.com/repos/thekozugroup/Covalent/actions/runs/39635433507/jobs",
+        "logs_url": "https://api.github.com/repos/thekozugroup/Covalent/actions/runs/39635433507/logs",
+        "workflow_id": 335595054
+      },
+      {
+        "id": 39635433377,
+        "name": "CI",
+        "status": "completed",
+        "conclusion": "failure",
+        "run_number": 448,
+        "jobs_url": "https://api.github.com/repos/thekozugroup/Covalent/actions/runs/39635433377/jobs",
+        "logs_url": "https://api.github.com/repos/thekozugroup/Covalent/actions/runs/39635433377/logs",
+        "workflow_id": 335298252
+      }
+    ]
+  },
+  "codeql": {
+    "jobs": [
+      {
+        "id": 119344484826,
+        "name": "CodeQL swift",
+        "status": "completed",
+        "conclusion": "cancelled",
+        "run_id": 39635433507,
+        "logs_url": null,
+        "steps": null
+      },
+      {
+        "id": 119344485359,
+        "name": "CodeQL java-kotlin",
+        "status": "completed",
+        "conclusion": "success",
+        "run_id": 39635433507,
+        "logs_url": null,
+        "steps": [
+          {
+            "name": "Set up job",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 1
+          },
+          {
+            "name": "Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 2
+          },
+          {
+            "name": "Run github/codeql-action/init@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 3
+          },
+          {
+            "name": "Run actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 4
+          },
+          {
+            "name": "Run android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 5
+          },
+          {
+            "name": "Build Android app under CodeQL tracing",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 6
+          },
+          {
+            "name": "Run github/codeql-action/autobuild@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd",
+            "status": "completed",
+            "conclusion": "skipped",
+            "number": 7
+          },
+          {
+            "name": "Run github/codeql-action/analyze@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 8
+          },
+          {
+            "name": "Post Run github/codeql-action/analyze@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 13
+          },
+          {
+            "name": "Post Run actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 14
+          },
+          {
+            "name": "Post Run github/codeql-action/init@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 15
+          },
+          {
+            "name": "Post Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 16
+          },
+          {
+            "name": "Complete job",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 17
+          }
+        ]
+      },
+      {
+        "id": 119352614493,
+        "name": "CodeQL policy",
+        "status": "completed",
+        "conclusion": "skipped",
+        "run_id": 39635433507,
+        "logs_url": null,
+        "steps": null
+      }
+    ]
+  }
+}

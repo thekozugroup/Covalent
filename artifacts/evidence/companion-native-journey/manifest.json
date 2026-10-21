@@ -1,0 +1,427 @@
+{
+  "format": 1,
+  "parentCommit": "fed6107937f5c9208a899c1cc37c01c4f039a05f",
+  "sources": {
+    ".github/workflows/ci.yml": "f997c89fd5c067905d62810ea55a8606895908ca8439619f1978ebc21fe7d25b",
+    "apps/android/app/build.gradle.kts": "761975ca9f0aecf88c537f4077ace39a153d6c5e197b3b045f27a865e5573213",
+    "apps/android/app/src/androidTest/java/life/michaelwong/covalent/node/SafFolderSyncJourneyInstrumentedTest.kt": "77eed93e9f9a3396f4d706c445c0fd62ac28125e91224bcaa4b09179b320e7a1",
+    "apps/android/app/src/debug/java/life/michaelwong/covalent/node/FolderJourneyTheme.kt": "f107591bb934465160c44f2d60453db4d7b3719d54e9bb2e2216dda6f77ed979",
+    "apps/android/app/src/debug/java/life/michaelwong/covalent/node/FolderSyncInstrumentationBridge.kt": "7899741911a4ff929325e8a74990859b9946c8ca52616f9cd4e17754a865d47e",
+    "apps/android/app/src/main/java/life/michaelwong/covalent/ui/FolderSyncScreen.kt": "8bd474f640b211c86333001c173e41f89a7b5e369ebfa1cdecf0e27d48ddb141",
+    "apps/android/companion/build.gradle.kts": "56f84ff404ef08271f6007e7efd06e263484fc9abad1d7fc68a0f404ad558f8b",
+    "apps/android/companion/src/debug/java/life/michaelwong/covalent/node/FolderJourneyTheme.kt": "702ce66ff98e5367222fce12f474c0063989be07f4eaa3be41b86eda572a5518",
+    "apps/android/companion/src/main/AndroidManifest.xml": "32256b3ea6fdeab3814350fa85ede77a4aa3ebb9843e88d5830a496366f56503",
+    "apps/android/companion/src/main/java/life/michaelwong/covalent/InterlinkActivity.kt": "6965680e8c3500b684161bed3de119dd4aeb013b2d9e1417a39a6c51492b1ff4",
+    "apps/android/companion/src/main/java/life/michaelwong/covalent/InterlinkApplication.kt": "ecb48e683868f3dd35531fea7bf469bb6543225bf51e5b025bc33421dc383362",
+    "apps/android/gradle/verification-metadata.xml": "7e3d3b75a2dcb6ceeb3ea2593c54c48b71432a1caab04d616a18115728360f51",
+    "docs/interlink-native-journey.md": "7559a2c205d500e1ee937ca30405e58e977868b692dea48ba1b98b1fd504e6d6",
+    "scripts/android-instrumentation-result.sh": "9e6b68c870aea2327c1e8e1c5017febfdf73a408f3c981181db995ecac37bd13",
+    "scripts/android-native-library-directory.py": "944c818d9b204d76cfd42d84bb79328ef2144b915ff7fee50c04ffe55923de1f",
+    "scripts/test-android-native-library-directory.py": "9965ce2f023ead0c3def901bead8620394d8ff1ab092a4e747984f2206c1106d",
+    "scripts/validate-foundation.sh": "0850a98fb25b72d3b7810c7be08739baf6b377e60339a96e300bea84ac33bd59",
+    "working.md": "d7c99cc24c531e990a36bd97bbee2e83001403a20350e915d5be144e83431daa"
+  },
+  "evidence": {
+    "artifacts/evidence/api37-fed6107/archive-bindings.json": {
+      "sha256": "12e8d9af56343905e1262fc5be2e022ede4327b281b318b7cd53e92a76c7fbf8",
+      "bytes": 16882
+    },
+    "artifacts/evidence/api37-fed6107/expected-baseline.txt": {
+      "sha256": "3874b53dff6d7e87131ec6b12bdd76ba243de6add9abfe48b1e23d238baa0803",
+      "bytes": 8915
+    },
+    "artifacts/evidence/api37-fed6107/expected-folder-journey.txt": {
+      "sha256": "73b439b5a77a0a5f255ac7d92ec6824583c4223f36762c3b355778145862e8ef",
+      "bytes": 129
+    },
+    "artifacts/evidence/api37-fed6107/instrumentation-baseline.log": {
+      "sha256": "cac69c02917ca835c54ed2c45c0d1fdd0693ab078be642a41ec9932d3d69b9a1",
+      "bytes": 59887
+    },
+    "artifacts/evidence/api37-fed6107/instrumentation-folder-journey.log": {
+      "sha256": "144386ccfa7f2a27e3f2be267e78a08178368c3dadfffd3cafe497474fd14923",
+      "bytes": 889
+    },
+    "artifacts/evidence/api37-fed6107/permission-recovery.json": {
+      "sha256": "6372eb79662268a09febf7316432c6c3dc68a660a985e4beac08715951f952d6",
+      "bytes": 42943
+    },
+    "artifacts/evidence/api37-fed6107/result.json": {
+      "sha256": "8e8ac5f9033535967778464b6567e96686aec423e9ef6e9127dc881150dc5fe3",
+      "bytes": 848
+    },
+    "artifacts/evidence/api37-fed6107/terminal-jobs.json": {
+      "sha256": "aaf28f840d647a4aeabd421f7244ff124b1e43a8e82a74781bac97209a6dbb71",
+      "bytes": 1895
+    },
+    "artifacts/evidence/api37-fed6107/validation-baseline.log": {
+      "sha256": "1e3121b67276787b036f6a8b8c5727fc3d80153b760a5fbcce359db3ab8b8cf4",
+      "bytes": 69
+    },
+    "artifacts/evidence/api37-fed6107/validation-folder-journey.log": {
+      "sha256": "b1a4fab913680fc24fbb0d85f9f3f08bd5d5ee6e5a329dcaaa01d2fd887eb529",
+      "bytes": 68
+    },
+    "artifacts/evidence/companion-native-journey/attempt-address-confirmation-readiness/SafFolderSyncJourneyInstrumentedTest.kt": {
+      "sha256": "ec7c62771082b2d3fab069ab10d1895c281da3ff9964bae0f2fd0b0081a23dd1",
+      "bytes": 87778
+    },
+    "artifacts/evidence/companion-native-journey/attempt-coordinate-confirmation/SafFolderSyncJourneyInstrumentedTest.kt": {
+      "sha256": "4f84f473da6680d86f78a4952fd9da2c296c87820afe5bc8335eb323e608ee55",
+      "bytes": 86764
+    },
+    "artifacts/evidence/companion-native-journey/attempt-expressive-main-classpath/SafFolderSyncJourneyInstrumentedTest.kt": {
+      "sha256": "e1ae4f697a8ed64c69df1f132a6610fb1463bfb7b977672b103d729097b1765e",
+      "bytes": 83122
+    },
+    "artifacts/evidence/companion-native-journey/attempt-expressive-main-classpath/build.json": {
+      "sha256": "f84c8d1ffd0f1e7b486bc7b712ad149bd3c73e822ab0c76ef9565f3fc9256743",
+      "bytes": 1010
+    },
+    "artifacts/evidence/companion-native-journey/attempt-expressive-main-classpath/build.log": {
+      "sha256": "aadafaab967bf4e3afaffaf2be799c8df970b17e710083eddcdf664bb7ed268b",
+      "bytes": 27644
+    },
+    "artifacts/evidence/companion-native-journey/attempt-photo-policy-assumption/SafFolderSyncJourneyInstrumentedTest.kt": {
+      "sha256": "6ff721efccff33d48972d1feeb3bdf6cbfe182be020b8e8300b7ebc459201602",
+      "bytes": 83792
+    },
+    "artifacts/evidence/companion-native-journey/attempt-photo-retention/build.json": {
+      "sha256": "5da2c091f31cbfc075ec9751b09582b3669d6094d1f770dd6158967439b3afde",
+      "bytes": 1454
+    },
+    "artifacts/evidence/companion-native-journey/attempt-photo-retention/build.log": {
+      "sha256": "9b1b3b5b1f7e46857991099eaa459c70556b84208f63bdeb68410dca6a446ace",
+      "bytes": 24489
+    },
+    "artifacts/evidence/companion-native-journey/attempt-semantic-confirmation/build.json": {
+      "sha256": "52812fc95519fde7f337981ae2f09ae89195d303958408fc5c3a8deb9a9a7fef",
+      "bytes": 1454
+    },
+    "artifacts/evidence/companion-native-journey/attempt-semantic-confirmation/build.log": {
+      "sha256": "3168323cd225f1ac4fb4b410eea5760f09de7f4eef932356615d76e6c3fb0afb",
+      "bytes": 24489
+    },
+    "artifacts/evidence/companion-native-journey/attempt-source-filter/build.gradle.kts": {
+      "sha256": "1756b70942ee419fe927e762c3e33adcf8ef3c8f00c5b2b090210a4348055a55",
+      "bytes": 4875
+    },
+    "artifacts/evidence/companion-native-journey/attempt-source-filter/build.json": {
+      "sha256": "750eac2602f17db66b968edad94409777c50b22ee4a1782faed602d2f57d3c00",
+      "bytes": 887
+    },
+    "artifacts/evidence/companion-native-journey/attempt-source-filter/build.log": {
+      "sha256": "a332133cc374fd104eca2ac9a962b06dc412a96dbcd3cbe93dc93fcc28b2fc16",
+      "bytes": 4856
+    },
+    "artifacts/evidence/companion-native-journey/attempt-source-provider/build.gradle.kts": {
+      "sha256": "744a7dd790636d86f8d063fdd73f448674f6e9237d1581f77eddde377419f054",
+      "bytes": 5504
+    },
+    "artifacts/evidence/companion-native-journey/attempt-source-provider/build.json": {
+      "sha256": "2d7d9e9ce886877c1b576cddbdf85d90366206d7abeea0900be148911c76d0d4",
+      "bytes": 887
+    },
+    "artifacts/evidence/companion-native-journey/attempt-source-provider/build.log": {
+      "sha256": "011a4faeb8e591d7ce9a7aeedd5932e09b0940035c8258786b4ab4aa0946be20",
+      "bytes": 3321
+    },
+    "artifacts/evidence/companion-native-journey/attempt-test-manifest-verification/build.gradle.kts": {
+      "sha256": "56f84ff404ef08271f6007e7efd06e263484fc9abad1d7fc68a0f404ad558f8b",
+      "bytes": 5736
+    },
+    "artifacts/evidence/companion-native-journey/attempt-test-manifest-verification/build.json": {
+      "sha256": "351106effcffa4f42fdac3a24d83fdd1a586e423b500ac389e817905954434b3",
+      "bytes": 888
+    },
+    "artifacts/evidence/companion-native-journey/attempt-test-manifest-verification/build.log": {
+      "sha256": "63e871aa9c7beec27ede1acd93866f80d8773eaa327f8123483e4b31ac38f12a",
+      "bytes": 22293
+    },
+    "artifacts/evidence/companion-native-journey/build-address-readiness.py": {
+      "sha256": "9b6da225e57f96ef61a9dee7f00a12156e2f6a296392ae90c28801b0194ee9fc",
+      "bytes": 1820
+    },
+    "artifacts/evidence/companion-native-journey/build-confirmation.py": {
+      "sha256": "3b523d170bd2acab30f9952825c2fbe970d4ea53152a4c68f9da38a17a9b1ebf",
+      "bytes": 1820
+    },
+    "artifacts/evidence/companion-native-journey/build.json": {
+      "sha256": "b1661d8854391e648e27d925780bdc145f417a79eb6ddd46ccb749d69b0e9d1a",
+      "bytes": 1436
+    },
+    "artifacts/evidence/companion-native-journey/build.log": {
+      "sha256": "9c1999e2ccfd0a005c3aa038032eb3965698e5fb072dc4934c50eb2e1369ebee",
+      "bytes": 24489
+    },
+    "artifacts/evidence/companion-native-journey/continue-installed-native.py": {
+      "sha256": "a842d590b23f25dd2381b4d98ca26cdb62ae14ac1f392bcd0f53e8c9ececc14d",
+      "bytes": 6735
+    },
+    "artifacts/evidence/companion-native-journey/dependency-verification.json": {
+      "sha256": "ee241c585a22b3eafed25125a547ebdfd6732df89f2c7d94c35a561458cd959d",
+      "bytes": 1592
+    },
+    "artifacts/evidence/companion-native-journey/final-address-readiness-build/build.json": {
+      "sha256": "e20d2fbb638fcbb7d5a2b18d95e136ed358bbff0470ecd0222a1b0e5cc7ace27",
+      "bytes": 1454
+    },
+    "artifacts/evidence/companion-native-journey/final-address-readiness-build/build.log": {
+      "sha256": "349a18cad89af475b162c302e09c4ab8a25da06fe6c2f9bd518390331c6cd860",
+      "bytes": 24489
+    },
+    "artifacts/evidence/companion-native-journey/final-foundation/receipt.json": {
+      "sha256": "3503fc4195e28e838da5845aee9731ee73f403b9b1b8d6a4264af6762881c33f",
+      "bytes": 124
+    },
+    "artifacts/evidence/companion-native-journey/final-foundation/validation.log": {
+      "sha256": "a0acd2a96ec6628af476c8c9ad7866c4a896acb861bb2fc11f13c95df9bcb054",
+      "bytes": 4207
+    },
+    "artifacts/evidence/companion-native-journey/foundation.log": {
+      "sha256": "7136a1ea5ac75dbc338312b0e26390ecb89bf889bf9bb34e22f95c13506ecd7a",
+      "bytes": 4207
+    },
+    "artifacts/evidence/companion-native-journey/initial-build/build.json": {
+      "sha256": "a9b6ba9231f9697deff1630d44f18c9362138fd7bab6b67c4f60f67f055ebc81",
+      "bytes": 1335
+    },
+    "artifacts/evidence/companion-native-journey/initial-build/build.log": {
+      "sha256": "ccc80a36d16767d8451a4b3f5ce27dda0d81137b21b4d7b1150b0ffdfa2df7ea",
+      "bytes": 25962
+    },
+    "artifacts/evidence/companion-native-journey/native/install-test.log": {
+      "sha256": "8cfe21ca9831863004ad6eb25b313f8944786f7a01b291da8fbbe61cc0c847e5",
+      "bytes": 32
+    },
+    "artifacts/evidence/companion-native-journey/native/install.log": {
+      "sha256": "8cfe21ca9831863004ad6eb25b313f8944786f7a01b291da8fbbe61cc0c847e5",
+      "bytes": 32
+    },
+    "artifacts/evidence/companion-native-journey/native/receipt.json": {
+      "sha256": "a134e038f0cb7c5d7fe89d165db4dd64e33e8d332de9821f7c582fe10e81a654",
+      "bytes": 2636
+    },
+    "artifacts/evidence/companion-native-journey/native-address-readiness/after-test-home.png": {
+      "sha256": "3a5cd77559652a76bc68a8d9c7d46f2b4f82a3e6ebe8e5e2b9ef764073bccfd0",
+      "bytes": 246895
+    },
+    "artifacts/evidence/companion-native-journey/native-address-readiness/expected.txt": {
+      "sha256": "73b439b5a77a0a5f255ac7d92ec6824583c4223f36762c3b355778145862e8ef",
+      "bytes": 129
+    },
+    "artifacts/evidence/companion-native-journey/native-address-readiness/install-test.log": {
+      "sha256": "8cfe21ca9831863004ad6eb25b313f8944786f7a01b291da8fbbe61cc0c847e5",
+      "bytes": 32
+    },
+    "artifacts/evidence/companion-native-journey/native-address-readiness/install.log": {
+      "sha256": "8cfe21ca9831863004ad6eb25b313f8944786f7a01b291da8fbbe61cc0c847e5",
+      "bytes": 32
+    },
+    "artifacts/evidence/companion-native-journey/native-address-readiness/instrumentation.log": {
+      "sha256": "c68e6c92172fc02c9ba1ad5ae808e05143c14a8cdae76a7b17b5f82a73c80469",
+      "bytes": 889
+    },
+    "artifacts/evidence/companion-native-journey/native-address-readiness/markers.log": {
+      "sha256": "bb867150d0d0c4e5919b47ce10f239eace3bcf9b31fe2e315af1ac8bed7a6757",
+      "bytes": 1582
+    },
+    "artifacts/evidence/companion-native-journey/native-address-readiness/receipt.json": {
+      "sha256": "b8db53842ae706e85739020b72efc70ba6decdfc71ec2027f3a361bdcca05d2c",
+      "bytes": 3993
+    },
+    "artifacts/evidence/companion-native-journey/native-address-readiness/validation.log": {
+      "sha256": "b1a4fab913680fc24fbb0d85f9f3f08bd5d5ee6e5a329dcaaa01d2fd887eb529",
+      "bytes": 68
+    },
+    "artifacts/evidence/companion-native-journey/native-after-installed-update/expected.txt": {
+      "sha256": "73b439b5a77a0a5f255ac7d92ec6824583c4223f36762c3b355778145862e8ef",
+      "bytes": 129
+    },
+    "artifacts/evidence/companion-native-journey/native-after-installed-update/instrumentation.log": {
+      "sha256": "5afed38d7a21c78eb2e93a7a89ceca168c31486fff39f4a3df217b58dec16f08",
+      "bytes": 4578
+    },
+    "artifacts/evidence/companion-native-journey/native-after-installed-update/receipt.json": {
+      "sha256": "ac1f25dfa77ceab54db620806a2a7bcb5aaba3ae4f4b1c470485e79c6a0793fc",
+      "bytes": 3206
+    },
+    "artifacts/evidence/companion-native-journey/native-directory.log": {
+      "sha256": "56c431ad0a3e1ad7690805a995358787506f267ca76202bca75df3b49cbe2228",
+      "bytes": 110
+    },
+    "artifacts/evidence/companion-native-journey/native-photo-retention/after-failure-screen.json": {
+      "sha256": "db9f7559f545bc8f97a65ac23b42efd6a4dddfaa9cf5b9ce9acdc5e4b93fcdea",
+      "bytes": 7140
+    },
+    "artifacts/evidence/companion-native-journey/native-photo-retention/expected.txt": {
+      "sha256": "73b439b5a77a0a5f255ac7d92ec6824583c4223f36762c3b355778145862e8ef",
+      "bytes": 129
+    },
+    "artifacts/evidence/companion-native-journey/native-photo-retention/install-test.log": {
+      "sha256": "8cfe21ca9831863004ad6eb25b313f8944786f7a01b291da8fbbe61cc0c847e5",
+      "bytes": 32
+    },
+    "artifacts/evidence/companion-native-journey/native-photo-retention/install.log": {
+      "sha256": "8cfe21ca9831863004ad6eb25b313f8944786f7a01b291da8fbbe61cc0c847e5",
+      "bytes": 32
+    },
+    "artifacts/evidence/companion-native-journey/native-photo-retention/instrumentation.log": {
+      "sha256": "9db9ae3ef510431c0f13e0bdd8f0625aeea892e2fcb692687260106b120f63cb",
+      "bytes": 3630
+    },
+    "artifacts/evidence/companion-native-journey/native-photo-retention/markers.log": {
+      "sha256": "85c5b283c6b174094eadfafbb71c0470dc36a558915318e97c863e385923b8b8",
+      "bytes": 183
+    },
+    "artifacts/evidence/companion-native-journey/native-photo-retention/receipt.json": {
+      "sha256": "54fbda817358ab3d68edb5ba7eaf76e3d2389450003ec3deff249c6c35ed2de8",
+      "bytes": 3223
+    },
+    "artifacts/evidence/companion-native-journey/native-photo-retention/validation.log": {
+      "sha256": "14d3fccb0d111dd1a4897e078b0c3debf16a5e35a4023a1585622df581a01922",
+      "bytes": 44
+    },
+    "artifacts/evidence/companion-native-journey/native-semantic-confirmation/expected.txt": {
+      "sha256": "73b439b5a77a0a5f255ac7d92ec6824583c4223f36762c3b355778145862e8ef",
+      "bytes": 129
+    },
+    "artifacts/evidence/companion-native-journey/native-semantic-confirmation/install-test.log": {
+      "sha256": "8cfe21ca9831863004ad6eb25b313f8944786f7a01b291da8fbbe61cc0c847e5",
+      "bytes": 32
+    },
+    "artifacts/evidence/companion-native-journey/native-semantic-confirmation/install.log": {
+      "sha256": "8cfe21ca9831863004ad6eb25b313f8944786f7a01b291da8fbbe61cc0c847e5",
+      "bytes": 32
+    },
+    "artifacts/evidence/companion-native-journey/native-semantic-confirmation/instrumentation.log": {
+      "sha256": "9601786366754effca7d7aafc01ed30d2f24f7e5adf1a3c300d098f7aa748e79",
+      "bytes": 2870
+    },
+    "artifacts/evidence/companion-native-journey/native-semantic-confirmation/markers.log": {
+      "sha256": "3b8ea55c868053e941483faf1ad2d92b69b9a4de732fc11c947b2a36616b06d3",
+      "bytes": 562
+    },
+    "artifacts/evidence/companion-native-journey/native-semantic-confirmation/receipt.json": {
+      "sha256": "2ff8734a418ddc9b6a69b60eb3b55de127dbd2cd9936b506d0e0c54f46fbe893",
+      "bytes": 3600
+    },
+    "artifacts/evidence/companion-native-journey/native-semantic-confirmation/validation.log": {
+      "sha256": "14d3fccb0d111dd1a4897e078b0c3debf16a5e35a4023a1585622df581a01922",
+      "bytes": 44
+    },
+    "artifacts/evidence/companion-native-journey/package-and-verification.json": {
+      "sha256": "c4cc4d484fcd772c9206c3e4786da6096172f85e5a09d4d4c35b8c3848909479",
+      "bytes": 1308
+    },
+    "artifacts/evidence/companion-native-journey/retained-avd-shutdown.json": {
+      "sha256": "f7c19576b47aaeb6d9ff9137c388737c535f0eeaf9094364e8f50592921e095c",
+      "bytes": 1435
+    },
+    "artifacts/evidence/companion-native-journey/run-address-readiness-native.py": {
+      "sha256": "918ba6e6565e12498642d88045c8761569a9ed02ff0efc072938df523cf8a66f",
+      "bytes": 10871
+    },
+    "artifacts/evidence/companion-native-journey/run-confirmation-native.py": {
+      "sha256": "1ba6eaec1a958f930cd4ad6f77e302b6d441a2658ca98b68531ab98a10f34cbb",
+      "bytes": 10193
+    },
+    "artifacts/evidence/companion-native-journey/run-native.py": {
+      "sha256": "56c33353c24649212bea132445b45e5f4bf3dde30013754763bb2c9ca9f40c92",
+      "bytes": 8564
+    },
+    "artifacts/evidence/companion-native-journey/run-retention-native.py": {
+      "sha256": "4b31f47e8434d67bc867773ec5d3f7bffee3397c3013f5afa9a0a58194b2d3cf",
+      "bytes": 9631
+    },
+    "artifacts/evidence/companion-native-journey/validation.json": {
+      "sha256": "57528a2e2182c3efe055336203a4b23387999f49ffb66da8c8c23f9a2d3ea35e",
+      "bytes": 306
+    }
+  },
+  "nativeResult": {
+    "passed": true,
+    "package": "life.michaelwong.interlink",
+    "activity": "Compose test activity with real photoAppliance screen; entry/scaffold not exercised",
+    "junitSeconds": 458.364,
+    "wrapperSeconds": 466.038,
+    "apkSha256": "b2bb9709a4b0c2739bb832d3d99651d2e1959efbea16b80ef76e2461aa83df86",
+    "testApkSha256": "6f2360d0ac1936cc74bd653db1daf73a522e44dd71ff72704b9e282b2ddb0518",
+    "retentionVerifiedAcrossAcknowledgedCycles": true,
+    "syntheticOnly": true,
+    "runtimeProductionChanges": false
+  },
+  "priorManifestSha256": "e5c06c5edb98cc2895d5d8c988b4aae26b70c997569b8599ae48085ec5e464ed",
+  "credentialValuePatternsFound": false,
+  "rawWhitespacePreserved": [
+    {
+      "path": "artifacts/evidence/companion-native-journey/build.log",
+      "line": 2
+    },
+    {
+      "path": "artifacts/evidence/companion-native-journey/attempt-test-manifest-verification/build.log",
+      "line": 2
+    },
+    {
+      "path": "artifacts/evidence/companion-native-journey/attempt-test-manifest-verification/build.log",
+      "line": 155
+    },
+    {
+      "path": "artifacts/evidence/companion-native-journey/attempt-source-provider/build.log",
+      "line": 2
+    },
+    {
+      "path": "artifacts/evidence/companion-native-journey/attempt-source-provider/build.log",
+      "line": 24
+    },
+    {
+      "path": "artifacts/evidence/companion-native-journey/attempt-source-filter/build.log",
+      "line": 2
+    },
+    {
+      "path": "artifacts/evidence/companion-native-journey/initial-build/build.log",
+      "line": 2
+    },
+    {
+      "path": "artifacts/evidence/companion-native-journey/final-address-readiness-build/build.log",
+      "line": 2
+    },
+    {
+      "path": "artifacts/evidence/companion-native-journey/native-after-installed-update/instrumentation.log",
+      "line": 13
+    },
+    {
+      "path": "artifacts/evidence/companion-native-journey/native-after-installed-update/instrumentation.log",
+      "line": 26
+    },
+    {
+      "path": "artifacts/evidence/companion-native-journey/native-after-installed-update/instrumentation.log",
+      "line": 44
+    },
+    {
+      "path": "artifacts/evidence/companion-native-journey/attempt-semantic-confirmation/build.log",
+      "line": 2
+    },
+    {
+      "path": "artifacts/evidence/companion-native-journey/attempt-expressive-main-classpath/build.log",
+      "line": 2
+    },
+    {
+      "path": "artifacts/evidence/companion-native-journey/attempt-photo-retention/build.log",
+      "line": 2
+    }
+  ],
+  "physicalDeviceAccepted": false,
+  "productionSigningAccepted": false,
+  "cloudBackupOrCleanupProven": false,
+  "imageChanged": false,
+  "releaseReady": false,
+  "unresolved": [
+    "older intermittent post-address transfer stall",
+    "hosted permission test emulator graphics abort",
+    "actual entry/scaffold and large-font UI",
+    "retained-link top summary while workers are absent",
+    "Pi/phone roaming and real removable media",
+    "Google Photos-confirmed source cleanup and natural authenticated updates"
+  ]
+}

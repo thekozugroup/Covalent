@@ -1,0 +1,30 @@
+[
+  {
+    "serial": "emulator-5612",
+    "avd": "Interlink_Companion_Retention_API37",
+    "failedReceipt": "native-photo-retention/receipt.json",
+    "bootId": "b81cf37d-1d8b-4fc9-95f4-c8482a7ef46e",
+    "identitiesSha256BeforeShutdown": {
+      "no_backup/covalent-node/identity.json": "5b55d43808ea074231eaf3040d155b64a93ba55868a26bdd659695ffca09cdf8",
+      "no_backup/covalent-node/tls/identity.json": "8669ebfa5047a81e65fabd2eb73f151c7b72c42c8d8cdf76d862b45e4aec5f7d",
+      "no_backup/covalent-node-secrets/kek-envelope.v1": "4f1ebba1f57ec669cf4d2c2bb7b7f9fed3b4fc796207ff63a0f021568539297e"
+    },
+    "avdDirectoryRetained": true,
+    "dataCleared": false,
+    "action": "end-completed-owned-emulator"
+  },
+  {
+    "serial": "emulator-5614",
+    "avd": "Interlink_Companion_Confirm_API37",
+    "failedReceipt": "native-semantic-confirmation/receipt.json",
+    "bootId": "15cca3b7-55de-4679-99ed-41384ae51778",
+    "identitiesSha256BeforeShutdown": {
+      "no_backup/covalent-node/identity.json": "7c370a40f8aa606bdf98cc82d0c3a06992d9f99dcbfd8e3057513c0be0fbfd77",
+      "no_backup/covalent-node/tls/identity.json": "5210db445fd6c31cd4549701ca7496b20e3e8d5fffeb95fccf44618bdb5342cc",
+      "no_backup/covalent-node-secrets/kek-envelope.v1": "f809be58507950b454f5c0b1f4c138723629a3100e87957f20785e7dc530aa58"
+    },
+    "avdDirectoryRetained": true,
+    "dataCleared": false,
+    "action": "end-completed-owned-emulator"
+  }
+]

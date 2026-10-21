@@ -1,0 +1,32 @@
+{
+  "format": 1,
+  "apkSha256": "d357b315b9105393fedf484789212ed3a2179c3929e6ce17a969942827ea783a",
+  "commands": {
+    "zipalign": 0,
+    "apksigner": 0
+  },
+  "certificateSha256Lines": [
+    "V2 Signer: certificate SHA-256 digest: 20a6923903ddb545a4458698925e2715e2d1b9df3d7dbc20d2fc927ea847018d"
+  ],
+  "debugSignerOnly": true,
+  "productionSignerAccepted": false,
+  "ownedNativeLibraryCount": 6,
+  "allNativeLibrariesUnchangedFromAcceptedCovalentApk": {
+    "lib/arm64-v8a/libandroidx.graphics.path.so": "41e9a793c43a0f4fddb19e33f346bace464f30f888ba7b9eaf96294ea115bfb6",
+    "lib/arm64-v8a/libcovalent_android_jni.so": "b8065aa4013b59cfc69224d35def72a3d04d25a31d29cc7523100cb78d34ee98",
+    "lib/arm64-v8a/libcovalentrclone.so": "1db1b5e859edc16ef074e14e980e338b4bbfa8503bce369fc52b5b3f083ef72e",
+    "lib/arm64-v8a/libengineguardian.so": "2fcc818aa81d0c470ceb632022c924481cee63feef86521d16404856a73f7253",
+    "lib/x86_64/libandroidx.graphics.path.so": "4e56c996f13670e70082658de7880c4020eabf4f25e43387f88ed78a713fc9f0",
+    "lib/x86_64/libcovalent_android_jni.so": "16c8b33fa63442d57ab35a5987d405ee23a5141c5e1c24756bc9260b5e8fb124",
+    "lib/x86_64/libcovalentrclone.so": "7576dd530ebee374ec12ff315929190485757cb47df70df6ee85420c7efb976d",
+    "lib/x86_64/libengineguardian.so": "b12ecb82d6c7b695a74ef4f9ad131a6d50fa9cd8597c8d8111ce5ec480ce1d28"
+  },
+  "nativeDigestAndNoticeAssetsUnchanged": {
+    "assets/rclone-sha256.txt": "a255ae188f34b510f863f39c27cf7a97eff9f8669623b536f21513c4d843be0b",
+    "assets/engine-guardian-sha256.txt": "bceb33a079792f3cbdda034596b72544fb9686fc3a2548a22bb66b5ae26d4ce8",
+    "assets/sync-engine-notices/manifest.json": "541c6c872065013156d8b440d052ea39d2e40c9697316cb81ce68ea91a21bfd4"
+  },
+  "comparisonApkSha256": "41d00b5fc927d9fbe60d286336eec5bf8259df811880cc29d79dbda588576661",
+  "seconds": 1.009,
+  "releaseReady": false
+}

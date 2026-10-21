@@ -1,0 +1,5 @@
+{
+  "reason": "Final review found inferred error defaults could authorize acceptance retry. Earlier successful builds and native journey remain bound to their original sources; final strict-response source needs a separate build and journey.",
+  "nativeJourneyReceipt": "../native-continuation/receipt.json",
+  "previousResultRetained": true
+}

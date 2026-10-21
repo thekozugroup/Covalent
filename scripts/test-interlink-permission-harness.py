@@ -152,6 +152,127 @@ class FrameworkTraceTests(unittest.TestCase):
             self.assertFalse(result["readerAliveAfterStop"]);self.assertIsNotNone(trace.proc.poll())
 
 
+class NativeFrameworkTraceTests(unittest.TestCase):
+    trace=FrameworkTraceTests.trace
+    line=FrameworkTraceTests.line
+
+    def native(self,trace,logger=9001):
+        trace.consume(self.line("libc","Fatal signal 6 (SIGABRT): "+SECRET))
+        trace.consume(self.line("DEBUG","pid: 1234, tid: 1240, name: "+SECRET+"  >>> system_server <<<",logger))
+
+    def test_known_native_dump_keeps_only_approved_metadata(self):
+        trace=self.trace();self.native(trace)
+        for payload in ("signal 6 (SIGABRT), code -6 (SI_TKILL), fault addr --------",
+                        "Abort message: 'FORTIFY: "+SECRET+"'",
+                        "    #00 pc 0000000000079e10  /apex/com.android.runtime/lib64/bionic/libc.so (abort+160) (BuildId: "+"ab"*20+")",
+                        "    #01 pc 0000000000000123  /system/lib64/libandroid_servers.so ("+SECRET+"+42)",
+                        "    #02 pc 0000000000000124  /data/"+SECRET+"/libc.so (abort+160)",
+                        "x0 0000000000000001  x1 "+SECRET):
+            trace.consume(self.line("DEBUG",payload,9001))
+        result=trace.snapshot();events=result["events"]
+        self.assertEqual([event["kind"] for event in events],["native-fatal-signal","native-dump-header","native-dump-signal",
+            "native-abort-summary","native-frame","native-frame"])
+        self.assertTrue(all(event["process"]=="system_server" for event in events))
+        self.assertTrue(all(event["sourcePid"]==9001 and event["victimPid"]==1234 for event in events[1:]))
+        self.assertEqual(events[3]["messageFamily"],"fortify");self.assertEqual(events[4]["knownSymbol"],"abort")
+        self.assertEqual(events[4]["pcOffset"],0x79e10);self.assertEqual(events[4]["buildId"],"ab"*20)
+        self.assertNotIn("knownSymbol",events[5]);self.assertEqual(result["nativeFramesOmitted"],1)
+        self.assertNotIn(SECRET,json.dumps(result));self.assertNotIn("/system/",json.dumps(result))
+
+    def test_unknown_victims_and_mismatched_names_cannot_borrow_context(self):
+        trace=self.trace();self.native(trace)
+        for payload in ("pid: 9999, tid: 9999, name: "+SECRET+"  >>> system_server <<<",
+                        "    #00 pc 0000000000000001  /system/lib64/libc.so (abort+1)",
+                        "pid: 1234, tid: 1234, name: "+SECRET+"  >>> "+SECRET+" <<<",
+                        "Abort message: '"+SECRET+"'"):
+            trace.consume(self.line("DEBUG",payload,9001))
+        self.assertEqual([event["kind"] for event in trace.snapshot()["events"]],["native-fatal-signal","native-dump-header"])
+        self.assertNotIn(SECRET,json.dumps(trace.snapshot()))
+
+    def test_header_needs_prior_known_signal_and_new_dump_resets_logger(self):
+        trace=self.trace()
+        trace.consume(self.line("DEBUG","pid: 1234, tid: 1234, name: name  >>> system_server <<<",9001))
+        self.assertEqual(trace.snapshot()["events"],[])
+        self.native(trace)
+        trace.consume(self.line("DEBUG","*** *** *** *** *** *** *** ***",9001))
+        trace.consume(self.line("DEBUG","Abort message: 'FORTIFY: "+SECRET+"'",9001))
+        self.assertEqual(len(trace.snapshot()["events"]),2)
+        self.native(trace)
+        trace.consume(self.line("DEBUG","pid: malformed "+SECRET,9001))
+        trace.consume(self.line("DEBUG","Abort message: 'FORTIFY: "+SECRET+"'",9001))
+        self.assertEqual(trace.snapshot()["events"][-1]["kind"],"native-dump-header")
+
+    def test_post_death_dump_retains_observed_crash_identity(self):
+        trace=self.trace()
+        trace.consume(self.line("libc","Fatal signal 6 (SIGABRT): "+SECRET))
+        trace.consume(self.line("am_proc_died","[0,1234,system_server,0]"))
+        trace.consume(self.line("DEBUG","pid: 1234, tid: 1240, name: private  >>> system_server <<<",9001))
+        self.assertEqual(trace.snapshot()["events"][-1]["kind"],"native-dump-header")
+        self.assertNotIn(1234,trace.pids)
+
+    def test_approved_message_families_are_labels_not_raw_messages(self):
+        trace=self.trace();self.native(trace)
+        for prefix,family in (("Scudo ERROR:","allocator"),("fdsan:","descriptor-ownership"),
+                              ("stack corruption detected","stack-corruption"),("JNI DETECTED ERROR IN APPLICATION:","jni-contract"),
+                              ("Check failed:","assertion"),("terminating due to uncaught exception of type std::bad_alloc","native-allocation"),
+                              ("unrecognized private cause:","unclassified")):
+            message=prefix+SECRET;trace.consume(self.line("DEBUG","Abort message: '"+message+"'",9001))
+            event=trace.snapshot()["events"][-1]
+            self.assertEqual(event["messageFamily"],family)
+            self.assertEqual(event["messageSha256"],hashlib.sha256(message.encode()).hexdigest())
+        self.assertNotIn(SECRET,json.dumps(trace.snapshot()))
+
+    def test_frame_paths_indices_and_symbols_are_bounded_and_allowlisted(self):
+        trace=self.trace();self.native(trace)
+        paths=("/data/private/libc.so","/system/lib64/../libc.so","/system/lib64/./libc.so",
+               "/system/lib64/"+SECRET+".so","/apex/com.android.art/lib64/../../libart.so")
+        for path in paths:trace.consume(self.line("DEBUG","    #00 pc 0000000000000010  "+path+" ("+SECRET+"+1)",9001))
+        for index in range(100):
+            trace.consume(self.line("DEBUG",f"    #{index:02} pc 0000000000000010  /system/lib64/libc.so ({SECRET}+1)",9001))
+        trace.consume(self.line("DEBUG","    #00 pc 0000000000000010  /system/lib64/libc.so (abort+1)",9001))
+        result=trace.snapshot();self.assertEqual(len([e for e in result["events"] if e["kind"]=="native-frame"]),32)
+        self.assertEqual(result["nativeFramesOmitted"],74)
+        self.assertNotIn(SECRET,json.dumps(result))
+        for index in range(100):
+            trace._remember(2000+index,"system_server")
+            trace.consume(self.line("libc","Fatal signal 6 (SIGABRT): "+SECRET,2000+index))
+            trace.consume(self.line("DEBUG",f"pid: {2000+index}, tid: {2000+index}, name: private  >>> system_server <<<",10000+index))
+        self.assertLessEqual(len(trace.native_faults),32);self.assertLessEqual(len(trace.native_dumps),16)
+        self.assertLessEqual(len(trace.snapshot()["events"]),256)
+
+    def child_trace(self,ends):
+        import interlink_framework_trace as module
+        real_popen=subprocess.Popen;trace=self.trace();created=[]
+        first=self.line("libc","Fatal signal 6 (SIGABRT): "+SECRET)
+        header=self.line("DEBUG","pid: 1234, tid: 1240, name: private  >>> system_server <<<",9001)
+        frame=self.line("DEBUG","    #00 pc 0000000000000010  /system/lib64/libc.so (abort+1)",9001)
+        code="import time;print("+repr(first.rstrip())+",flush=True);time.sleep(0.1);print("+repr(header.rstrip())+",flush=True);print("+repr(frame.rstrip())+",flush=True)"
+        if not ends:code+=";time.sleep(30)"
+        def launch(command,**kwargs):
+            self.assertEqual(command,trace.command)
+            child=real_popen([sys.executable,"-u","-c",code],**kwargs);created.append(child);return child
+        with patch.object(module,"NATIVE_DRAIN_SECONDS",0.3),patch.object(module.subprocess,"Popen",side_effect=launch):
+            try:
+                trace.start();deadline=time.monotonic()+3
+                while not trace.native_faults and time.monotonic()<deadline:time.sleep(0.005)
+                self.assertTrue(trace.native_faults);result=trace.stop()
+                self.assertEqual(len(created),1);self.assertIsNotNone(created[0].poll())
+                self.assertFalse(result["readerAliveAfterStop"]);self.assertEqual(trace.stop(),result)
+                self.assertTrue(any(event["kind"]=="native-frame" for event in result["events"]))
+                self.assertNotIn(SECRET,json.dumps(result));return result
+            finally:
+                if created and created[0].poll() is None:created[0].kill();created[0].wait(timeout=3)
+
+    def test_delayed_native_frames_are_drained_without_guest_commands(self):
+        result=self.child_trace(False);self.assertTrue(result["streamLiveBeforeStop"])
+        self.assertGreaterEqual(result["nativeDetailDrainMs"],250)
+        self.assertLess(result["nativeDetailDrainMs"],1000)
+
+    def test_stream_ending_during_native_drain_is_still_a_failed_capture(self):
+        result=self.child_trace(True);self.assertFalse(result["streamLiveBeforeStop"])
+        self.assertEqual(result["streamExitCode"],0)
+
+
 class DiagnosticsTests(unittest.TestCase):
     def test_error_categories_preserve_no_raw_output_or_arguments(self):
         command = ("shell", "input", "tap", SECRET)
@@ -190,7 +311,8 @@ class DiagnosticsTests(unittest.TestCase):
 
 
 class FailedInputJourneyTests(unittest.TestCase):
-    def exercise(self, delivered, missing_failure_ui=False, cleanup_fails=False, framework_missing=False, trace_lost=False):
+    def exercise(self, delivered, missing_failure_ui=False, cleanup_fails=False, framework_missing=False, trace_lost=False,
+                 report_result=None, report_error=False):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             apk = root / "apps/android/companion/build/outputs/apk/debug/companion-debug.apk"
@@ -220,6 +342,8 @@ class FailedInputJourneyTests(unittest.TestCase):
                     output = digest + "  synthetic/base.apk"
                 elif args[:2] == ("shell", "getconf"):
                     output = "4096"
+                elif args == ("shell", "date", "+%s"):
+                    output = "1792580000"
                 elif args[:2] == ("shell", "uiautomator"):
                     if not (missing_failure_ui and state["failed"]):
                         output = "UI hierchary dumped to: " + args[3]
@@ -254,11 +378,14 @@ class FailedInputJourneyTests(unittest.TestCase):
             with patch.object(qa, "ROOT", root), patch.dict(os.environ, {"ANDROID_HOME": str(root / "sdk")}), \
                     patch.object(qa.sys, "argv", argv), patch.object(qa.subprocess, "run", adb), \
                     patch.object(qa,"FrameworkTrace",LostTrace if trace_lost else FakeTrace), \
+                    patch.object(qa,"collect_native_reports",side_effect=RuntimeError(SECRET) if report_error else None,
+                        return_value=report_result or {"result":"not-needed"}) as collect_reports, \
                     contextlib.redirect_stdout(output):
                 with self.assertRaisesRegex(RuntimeError, r"shell input tap \(exit 20\)"):
                     qa.main()
             receipt = json.loads((root / "evidence/permission-recovery.json").read_text())
             self.assertEqual(receipt["result"], "failed")
+            collect_reports.assert_called_once()
             if framework_missing:self.assertEqual(receipt["frameworkAtFailure"],{"observationFailureClass":"RuntimeError"})
             else:self.assertEqual(receipt["frameworkBefore"], receipt["frameworkAtFailure"])
             self.assertEqual(receipt["identitySha256Before"], receipt["identitySha256AtFailure"])
@@ -298,6 +425,15 @@ class FailedInputJourneyTests(unittest.TestCase):
         receipt = self.exercise(delivered=False, cleanup_fails=True)
         self.assertEqual(receipt["cleanupFailures"], [{"action": "restore QA permission", "failureClass": "RuntimeError"}])
         self.assertEqual(receipt["commandFailures"][1]["exceptionClasses"], ["android.os.DeadObjectException"])
+
+    def test_matched_native_report_never_relabels_failed_permission_recovery(self):
+        receipt = self.exercise(delivered=False, report_result={"result":"matched","rawReportsRetained":False})
+        self.assertEqual(receipt["nativeReports"]["result"], "matched")
+        self.assertEqual(receipt["result"], "failed")
+
+    def test_report_observation_error_keeps_primary_failure_without_private_message(self):
+        receipt = self.exercise(delivered=False, report_error=True)
+        self.assertEqual(receipt["nativeReports"], {"result":"unavailable","failureClass":"RuntimeError"})
 
     def test_foreign_serial_refused_before_any_adb_command(self):
         argv = ["qa", "--avd", "Interlink_QA_API37", "--serial", "emulator-5590", "--evidence-dir", "/unused"]

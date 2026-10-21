@@ -11,6 +11,7 @@ import android.os.ParcelFileDescriptor
 import android.provider.DocumentsContract
 import android.system.ErrnoException
 import android.system.Os
+import android.view.accessibility.AccessibilityNodeInfo
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.ComposeTimeoutException
@@ -77,11 +78,11 @@ import life.michaelwong.covalent.sync.SafFolderGrant
 import life.michaelwong.covalent.sync.SafFolderGrantStore
 import life.michaelwong.covalent.sync.SafWebDavServer
 import org.json.JSONObject
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import life.michaelwong.covalent.ui.FolderSyncScreen
-import life.michaelwong.covalent.ui.theme.CovalentTheme
 import org.junit.Rule
 import org.junit.Test
 
@@ -125,21 +126,62 @@ class SafFolderSyncJourneyInstrumentedTest {
             val packageValue = FolderSyncInstrumentationBridge.isolatedPackage(context)
             installedEngine = packageValue.engine
             assertTrue(manager.enableFolderSyncHost())
-            awaitValue("initial deferred service API") { manager.liveConnection() }
-            compose.setContent { CovalentTheme { if (showScreen.value) FolderSyncScreen(manager) } }
+            val initialConnection = awaitValue("initial deferred service API") { manager.liveConnection() }
+            val photoAppliance = context.packageName == "life.michaelwong.interlink"
+            compose.setContent {
+                FolderJourneyTheme {
+                    if (showScreen.value) FolderSyncScreen(manager, photoAppliance = photoAppliance)
+                }
+            }
+            val companionPeer = if (photoAppliance) {
+                // The real companion must pair before its source chooser appears.
+                assertTrue(client.folderSyncStatus(initialConnection.baseUrl, initialConnection.token).peers.isEmpty())
+                visibleScreenText(context.getString(R.string.interlink_pair_next)).assertIsDisplayed()
+                assertTrue(compose.onAllNodes(hasTestTag("folder-sync-choose-folder")).fetchSemanticsNodes().isEmpty())
+                startSecondNode(packageValue, runId = runId).also { peer ->
+                    val peerIdentity = client.transportIdentity(peer.baseUrl, peer.token)
+                    pairUsingPhoneUi(initialConnection, peer, advertisedGuestPeerAddress(peerIdentity.peerPort))
+                    closeSoftKeyboard()
+                }
+            } else {
+                null
+            }
+            val companionIdentity = companionPeer?.let { peer ->
+                client.transportIdentity(peer.baseUrl, peer.token)
+            }
+            if (companionIdentity != null) {
+                // Saved trust must reveal source setup even while this peer is offline.
+                assertTrue(CovalentNative.stop(secondHandle).ok)
+                secondHandle = 0
+                await("paired companion peer is offline") { canBindPeerPort(companionIdentity.peerPort) }
+                println("COVALENT_COMPANION_SOURCE_SETUP_PEER_OFFLINE=true")
+            }
             val destinationGrant = chooseSystemFolder("destination", pickerFixture, "destination", selectedUris)
             val sourceGrant = chooseSystemFolder("source", pickerFixture, "source", selectedUris)
             writeSafFile(sourceGrant, "manual.txt", SAF_MANUAL_CONTENT)
             writeSafFile(sourceGrant, SAF_UNICODE_NAME, SAF_UNICODE_CONTENT)
             val connectionA = awaitValue("service API after persisted grants") { manager.liveConnection() }
 
-            var connectionB = startSecondNode(packageValue, runId = runId)
+            var connectionB = startSecondNode(
+                packageValue,
+                peerListenerPort = companionIdentity?.peerPort ?: 0,
+                runId = runId,
+            )
             registerSecondNodeGrant(connectionB, destinationGrant)
             val identityA = client.transportIdentity(connectionA.baseUrl, connectionA.token)
             val identityB = client.transportIdentity(connectionB.baseUrl, connectionB.token)
             assertTrue(identityA.deviceId != identityB.deviceId)
-            pairUsingPhoneUi(connectionA, connectionB, advertisedGuestPeerAddress(identityB.peerPort))
-            closeSoftKeyboard()
+            if (companionIdentity != null) {
+                assertEquals(companionIdentity.deviceId, identityB.deviceId)
+                assertEquals(companionIdentity.certificateFingerprint, identityB.certificateFingerprint)
+                assertEquals(companionIdentity.certificateDer, identityB.certificateDer)
+                assertEquals(companionIdentity.peerPort, identityB.peerPort)
+            }
+            if (!photoAppliance) {
+                pairUsingPhoneUi(connectionA, connectionB, advertisedGuestPeerAddress(identityB.peerPort))
+                closeSoftKeyboard()
+            }
+            println("COVALENT_JOURNEY_SURFACE=" + if (photoAppliance) "interlink-expressive-pair-first" else "covalent")
 
             val settings = FolderLinkSettings(FolderLinkPolicy(), false, FolderLinkCadence.Manual)
             val labelMatcher = hasSetTextAction() and hasText(context.getString(R.string.folder_sync_label))
@@ -155,8 +197,13 @@ class SafFolderSyncJourneyInstrumentedTest {
                 context.getString(R.string.folder_link_destination_peer, "API 37 isolated peer"),
             ).assertIsDisplayed()
             clickScreenText(context.getString(R.string.folder_sync_show_options))
-            visibleScreenText(context.getString(R.string.folder_link_source_deletions_detail)).assertIsDisplayed()
-            visibleScreenText(context.getString(R.string.folder_link_destination_deletions_detail)).assertIsDisplayed()
+            if (photoAppliance) {
+                assertTrue(compose.onAllNodes(hasTestTag("folder-link-source-deletions")).fetchSemanticsNodes().isEmpty())
+                assertTrue(compose.onAllNodes(hasTestTag("folder-link-destination-deletions")).fetchSemanticsNodes().isEmpty())
+            } else {
+                visibleScreenText(context.getString(R.string.folder_link_source_deletions_detail)).assertIsDisplayed()
+                visibleScreenText(context.getString(R.string.folder_link_destination_deletions_detail)).assertIsDisplayed()
+            }
             clickScreenText(context.getString(R.string.folder_link_cadence_manual))
             clickScreenText(context.getString(R.string.folder_sync_offer))
             val createdShare = awaitValue("native SAF manual offer recorded") {
@@ -247,29 +294,60 @@ class SafFolderSyncJourneyInstrumentedTest {
             compose.onNodeWithTag("folder-sync-list")
                 .performScrollToNode(hasTestTag(addressButtonTag))
             compose.onNodeWithTag(addressButtonTag).performClick()
-            compose.onNodeWithTag("folder-peer-address-input").performTextInput(movedPeerAddress)
-            compose.onNodeWithTag("folder-peer-address-confirm").performClick()
-            await("native address refresh becomes authoritative") {
-                client.folderSyncStatus(connectionA.baseUrl, connectionA.token).peers
-                    .singleOrNull { it.peerId == identityB.deviceId }
-                    ?.address == movedPeerAddress
+            val addressInput = compose.onNodeWithTag("folder-peer-address-input")
+            compose.waitUntil(timeoutMillis = DEFAULT_TIMEOUT_MILLIS) {
+                runCatching { addressInput.assertIsDisplayed(); addressInput.assertIsEnabled(); true }.getOrDefault(false)
+            }
+            addressInput.performTextReplacement(movedPeerAddress)
+            closeSoftKeyboard()
+            clickDialogText(context.getString(R.string.folder_sync_verify_address))
+            try {
+                await("native address refresh becomes authoritative") {
+                    client.folderSyncStatus(connectionA.baseUrl, connectionA.token).peers
+                        .singleOrNull { it.peerId == identityB.deviceId }
+                        ?.address == movedPeerAddress
+                }
+            } catch (failure: AssertionError) {
+                val confirm = compose.onAllNodes(hasTestTag("folder-peer-address-confirm"))
+                val confirmNodes = runCatching { confirm.fetchSemanticsNodes().size }.getOrDefault(0)
+                val confirmEnabled = confirmNodes == 1 && runCatching {
+                    confirm[0].assertIsEnabled()
+                    true
+                }.getOrDefault(false)
+                throw AssertionError(
+                    "${failure.message} addressConfirmNodeCount=$confirmNodes addressConfirmEnabled=$confirmEnabled\n" +
+                        recoveryDiagnostic("source", connectionA, "address-verification") + "\n" +
+                        recoveryDiagnostic("destination", connectionB, "address-verification"),
+                    failure,
+                )
             }
             writeSafFile(sourceGrant, "after-address.txt", SAF_ADDRESS_CONTENT)
             val addressShare = sourceShare(connectionA)
+            val addressRequestId = UUID.randomUUID().toString()
             client.runFolderLinkNow(
                 connectionA.baseUrl,
                 connectionA.token,
                 folderId.toString(),
-                UUID.randomUUID().toString(),
+                addressRequestId,
                 expectedGeneration = checkNotNull(addressShare.linkRun).generation,
                 settingsRevision = checkNotNull(addressShare.linkSettings).revision,
             )
-            awaitSafFile(
-                "Manual Run Now after native address refresh",
-                destinationGrant,
-                "after-address.txt",
-                SAF_ADDRESS_CONTENT,
-            )
+            try {
+                awaitSafFile(
+                    "Manual Run Now after native address refresh",
+                    destinationGrant,
+                    "after-address.txt",
+                    SAF_ADDRESS_CONTENT,
+                )
+            } catch (failure: AssertionError) {
+                throw AssertionError(
+                    "${failure.message}\n" +
+                        recoveryDiagnostic("source", connectionA, addressRequestId) +
+                        "\n" +
+                        recoveryDiagnostic("destination", connectionB, addressRequestId),
+                    failure,
+                )
+            }
             val addressRun = awaitValue("address-refreshed SAF run completion") {
                 sourceShare(connectionA).linkRun?.takeIf {
                     it.generation == firstRun.generation + 1 && it.phase == FolderLinkRunPhase.SUCCEEDED
@@ -459,18 +537,25 @@ class SafFolderSyncJourneyInstrumentedTest {
 
             clickScreenText(context.getString(R.string.folder_link_settings_edit))
             clickDialogText(context.getString(R.string.folder_link_cadence_continuous))
-            clickToggle("folder-link-settings-source-deletions")
-            clickToggle("folder-link-settings-destination-deletions")
+            if (photoAppliance) {
+                assertTrue(compose.onAllNodes(hasTestTag("folder-link-settings-source-deletions")).fetchSemanticsNodes().isEmpty())
+                assertTrue(compose.onAllNodes(hasTestTag("folder-link-settings-destination-deletions")).fetchSemanticsNodes().isEmpty())
+            } else {
+                clickToggle("folder-link-settings-source-deletions")
+                clickToggle("folder-link-settings-destination-deletions")
+            }
             clickDialogText(context.getString(R.string.folder_link_settings_save))
-            assertDialogText(context.getString(R.string.folder_link_settings_confirm_source_deletions))
-            assertDialogText(context.getString(R.string.folder_link_settings_confirm_restore_deletions))
-            clickDialogText(context.getString(R.string.folder_link_settings_confirm))
+            if (!photoAppliance) {
+                assertDialogText(context.getString(R.string.folder_link_settings_confirm_source_deletions))
+                assertDialogText(context.getString(R.string.folder_link_settings_confirm_restore_deletions))
+                clickDialogText(context.getString(R.string.folder_link_settings_confirm))
+            }
             retrySavedSettingsIfVisible()
             val continuousSettings = settings.copy(
                 cadence = FolderLinkCadence.Continuous,
                 deletionPolicy = FolderLinkPolicy(
-                    propagateSourceDeletions = true,
-                    restoreLocalDeletions = true,
+                    propagateSourceDeletions = !photoAppliance,
+                    restoreLocalDeletions = !photoAppliance,
                 ),
             )
             val continuousState = awaitSharedSettings(
@@ -479,8 +564,8 @@ class SafFolderSyncJourneyInstrumentedTest {
                 continuousSettings,
                 settingsState.revision + 1,
             )
-            assertAnyVisibleScreenText(context.getString(R.string.folder_link_source_deletions_propagate))
-            assertAnyVisibleScreenText(context.getString(R.string.folder_link_destination_deletions_restore))
+            assertAnyVisibleScreenText(context.getString(if (photoAppliance) R.string.folder_link_source_deletions_keep else R.string.folder_link_source_deletions_propagate))
+            assertAnyVisibleScreenText(context.getString(if (photoAppliance) R.string.folder_link_destination_deletions_keep else R.string.folder_link_destination_deletions_restore))
             awaitExactHelperCounts(1, 1)
 
             writeSafFile(sourceGrant, "continuous.txt", SAF_CONTINUOUS_CONTENT)
@@ -523,12 +608,26 @@ class SafFolderSyncJourneyInstrumentedTest {
                 SAF_RESTORE_CONTENT,
             )
             assertTrue(deleteSafFile(destinationGrant, "restore-destination.txt"))
+            if (photoAppliance) {
+                val beforeRetentionCycle = checkNotNull(sourceShare(repairedA).linkRun).generation
+                writeSafFile(sourceGrant, "destination-retention-cycle.txt", SAF_RESTORE_CONTENT)
+                awaitSafFile("destination retention cycle", destinationGrant, "destination-retention-cycle.txt", SAF_RESTORE_CONTENT)
+                await("destination retention cycle acknowledged", TRANSFER_TIMEOUT_MILLIS) {
+                    sourceShare(repairedA).linkRun?.let {
+                        it.generation > beforeRetentionCycle && it.phase == FolderLinkRunPhase.SUCCEEDED
+                    } == true
+                }
+                assertSafFileAbsentFor(destinationGrant, "restore-destination.txt", NEGATIVE_WINDOW_MILLIS)
+                assertArrayEquals(SAF_RESTORE_CONTENT, readSafFile(sourceGrant, "restore-destination.txt"))
+                println("COVALENT_COMPANION_DESTINATION_DELETION_STAYS_DELETED=true")
+            } else {
             awaitSafFile(
                 "destination deletion restored by shared settings",
                 destinationGrant,
                 "restore-destination.txt",
                 SAF_RESTORE_CONTENT,
             )
+            }
 
             val generationBeforeDeletionSeed = checkNotNull(sourceShare(repairedA).linkRun).generation
             writeSafFile(sourceGrant, "propagate-source.txt", SAF_PROPAGATE_CONTENT)
@@ -591,8 +690,22 @@ class SafFolderSyncJourneyInstrumentedTest {
                     "observedAfterDeletionPhase=${runAfterDeletion?.phase}",
             )
             try {
+                if (photoAppliance) {
+                    val beforeRetentionCycle = checkNotNull(sourceShare(repairedA).linkRun).generation
+                    writeSafFile(sourceGrant, "source-retention-cycle.txt", SAF_PROPAGATE_CONTENT)
+                    awaitSafFile("source retention cycle", destinationGrant, "source-retention-cycle.txt", SAF_PROPAGATE_CONTENT)
+                    await("source retention cycle acknowledged", TRANSFER_TIMEOUT_MILLIS) {
+                        sourceShare(repairedA).linkRun?.let {
+                            it.generation > beforeRetentionCycle && it.phase == FolderLinkRunPhase.SUCCEEDED
+                        } == true
+                    }
+                    assertArrayEquals(SAF_PROPAGATE_CONTENT, readSafFile(destinationGrant, "propagate-source.txt"))
+                    assertTrue(readSafFile(sourceGrant, "propagate-source.txt") == null)
+                    println("COVALENT_COMPANION_SOURCE_DELETION_KEEPS_DESTINATION=true")
+                } else {
                 await("source deletion propagated by shared settings", TRANSFER_TIMEOUT_MILLIS) {
                     readSafFile(destinationGrant, "propagate-source.txt") == null
+                }
                 }
             } catch (failure: AssertionError) {
                 throw AssertionError(
@@ -875,6 +988,7 @@ class SafFolderSyncJourneyInstrumentedTest {
         var lastAccessUnavailable = "none"
         var lastErrorClass = "none"
         var lastHttpStatus = "none"
+        var lastHttpCode = "none"
         while (System.nanoTime() < deadline) {
             val current = manager.liveConnection()
             val changedConnection = current?.takeIf { it.baseUrl != excludedBaseUrl }
@@ -892,13 +1006,22 @@ class SafFolderSyncJourneyInstrumentedTest {
                     lastSharePhase = share?.phase?.toString() ?: "none"
                     lastFolderState = folder?.state ?: "none"
                     lastAccessUnavailable = folder?.accessUnavailable?.toString() ?: "none"
+                    lastErrorClass = "none"
+                    lastHttpStatus = "none"
+                    lastHttpCode = "none"
+                    // A repaired manual link is available but STOPPED until its
+                    // next explicit run. Requiring a worker here deadlocks the
+                    // test before the very mutation that starts that worker.
                     status.availability == FolderSyncAvailability.AVAILABLE &&
-                        status.lifecycle == FolderSyncLifecycle.RUNNING &&
+                        status.lifecycle in setOf(FolderSyncLifecycle.STOPPED, FolderSyncLifecycle.RUNNING) &&
                         status.issue == null &&
                         accepts(status)
                 } catch (error: Throwable) {
                     lastErrorClass = error.javaClass.name
                     lastHttpStatus = (error as? NodeApiException)?.statusCode?.toString() ?: "none"
+                    lastHttpCode = (error as? NodeApiException)?.code?.takeIf {
+                        it in setOf("folder_sync_busy", "folder_sync_unavailable", "folder_sync_needs_attention")
+                    } ?: "unrecognized"
                     false
                 }
             } == true
@@ -927,7 +1050,8 @@ class SafFolderSyncJourneyInstrumentedTest {
                 "lastAvailability=$lastAvailability lastIssue=$lastIssue " +
                 "lastSharePhase=$lastSharePhase lastFolderState=$lastFolderState " +
                 "lastAccessUnavailable=$lastAccessUnavailable persistedPermission=$persistedPermission " +
-                "pendingRepair=$pendingRepair lastErrorClass=$lastErrorClass lastHttpStatus=$lastHttpStatus",
+                "pendingRepair=$pendingRepair lastErrorClass=$lastErrorClass lastHttpStatus=$lastHttpStatus " +
+                "lastHttpCode=$lastHttpCode",
         )
     }
 
@@ -996,10 +1120,17 @@ class SafFolderSyncJourneyInstrumentedTest {
 
     private fun clickFolderChooser() {
         val target = compose.onNodeWithTag("folder-sync-choose-folder")
-        compose.onNodeWithTag("folder-sync-list").performScrollToNode(hasTestTag("folder-sync-choose-folder"))
-        target.performScrollTo()
         compose.waitUntil(timeoutMillis = DEFAULT_TIMEOUT_MILLIS) {
-            runCatching { target.assertIsEnabled(); true }.getOrDefault(false)
+            // Node readiness precedes the asynchronous status projection. Observe
+            // the real chooser before the one click; never replay picker input.
+            runCatching {
+                compose.onNodeWithTag("folder-sync-list")
+                    .performScrollToNode(hasTestTag("folder-sync-choose-folder"))
+                target.performScrollTo()
+                target.assertIsDisplayed()
+                target.assertIsEnabled()
+                true
+            }.getOrDefault(false)
         }
         target.performClick()
     }
@@ -1087,7 +1218,7 @@ class SafFolderSyncJourneyInstrumentedTest {
         clickSystemPickerText(folder)
         Thread.sleep(SYSTEM_PICKER_NAVIGATION_MILLIS)
         clickSystemPickerText("USE THIS FOLDER")
-        clickSystemPickerText("ALLOW")
+        confirmSystemPickerFolder()
     }
 
     private fun pickerPackageCategory(packageName: String?): String = when (packageName) {
@@ -1127,6 +1258,23 @@ class SafFolderSyncJourneyInstrumentedTest {
 
     private fun clickSystemPickerText(text: String) {
         await("system picker action $text") { clickSystemPickerTextIfClickable(text) }
+    }
+
+    private fun confirmSystemPickerFolder() {
+        var button: AccessibilityNodeInfo? = null
+        await("system picker confirmation button") {
+            val root = instrumentation.uiAutomation.rootInActiveWindow
+            if (root?.packageName?.toString() != DOCUMENTS_UI_PACKAGE) return@await false
+            button = root.findAccessibilityNodeInfosByViewId("android:id/button1").singleOrNull {
+                it.text?.toString() == "ALLOW" && it.isVisibleToUser && it.isEnabled && it.isClickable
+            }
+            button != null
+        }
+        // The confirmation dialog can still be moving after its text appears.
+        // Dispatch its exact semantic action once, then verify the actual persisted tree.
+        assertTrue("DocumentsUI rejected its confirmation action",
+            checkNotNull(button).performAction(AccessibilityNodeInfo.ACTION_CLICK))
+        println("COVALENT_SYSTEM_PICKER_CONFIRMATION_ACTION=accepted")
     }
 
     private fun systemPickerHasText(text: String): Boolean =

@@ -70,6 +70,36 @@ fi
 grep -q '/api/v1/backups/archive.*Android client.*stored as a path constant but the client never issues it' "$issuer_output"
 
 run_fixture DurableTransferJournal.valid.kt SafTransferBridge.valid.kt >/dev/null
+# Historical source is admitted only at its exact path with its exact bytes.
+evidence_path=artifacts/evidence/android-acceptance-busy/baseline/CovalentNodeClient.kt.source
+evidence_target="$fixture_root/$evidence_path"
+for mutation in changed-bytes removed-api-prefix; do
+  if test "$mutation" = changed-bytes; then
+    printf '\n// changed evidence\n' >> "$evidence_target"
+  else
+    printf 'evidence without an API prefix\n' > "$evidence_target"
+  fi
+  evidence_output="$fixture_root/$mutation.out"
+  if node "$fixture_root/scripts/check-openapi-routes.mjs" >"$evidence_output" 2>&1; then
+    echo "route checker accepted modified frozen source evidence: $mutation" >&2
+    exit 1
+  fi
+  grep -q 'frozen client evidence differs from its exact retained bytes' "$evidence_output"
+  cp "$repo_root/$evidence_path" "$evidence_target"
+done
+adjacent_path=artifacts/evidence/android-acceptance-busy/baseline/unlisted-client.kt.source
+printf 'post(baseUrl, token, "/api/v1/sync/accept", payload)\n' > "$fixture_root/$adjacent_path"
+git -C "$fixture_root" add -f -- "$adjacent_path"
+adjacent_output="$fixture_root/unlisted-evidence-client.out"
+if node "$fixture_root/scripts/check-openapi-routes.mjs" >"$adjacent_output" 2>&1; then
+  echo "route checker accepted an undeclared client adjacent to frozen evidence" >&2
+  exit 1
+fi
+grep -q 'unlisted-client.kt.source calls the API but belongs to no declared client tree' "$adjacent_output"
+git -C "$fixture_root" rm --cached --quiet -- "$adjacent_path"
+rm -- "$fixture_root/$adjacent_path"
+node "$fixture_root/scripts/check-openapi-routes.mjs" >/dev/null
+
 python3 - "$fixture_root/packaging/web/folder-sync-flow.js" <<'PY'
 from pathlib import Path
 import sys

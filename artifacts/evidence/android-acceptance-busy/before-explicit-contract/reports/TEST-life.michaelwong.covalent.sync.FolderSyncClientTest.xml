@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="life.michaelwong.covalent.sync.FolderSyncClientTest" tests="17" skipped="0" failures="0" errors="0" timestamp="2026-10-21T15:51:36.358Z" hostname="MacBookPro" time="0.537">
+  <properties/>
+  <testcase name="omittedCadenceAndAndroidConditionsKeepOldClientsContinuous" classname="life.michaelwong.covalent.sync.FolderSyncClientTest" time="0.007"/>
+  <testcase name="offlineFolderAccessStatusRetainsRedactedSharesWithoutInventingHealth" classname="life.michaelwong.covalent.sync.FolderSyncClientTest" time="0.005"/>
+  <testcase name="statusRejectsForeignPeerReferencesAndUnknownPhases" classname="life.michaelwong.covalent.sync.FolderSyncClientTest" time="0.005"/>
+  <testcase name="replacementIdsAreBoundedUniqueAndCannotNameTheCurrentInvitation" classname="life.michaelwong.covalent.sync.FolderSyncClientTest" time="0.021"/>
+  <testcase name="initialScanIsASeparateSafeLifecycle" classname="life.michaelwong.covalent.sync.FolderSyncClientTest" time="0.004"/>
+  <testcase name="settingsAcceptanceTimeSupportsLegacyZeroAndRejectsMalformedValues" classname="life.michaelwong.covalent.sync.FolderSyncClientTest" time="0.012"/>
+  <testcase name="peerAddressIsOptionalButPresentValuesAreStrictlyTypedAndNumeric" classname="life.michaelwong.covalent.sync.FolderSyncClientTest" time="0.029"/>
+  <testcase name="olderStatusDefaultsReachabilityToUnknownButMalformedValuesFail" classname="life.michaelwong.covalent.sync.FolderSyncClientTest" time="0.01"/>
+  <testcase name="nullLinkPolicyRemainsLegacyTwoWay" classname="life.michaelwong.covalent.sync.FolderSyncClientTest" time="0.004"/>
+  <testcase name="authenticatedFolderRoutesUseTheBoundedV1Contract" classname="life.michaelwong.covalent.sync.FolderSyncClientTest" time="0.054"/>
+  <testcase name="initialRunSummaryDecodesWithoutInventingAnActiveRun" classname="life.michaelwong.covalent.sync.FolderSyncClientTest" time="0.004"/>
+  <testcase name="pairingUpgradeRequirementIsPerShareAndDefaultsOff" classname="life.michaelwong.covalent.sync.FolderSyncClientTest" time="0.004"/>
+  <testcase name="malformedAddressRefreshInputsAreRejectedBeforeAnyRequest" classname="life.michaelwong.covalent.sync.FolderSyncClientTest" time="0.0"/>
+  <testcase name="removalStatusPreservesRetiredIdsAndRejectsMalformedPendingFlags" classname="life.michaelwong.covalent.sync.FolderSyncClientTest" time="0.018"/>
+  <testcase name="folderAccessUnavailableIsPerFolderAndDefaultsOff" classname="life.michaelwong.covalent.sync.FolderSyncClientTest" time="0.011"/>
+  <testcase name="acceptanceWaitsThroughExplicitBusyRepliesWithTheSameDestination" classname="life.michaelwong.covalent.sync.FolderSyncClientTest" time="0.327"/>
+  <testcase name="transferConditionStatusIsOptionalStrictAndOnlyAppliesToReadyShares" classname="life.michaelwong.covalent.sync.FolderSyncClientTest" time="0.017"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

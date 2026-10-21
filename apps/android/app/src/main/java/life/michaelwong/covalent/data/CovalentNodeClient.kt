@@ -273,12 +273,10 @@ class CovalentNodeClient(
     ): FolderSyncMutation {
         requireUuid(offerId, "offer")
         requireSelectedRoot(selectedRoot)
-        return post(
-            baseUrl,
-            token,
-            "/api/v1/sync/accept",
-            JSONObject().put("offerId", offerId).put("selectedRoot", selectedRoot),
-        ).toFolderSyncMutation()
+        val selection = JSONObject().put("offerId", offerId).put("selectedRoot", selectedRoot)
+        return retryFolderAcceptance {
+            post(baseUrl, token, "/api/v1/sync/accept", selection).toFolderSyncMutation()
+        }
     }
 
     fun pauseFolder(baseUrl: String, token: String, offerId: String, paused: Boolean): FolderSyncMutation {
@@ -821,6 +819,8 @@ class CovalentNodeClient(
                 message = payload?.optString("message").orEmpty().ifBlank { "Node returned HTTP $code." },
                 uploadOffset = uploadOffset,
                 inventoryOffset = inventoryOffset,
+                hasExplicitRetryContract = payload?.opt("protocolVersion") is Int &&
+                    payload.opt("code") is String && payload.opt("retryable") is Boolean,
             )
         }
         return text
@@ -1827,6 +1827,7 @@ class NodeApiException(
     override val message: String,
     val uploadOffset: Long? = null,
     val inventoryOffset: Long? = null,
+    val hasExplicitRetryContract: Boolean = false,
 ) : Exception(message)
 
 class NodeProtocolException(version: Int) : IllegalStateException(

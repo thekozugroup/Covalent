@@ -1,0 +1,23 @@
+{
+  "command": [
+    "./apps/android/gradlew",
+    "-p",
+    "apps/android",
+    "--no-daemon",
+    "-PcovalentBuildSyncEngine=true",
+    ":companion:assembleDebug",
+    ":companion:assembleDebugAndroidTest",
+    ":companion:lintDebug",
+    ":app:compileDebugAndroidTestKotlin"
+  ],
+  "exitCode": 1,
+  "seconds": 8.454,
+  "sourceHashes": {
+    "apps/android/companion/build.gradle.kts": "1756b70942ee419fe927e762c3e33adcf8ef3c8f00c5b2b090210a4348055a55",
+    "apps/android/app/src/androidTest/java/life/michaelwong/covalent/node/SafFolderSyncJourneyInstrumentedTest.kt": "e1ae4f697a8ed64c69df1f132a6610fb1463bfb7b977672b103d729097b1765e",
+    "apps/android/app/src/main/java/life/michaelwong/covalent/ui/FolderSyncScreen.kt": "8bd474f640b211c86333001c173e41f89a7b5e369ebfa1cdecf0e27d48ddb141"
+  },
+  "sourcesUnchanged": true,
+  "physicalDeviceAccepted": false,
+  "releaseReady": false
+}

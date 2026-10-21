@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="life.michaelwong.covalent.ProductUXContractTest" tests="6" skipped="0" failures="0" errors="0" timestamp="2026-10-21T15:51:36.182Z" hostname="MacBookPro" time="0.002">
+  <properties/>
+  <testcase name="phoneProviderCapacityRequiresProtectedHeadroom" classname="life.michaelwong.covalent.ProductUXContractTest" time="0.001"/>
+  <testcase name="exactSignedSha256ProviderPinIsAccepted" classname="life.michaelwong.covalent.ProductUXContractTest" time="0.0"/>
+  <testcase name="finalizedPairingUsesWholeSignedTransportObject" classname="life.michaelwong.covalent.ProductUXContractTest" time="0.0"/>
+  <testcase name="replicaSelectionFailsClosedWithoutFreshReachableCapacity" classname="life.michaelwong.covalent.ProductUXContractTest" time="0.001"/>
+  <testcase name="restoreOffersFailSkipAndRenameButNeverUnsafeReplace" classname="life.michaelwong.covalent.ProductUXContractTest" time="0.0"/>
+  <testcase name="wrongOrNonCanonicalSignedPinIsRejected" classname="life.michaelwong.covalent.ProductUXContractTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

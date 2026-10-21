@@ -1,0 +1,79 @@
+{
+  "sourceCommit": "0564034368bab5c4e1b79350ee85cfc3532c4f96",
+  "mergeCommit": "42fdd6a9478a3334288ef2fa8398eb1ccf688940",
+  "runId": 39635433377,
+  "terminal": true,
+  "jobs": [
+    {
+      "id": 119344484295,
+      "name": "Dependency vulnerability and license delta",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "id": 119344484459,
+      "name": "Android foundation",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "id": 119344484472,
+      "name": "Shared Rust and contracts",
+      "status": "completed",
+      "conclusion": "failure"
+    },
+    {
+      "id": 119344484528,
+      "name": "Container foundation",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "id": 119344484570,
+      "name": "Container arm64 image",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "id": 119344484583,
+      "name": "macOS app bundle",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "id": 119344484650,
+      "name": "Android API 37 device",
+      "status": "completed",
+      "conclusion": "failure"
+    },
+    {
+      "id": 119344484965,
+      "name": "macOS integration and UI",
+      "status": "completed",
+      "conclusion": "cancelled"
+    },
+    {
+      "id": 119363807067,
+      "name": "Release candidate software gates",
+      "status": "completed",
+      "conclusion": "failure"
+    }
+  ],
+  "baseline": {
+    "passed": true,
+    "tests": 86,
+    "junitSeconds": 73.139
+  },
+  "folderJourney": {
+    "passed": true,
+    "tests": 1,
+    "junitSeconds": 426.305
+  },
+  "permissionRecovery": {
+    "passed": false,
+    "frameworkAbortCorrelated": true,
+    "exactKnownGraphicsAssertionMatched": true,
+    "identitiesUnchanged": true
+  },
+  "releaseReady": false
+}

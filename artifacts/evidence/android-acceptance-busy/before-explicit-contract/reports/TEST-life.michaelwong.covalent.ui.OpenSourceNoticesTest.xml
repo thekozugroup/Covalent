@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="life.michaelwong.covalent.ui.OpenSourceNoticesTest" tests="3" skipped="0" failures="0" errors="0" timestamp="2026-10-21T15:51:36.951Z" hostname="MacBookPro" time="0.007">
+  <properties/>
+  <testcase name="completeDescriptorAndBothExactAssetsAreRequired" classname="life.michaelwong.covalent.ui.OpenSourceNoticesTest" time="0.004"/>
+  <testcase name="descriptorAndNoticeTextMustUseStrictBoundedEncoding" classname="life.michaelwong.covalent.ui.OpenSourceNoticesTest" time="0.002"/>
+  <testcase name="hostileIndexesFailBeforeOpeningReferencedAssets" classname="life.michaelwong.covalent.ui.OpenSourceNoticesTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

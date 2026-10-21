@@ -2,6 +2,7 @@ package life.michaelwong.covalent.sync
 
 import java.util.UUID
 import life.michaelwong.covalent.data.CovalentNodeClient
+import life.michaelwong.covalent.data.NodeApiException
 import life.michaelwong.covalent.model.FolderSharePhase
 import life.michaelwong.covalent.model.FolderLinkPolicy
 import life.michaelwong.covalent.model.FolderLinkSettings
@@ -22,6 +23,59 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class FolderSyncClientTest {
+    @Test
+    fun incompleteOrCoercedBusyResponsesNeverAuthorizeReplay() {
+        val bodies = listOf(
+            """{"code":"folder_sync_busy","retryable":true}""",
+            """{"protocolVersion":1,"code":"folder_sync_busy"}""",
+            """{"protocolVersion":"1","code":"folder_sync_busy","retryable":true}""",
+            """{"protocolVersion":1,"code":"folder_sync_busy","retryable":"true"}""",
+            """{"protocolVersion":1,"code":"folder_sync_busy","retryable":false}""",
+            """{"protocolVersion":1,"code":"folder_sync_busy","retryable":null}""",
+        )
+        bodies.forEach { body ->
+            val server = MockWebServer().apply {
+                repeat(6) { enqueue(MockResponse().setResponseCode(503).setBody(body)) }
+                start()
+            }
+            try {
+                val error = runCatching {
+                    CovalentNodeClient().acceptFolder(server.url("/").toString().removeSuffix("/"),
+                        "token", OFFER, "covalent-saf:22222222-2222-4222-8222-222222222222")
+                }.exceptionOrNull()
+                assertTrue(error is NodeApiException)
+                assertEquals(1, server.requestCount)
+            } finally {
+                server.shutdown()
+            }
+        }
+    }
+
+    @Test
+    fun acceptanceWaitsThroughExplicitBusyRepliesWithTheSameDestination() {
+        val busy = """{"protocolVersion":1,"code":"folder_sync_busy","retryable":true,"message":"Folder sync is busy. Try again shortly."}"""
+        val server = MockWebServer().apply {
+            repeat(2) { enqueue(MockResponse().setResponseCode(503).setBody(busy)) }
+            enqueue(MockResponse().setBody(MUTATION))
+            start()
+        }
+        try {
+            val root = "covalent-saf:22222222-2222-4222-8222-222222222222"
+            val result = CovalentNodeClient().acceptFolder(server.url("/").toString().removeSuffix("/"), "token", OFFER, root)
+            assertEquals(OFFER, result.offerId)
+            assertEquals(3, server.requestCount)
+            val requests = List(3) { server.takeRequest() }
+            requests.forEach {
+                assertEquals("POST", it.method)
+                assertEquals("/api/v1/sync/accept", it.path)
+                assertEquals("Bearer token", it.getHeader("Authorization"))
+                assertEquals(JSONObject().put("offerId", OFFER).put("selectedRoot", root).toString(), it.body.readUtf8())
+            }
+        } finally {
+            server.shutdown()
+        }
+    }
+
     @Test
     fun authenticatedFolderRoutesUseTheBoundedV1Contract() {
         val server = MockWebServer()

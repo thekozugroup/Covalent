@@ -1,0 +1,19 @@
+{
+  "format": 1,
+  "testsPerSurface": 7,
+  "results": {
+    "host": {
+      "exitCode": 0,
+      "seconds": 0.063
+    },
+    "linux": {
+      "exitCode": 0,
+      "seconds": 0.649
+    }
+  },
+  "sourcesUnchanged": true,
+  "sourceHashes": {
+    "scripts/android-native-library-directory.py": "bad2fda23d7433117feb219f69bc71b737ecffa3c8b7bf05bea9a284ef7b5edc",
+    "scripts/test-android-native-library-directory.py": "af535181704f6076f9441314cc0fc30ec934d7fd3fa2f5e2c46b8a66d967602c"
+  }
+}

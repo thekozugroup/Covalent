@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="life.michaelwong.covalent.AndroidRemediationTest" tests="22" skipped="0" failures="0" errors="0" timestamp="2026-10-21T16:08:04.425Z" hostname="MacBookPro" time="0.492">
+  <properties/>
+  <testcase name="renamePreviewPersistsSignedInventoryBindingAndReplaceFailsClosed" classname="life.michaelwong.covalent.AndroidRemediationTest" time="0.073"/>
+  <testcase name="sha256PinsAcceptOnlyExactHexOrStandardPinSyntax" classname="life.michaelwong.covalent.AndroidRemediationTest" time="0.003"/>
+  <testcase name="restorePageRejectsOverflowingOffsetBeforeSignedPlanComparison" classname="life.michaelwong.covalent.AndroidRemediationTest" time="0.01"/>
+  <testcase name="archiveUploadResumesOnlyAtBoundedRetryableServerOffsets" classname="life.michaelwong.covalent.AndroidRemediationTest" time="0.002"/>
+  <testcase name="settingsImportPreviewFlagsDestructiveBackupRemoval" classname="life.michaelwong.covalent.AndroidRemediationTest" time="0.001"/>
+  <testcase name="enrolledPrivateCaAndPinKeepHostnameVerification" classname="life.michaelwong.covalent.AndroidRemediationTest" time="0.306"/>
+  <testcase name="networkPairingClientUsesTypedStrictContract" classname="life.michaelwong.covalent.AndroidRemediationTest" time="0.013"/>
+  <testcase name="providerConnectionsRequireExactNumericSocketAddresses" classname="life.michaelwong.covalent.AndroidRemediationTest" time="0.0"/>
+  <testcase name="api37RequestsPermissionBeforeEveryLanClassEndpoint" classname="life.michaelwong.covalent.AndroidRemediationTest" time="0.001"/>
+  <testcase name="retainedArchiveJobsRequireExplicitAcknowledgeAndDiscardEndpoints" classname="life.michaelwong.covalent.AndroidRemediationTest" time="0.007"/>
+  <testcase name="targetInventoryUsesExactDigestAndPagedImmutableWireContract" classname="life.michaelwong.covalent.AndroidRemediationTest" time="0.013"/>
+  <testcase name="legacyInlineRestorePlanRemainsCompatibleWithoutExtraNetworkPage" classname="life.michaelwong.covalent.AndroidRemediationTest" time="0.003"/>
+  <testcase name="providerClientReadsFreshIdentityBoundCapacity" classname="life.michaelwong.covalent.AndroidRemediationTest" time="0.008"/>
+  <testcase name="expiredPairingSessionCannotBeConfirmed" classname="life.michaelwong.covalent.AndroidRemediationTest" time="0.0"/>
+  <testcase name="networkPairingRejectsMalformedConfirmationAndResponses" classname="life.michaelwong.covalent.AndroidRemediationTest" time="0.004"/>
+  <testcase name="durableRestorePreviewUsesBoundedPagesAndPlanIdExecution" classname="life.michaelwong.covalent.AndroidRemediationTest" time="0.007"/>
+  <testcase name="zeroByteZipWritesPreserveEmptyDirectoryAndFileSemantics" classname="life.michaelwong.covalent.AndroidRemediationTest" time="0.005"/>
+  <testcase name="safeWorkflowFieldsRestoreThroughSavedStateHandle" classname="life.michaelwong.covalent.AndroidRemediationTest" time="0.014"/>
+  <testcase name="setupLinkNormalizationAndTransportPolicyAreDeterministic" classname="life.michaelwong.covalent.AndroidRemediationTest" time="0.001"/>
+  <testcase name="workerRebindRejectsAnyChangedSignedInventoryOrActionSet" classname="life.michaelwong.covalent.AndroidRemediationTest" time="0.0"/>
+  <testcase name="firstRunAcceptsAnEmptyProviderListWithoutARoster" classname="life.michaelwong.covalent.AndroidRemediationTest" time="0.005"/>
+  <testcase name="targetInventoryResumesOnlyAtBoundedAuthoritativeOffset" classname="life.michaelwong.covalent.AndroidRemediationTest" time="0.015"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

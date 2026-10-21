@@ -1,0 +1,157 @@
+{
+  "status": "ok",
+  "data": {
+    "elements": [
+      {
+        "type": "android.widget.TextView",
+        "text": "Your photo links",
+        "rect": {
+          "x": 53,
+          "y": 341,
+          "width": 531,
+          "height": 95
+        }
+      },
+      {
+        "type": "android.widget.TextView",
+        "text": "Send photos to your Pi. Keep originals on this phone.",
+        "rect": {
+          "x": 53,
+          "y": 452,
+          "width": 974,
+          "height": 126
+        }
+      },
+      {
+        "type": "android.widget.TextView",
+        "text": "Pair your Pi to continue",
+        "rect": {
+          "x": 53,
+          "y": 647,
+          "width": 687,
+          "height": 63
+        }
+      },
+      {
+        "type": "android.widget.TextView",
+        "text": "Refresh",
+        "rect": {
+          "x": 835,
+          "y": 652,
+          "width": 129,
+          "height": 53
+        }
+      },
+      {
+        "type": "android.widget.TextView",
+        "text": "Pair your Pi",
+        "rect": {
+          "x": 95,
+          "y": 820,
+          "width": 232,
+          "height": 63
+        }
+      },
+      {
+        "type": "android.widget.TextView",
+        "text": "Enter your Pi\u2019s Tailscale address. Compare the code on both screens to pair.",
+        "rect": {
+          "x": 95,
+          "y": 909,
+          "width": 890,
+          "height": 126
+        }
+      },
+      {
+        "type": "android.widget.TextView",
+        "text": "Find devices",
+        "rect": {
+          "x": 158,
+          "y": 1098,
+          "width": 205,
+          "height": 53
+        }
+      },
+      {
+        "type": "android.widget.TextView",
+        "text": "Device address",
+        "rect": {
+          "x": 137,
+          "y": 1276,
+          "width": 303,
+          "height": 63
+        }
+      },
+      {
+        "type": "android.widget.TextView",
+        "text": "Pair device",
+        "rect": {
+          "x": 158,
+          "y": 1444,
+          "width": 181,
+          "height": 53
+        }
+      },
+      {
+        "type": "android.widget.TextView",
+        "text": "Source folder",
+        "rect": {
+          "x": 95,
+          "y": 1654,
+          "width": 272,
+          "height": 63
+        }
+      },
+      {
+        "type": "android.widget.TextView",
+        "text": "No folder selected",
+        "rect": {
+          "x": 95,
+          "y": 1738,
+          "width": 365,
+          "height": 63
+        }
+      },
+      {
+        "type": "android.widget.TextView",
+        "text": "Choose an existing folder",
+        "rect": {
+          "x": 158,
+          "y": 1859,
+          "width": 416,
+          "height": 53
+        }
+      },
+      {
+        "type": "android.widget.TextView",
+        "text": "Folder name shown to the other device",
+        "rect": {
+          "x": 95,
+          "y": 2090,
+          "width": 768,
+          "height": 63
+        }
+      },
+      {
+        "type": "android.widget.TextView",
+        "text": "Pair another device with this phone before sharing a folder.",
+        "rect": {
+          "x": 53,
+          "y": 2232,
+          "width": 974,
+          "height": 105
+        }
+      },
+      {
+        "type": "android.widget.TextView",
+        "text": "Interlink",
+        "rect": {
+          "x": 181,
+          "y": 172,
+          "width": 309,
+          "height": 95
+        }
+      }
+    ]
+  }
+}

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="life.michaelwong.covalent.sync.FolderLinkSettingsChangeStoreTest" tests="6" skipped="0" failures="0" errors="0" timestamp="2026-10-21T15:51:36.325Z" hostname="MacBookPro" time="0.007">
+  <properties/>
+  <testcase name="statusClearsObservedRequestsAndMarksUnobservedStaleRequestsForReview" classname="life.michaelwong.covalent.sync.FolderLinkSettingsChangeStoreTest" time="0.003"/>
+  <testcase name="fullSharedSettingsAndExactRunRetrySurviveReopen" classname="life.michaelwong.covalent.sync.FolderLinkSettingsChangeStoreTest" time="0.002"/>
+  <testcase name="removingTheLinkRemovesItsSavedRequest" classname="life.michaelwong.covalent.sync.FolderLinkSettingsChangeStoreTest" time="0.001"/>
+  <testcase name="anotherSubmitIsBlockedUntilTheSavedAttemptIsReviewed" classname="life.michaelwong.covalent.sync.FolderLinkSettingsChangeStoreTest" time="0.0"/>
+  <testcase name="exactUncertainRequestSurvivesReopenAndReusesItsIdentity" classname="life.michaelwong.covalent.sync.FolderLinkSettingsChangeStoreTest" time="0.0"/>
+  <testcase name="runRequestClearsOnlyOnExactStatusOrDefiniteCompletion" classname="life.michaelwong.covalent.sync.FolderLinkSettingsChangeStoreTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

@@ -1,0 +1,26 @@
+{
+  "command": [
+    "./apps/android/gradlew",
+    "-p",
+    "apps/android",
+    "--no-daemon",
+    "-PcovalentBuildSyncEngine=true",
+    ":companion:assembleDebugAndroidTest",
+    ":app:compileDebugAndroidTestKotlin"
+  ],
+  "sourceHashes": {
+    "apps/android/companion/build.gradle.kts": "56f84ff404ef08271f6007e7efd06e263484fc9abad1d7fc68a0f404ad558f8b",
+    "apps/android/gradle/verification-metadata.xml": "7e3d3b75a2dcb6ceeb3ea2593c54c48b71432a1caab04d616a18115728360f51",
+    "apps/android/app/src/androidTest/java/life/michaelwong/covalent/node/SafFolderSyncJourneyInstrumentedTest.kt": "4f84f473da6680d86f78a4952fd9da2c296c87820afe5bc8335eb323e608ee55",
+    "apps/android/app/src/main/java/life/michaelwong/covalent/ui/FolderSyncScreen.kt": "8bd474f640b211c86333001c173e41f89a7b5e369ebfa1cdecf0e27d48ddb141",
+    "apps/android/app/src/debug/java/life/michaelwong/covalent/node/FolderJourneyTheme.kt": "f107591bb934465160c44f2d60453db4d7b3719d54e9bb2e2216dda6f77ed979",
+    "apps/android/companion/src/debug/java/life/michaelwong/covalent/node/FolderJourneyTheme.kt": "702ce66ff98e5367222fce12f474c0063989be07f4eaa3be41b86eda572a5518"
+  },
+  "physicalDeviceAccepted": false,
+  "releaseReady": false,
+  "exitCode": 0,
+  "seconds": 48.785,
+  "sourcesUnchanged": true,
+  "companionApkSha256": "b2bb9709a4b0c2739bb832d3d99651d2e1959efbea16b80ef76e2461aa83df86",
+  "testApkSha256": "3014246264c4d641eaf8068b73e74f8f84b58c2007314b2c1bdd79b2e4d841c0"
+}

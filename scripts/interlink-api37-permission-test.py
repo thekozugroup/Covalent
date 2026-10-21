@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Exercise real permission revocation/recovery on an owned, unpaired debug AVD.
 
-No app data is cleared. Only the two named disposable QA emulators are accepted.
+No app data is cleared. Only the named disposable QA emulators are accepted.
 Receipts contain hashes and phase names, never key material or raw private files.
 """
 
@@ -17,13 +17,15 @@ import time
 import uuid
 import xml.etree.ElementTree as ET
 from interlink_framework_trace import FrameworkTrace
+from interlink_native_reports import collect as collect_native_reports
 
 
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = "life.michaelwong.interlink"
 ACTIVITY = f"{PACKAGE}/life.michaelwong.covalent.InterlinkActivity"
 PERMISSION = "android.permission.ACCESS_LOCAL_NETWORK"
-OWNED_AVDS = {"Interlink_QA_API37": "emulator-5572", "Covalent_API_37": "emulator-5570"}
+OWNED_AVDS = {"Interlink_QA_API37": "emulator-5572", "Covalent_API_37": "emulator-5570",
+              "Interlink_Unlock_API37": "emulator-5592"}
 IDENTITIES = (
     "no_backup/covalent-node/identity.json",
     "no_backup/covalent-node/tls/identity.json",
@@ -257,6 +259,10 @@ def main():
         if run("shell", "getprop", "ro.build.version.sdk") != "37" or run("shell", "getprop", "sys.boot_completed") != "1":
             raise RuntimeError("fixture must be a booted API 37 emulator")
         receipt["frameworkBefore"] = framework()
+        epoch = run("shell", "date", "+%s")
+        if not re.fullmatch(r"[1-9][0-9]{0,11}", epoch):
+            raise RuntimeError("invalid Android capture clock")
+        receipt["deviceEpochSecondsBefore"] = int(epoch)
         trace = FrameworkTrace(adb,args.serial,receipt["frameworkBefore"])
         trace.start()  # Read-only capture starts before APK install or permission mutations.
         if run("shell", "pm", "path", PACKAGE, check=False):
@@ -360,6 +366,14 @@ def main():
         if cleanup_failures:
             receipt["cleanupFailures"] = cleanup_failures
             receipt["result"] = "failed"
+        if receipt["result"] == "failed" and fixture_owned and "frameworkTrace" in receipt:
+            # Independent read-only report observation, after stopping the one
+            # live stream. It cannot repair or relabel the failed user journey.
+            try:
+                receipt["nativeReports"] = collect_native_reports(adb, args.serial,
+                    receipt["frameworkBefore"]["bootId"], receipt["deviceEpochSecondsBefore"], receipt["frameworkTrace"])
+            except (RuntimeError, ValueError, OSError, subprocess.SubprocessError) as report_error:
+                receipt["nativeReports"] = {"result": "unavailable", "failureClass": type(report_error).__name__}
         (evidence / "permission-recovery.json").write_text(json.dumps(receipt, indent=2) + "\n")
         if cleanup_invalidated_pass:
             raise RuntimeError("QA fixture cleanup failed; failure receipt retained")

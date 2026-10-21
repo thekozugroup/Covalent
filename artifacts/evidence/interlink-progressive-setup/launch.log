@@ -1,0 +1,8 @@
+Starting: Intent { cmp=life.michaelwong.interlink/life.michaelwong.covalent.InterlinkActivity }
+Warning: Activity not started, intent has been delivered to currently running top-most instance.
+Status: ok
+LaunchState: UNKNOWN (0)
+Activity: com.android.systemui/com.android.wm.shell.packageupdate.PackageUpdateActivity
+TotalTime: 0
+WaitTime: 35
+Complete

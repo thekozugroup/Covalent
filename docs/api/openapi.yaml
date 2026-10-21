@@ -919,6 +919,8 @@ paths:
                 $ref: "#/components/schemas/PairingSession"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
   /api/v1/pair/confirm/responder:
     post:
       summary: Confirm the responder comparison code

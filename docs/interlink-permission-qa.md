@@ -1,12 +1,56 @@
 # Android permission recovery checks
 
-The API37 gate exercises permission loss and both ways to restore access:
+The reader now supports Android 37's optional numeric `ppid` header field in
+both the live and DropBox paths. A separate owned native-process test reproduced
+the old rejection; a read-only follow-up parses that same report successfully
+without replaying the fault. All 73 focused macOS/Linux tests pass. This repairs
+diagnostic formatting, not the hosted framework crash or permission journey.
+See [actual format reproduction and limits](interlink-native-report-format.md).
+
+Hosted run 39609173300 at d09d08e is terminal. Seven non-device lanes, 86 baseline
+tests and the SAF journey pass. Permission recovery and the release gate fail.
+The recorder sees native signal 6 in the observed system_server1823/TID2059,
+2.188 seconds after Open settings returns 0 and 1.655 seconds before the failed
+Permissions tap returns 20. Android starts a new framework process; the harness
+requests no restart. All three synthetic identity hashes remain unchanged.
+
+The original live stream examines 19,175 lines with no event drops and drains
+for five seconds without recognized native dump details. Both independent
+DropBox reads complete successfully: 99,253 bytes/931 lines and 195,379 bytes/2002
+lines. Neither yields a timestamp/PID/TID/process/signal-correlated report.
+This proves the stores were readable and nonempty, not that the observed
+crash's report was present, parseable or absent. Its cause and the reason for
+the report mismatch remain unknown. Artifact 12352067988 has verified ZIP
+SHA-256 `4ab147806460971083683d5e962d81ef169f740598f2c1b3a4489ddc0089df65`;
+all 72 retained files and the tested harness sources are bound by
+`artifacts/evidence/api37-d09d08e/result.json`.
+
+The follow-up reader now retains fixed rejection counts for report boundaries,
+timestamps before/within/after the capture window, unsupported timestamp/header
+syntax, mismatched PID/TID/process and unrecognized/mismatched signal lines.
+Counts saturate at 65535 and contain no rejected values, timestamps, names,
+paths, messages or raw report text. Existing exact correlation and complete-read
+requirements remain unchanged. These counts distinguish reasons on a future
+observation; they cannot reconstruct or relabel the old failed artifact.
+
+All 70 focused checks pass on both macOS and Linux: 32 report-reader/parser,
+32 permission-harness and six forward-cleanup tests, with resource warnings
+treated as errors. Five new regressions cover each rejection category, strict
+prefix refusal, unchanged admission/privacy and bounded counts. The prior
+API 37 read-only smoke remains evidence for the earlier reader only. The new
+read-only probe cannot start because emulator5592 is currently absent; it is
+not a passing Android check, and no accepted fixture is restarted or replaced.
+No APK, app runtime, renderer flags, input replay, deadline, acceptance rule,
+production signing or release gate is changed by this diagnostic follow-up.
+
+The API 37 gate exercises permission loss and both ways to restore access:
 the app's runtime prompt and Settings → Permissions → Nearby devices → Allow.
 Returning from Settings must restart the opted-in native host itself. The test
 does not reopen the Activity or start the service to make that return pass.
 
-`scripts/interlink-api37-permission-test.py` accepts only the two named QA AVDs
-at their fixed serials. It installs and reads back the exact debug APK, refuses
+`scripts/interlink-api37-permission-test.py` accepts only the named QA AVDs
+at their fixed serials (including Interlink_Unlock_API 37 at emulator-5592 for
+fresh startup checks). It installs and reads back the exact debug APK, refuses
 an existing non-debug app, requires the unpaired native-ready screen and a
 foreground service, and compares device/TLS/key-envelope hashes. It never clears
 app data. A permission left revoked by a failure is restored during cleanup.
@@ -56,7 +100,7 @@ command. The stream remains active through failure observation and cleanup.
 Stopping it terminates only the owned adb log client, never the server, guest
 or app. An unready, prematurely ended or incompletely stopped stream prevents
 an otherwise successful journey from passing; it cannot hide the primary
-input failure. No input is replayed and no guest is restarted. Twenty-two host
+input failure. No input is replayed and no guest is restarted. Thirty host
 tests cover privacy, bounded storage, actual managed child-process lifecycle,
 stream readiness/loss, missing-framework failures and existing input/cleanup
 behavior. Resource warnings are treated as errors in the local check.
@@ -67,13 +111,13 @@ The `-T 1` stream can include prior buffered records. Such a record is not
 automatically attributed to this test. Device time, host arrival and explicit
 phases help establish ordering; even a captured crash alone does not prove its
 trigger. The framework PID/boot checks and both actual permission routes remain
-required. The new recorder's full API37 journey and latest-head hosted result
+required. The new recorder's full API 37 journey and latest-head hosted result
 remain separate acceptance gates.
 
 The final-source read-only Android36 smoke retains 396 examined lines and one
 safe capture phase. Source bytes, boot ID and system_server/surfaceflinger PIDs
 remain unchanged; the owned client and reader stop cleanly. This validates the
-recorder, not API37 permission recovery. Evidence is retained locally in
+recorder, not API 37 permission recovery. Evidence is retained locally in
 `artifacts/interlink-qa/framework-trace-android36-final-smoke.json`.
 
 A separate historical crash-buffer observation on that synthetic fixture shows
@@ -91,8 +135,130 @@ Run the real journey only after building `:companion:assembleDebug`:
 
 ```sh
 python3 -B scripts/interlink-api37-permission-test.py \
-  --serial emulator-5572 --avd Interlink_QA_API37 --evidence-dir PRIVATE_DIRECTORY
+  --serial emulator-5572 --avd Interlink_QA_API 37 --evidence-dir PRIVATE_DIRECTORY
 ```
 
 The permission receipt proves only this synthetic emulator journey. It does
 not certify phone roaming, pairing, production signing or Pi hardware.
+
+## Native framework abort details
+
+The 1e54976 hosted run39558337954 separately passes all 86 baseline tests and
+the full SAF journey in 415.979 seconds. Permission recovery fails while opening
+app settings. Here the Open settings tap returns0 before system_server651's
+native signal 6, by 2.024 host seconds. Android starts PID8025 on the same boot;
+three synthetic identity digests remain unchanged. The preceding e0dfc1c abort
+occurred before its failed tap. Neither ordering establishes a crash cause or
+trigger. Both runs use the previous recorder without native dump details;
+the new recorder still needs its own full hosted check. The verified artifact
+and source-bound outcome are retained under artifacts/evidence/api37-1e54976/.
+
+
+The e0dfc1c hosted recording establishes a native signal 6 in the previously
+observed system_server PID657 before the failed Permissions tap. It establishes
+neither the initiating cause nor the trigger. The old recorder discarded the
+native dump; the new follow-up decodes a bounded subset in memory. Android's
+[native crash documentation](https://source.android.com/docs/core/tests/debug/native-crash)
+explains the separate signal, abort-message and backtrace records.
+
+A DEBUG dump header must match a known process whose native fatal signal was
+already observed. The logging crash_dump PID remains distinct from the victim
+PID. Unknown/mismatched headers and a new dump reset that logger's context.
+Only fixed approved system-library names, relative code offsets, bounded build
+IDs and a small fixed symbol set are emitted. Arbitrary library paths, symbols,
+thread names, registers, abort messages and raw lines are discarded. Abort
+messages retain a fixed prefix-family label or unclassified, their byte count
+and SHA-256; that label is diagnostic metadata, not an established crash cause.
+Traversal/relative/private paths are refused. There are at most 32 known fault
+PIDs, 16 dump contexts and 32 unique frames per dump; omitted-frame counts remain
+visible within the existing 256-event bound.
+
+After an observed known native fault, stopping capture allows at most five
+seconds for delayed native details on the same log stream. This is read-only;
+input, service, acceptance and framework-stability conditions are unchanged.
+A stream that dies during this drain still fails continuity. Only the owned
+log client is terminated afterward. Eight new host regressions cover privacy,
+correlation, context reset, limits, delayed frames and stream loss, using real
+managed child processes. All thirty host tests pass with resource warnings
+promoted to errors.
+
+The source-bound Android36 read-only smoke on the retained boot reads two idle
+log lines and one capture marker, stops its reader/client cleanly, and preserves
+boot ID plus both framework PIDs/start ticks. It validates stream operation;
+it has no native dump and does not prove the API 37 failure cause or permission
+recovery. Evidence: `artifacts/interlink-qa/native-framework-smoke-1792566867768376000.json`.
+The earlier native crash and all failed journey artifacts remain retained.
+
+The d57deda hosted run39562643351 is now terminal. All seven non-device jobs,
+86 baseline tests and the complete SAF journey pass (437.290 seconds). The
+permission journey still fails. Its continuous recorder observes the known
+system_server1751 native signal 6, 1.472 host seconds after Open settings returns0
+and before the failed Permissions tap. Android starts another system_server;
+the harness does not restart it. The three synthetic identity digests remain
+unchanged. Permission restoration fails with missing framework services.
+
+The five-second native-detail drain completes on the original live stream, but
+the retained output has no recognized native dump header, frame, signal-detail
+or abort-summary event. This does not distinguish unavailable logs from an
+unrecognized dump and does not establish the cause or trigger. Artifact
+12329751390 has verified ZIP SHA-256
+`7d767dcce5f8f3b790a41f190721e843f9f8973152f7146bacb09300ef713927`.
+Original reports and source-bound outcome are retained under
+`artifacts/evidence/api37-d57deda/`. Permission recovery and the release gate
+remain failed; no deadline extension, input replay, app fix or readiness claim
+is inferred from the passing baseline/SAF checks.
+
+## Independent native-report fallback
+
+Hosted bf25758 run39601425204 also passes all seven non-device jobs, the
+86 baseline tests and SAF journey, then fails permission recovery. The live
+stream records system_server1775 signal 6, 2.236 host seconds after Open settings
+returns0 and 1.616 seconds before the Permissions tap returns20. The stream
+stays live through its five-second drain without a recognized native dump.
+All three synthetic identity digests remain unchanged. The verified artifact
+12347813609 has ZIP SHA-256
+`df2f80f7ac8de66682e248228689288c037861a0c261b94b48b81809522dbceb`.
+Timing alone establishes neither cause nor trigger; the release gate remains
+failed. Evidence: `artifacts/evidence/android-unlock-startup-hosted-terminal.json`.
+
+On a failed owned-emulator journey with an observed native framework signal,
+the harness now reads Android's existing DropBox reports after stopping the live
+stream. It makes one read per fixed tag, `system_server_native_crash` and
+`SYSTEM_TOMBSTONE`. Each client has an eight-second deadline, a one-MiB limit
+and an 8192-byte line limit. Only those clients are stopped; input, app state,
+permissions, framework processes and guest boot are not retried or repaired.
+
+The boot ID must match before and after the reads. A native timestamp must fall
+between the device clock observed before capture and before report reading.
+PID, crashed TID, approved process name and signal must match the live failure.
+Only then are the shared decoder's approved library names, relative offsets,
+fixed symbols and redacted abort-family/hash/length retained. Timestamp/PID
+correlation identifies a matching report, not the cause or responsible app.
+The fixed emulator mapper library name is now recognized; arbitrary paths,
+symbols, registers, thread names, messages and raw reports remain discarded.
+There are at most 96 retained events per tag and 32 unique frames per report.
+
+Service-header/search markers distinguish an empty readable service from an
+unavailable or changed output format. Nonzero exit, byte/deadline limits,
+internal report-read errors, source drift or a changed boot cannot produce a
+matched result. Partial redacted observations retain their incomplete status.
+An unavailable fallback cannot mask the original failure; even a matched report
+cannot turn failed permission recovery into a pass. No guest root access is used.
+
+Android's [DropBox implementation](https://android.googlesource.com/platform/frameworks/base/+/refs/heads/android16-release/services/core/java/com/android/server/DropBoxManagerService.java)
+defines this read-only report command. Raw reports are decoded incrementally in
+memory and never written to artifacts. This change adds diagnostic coverage;
+it does not establish or repair the hosted framework abort.
+
+All 65 focused checks pass on macOS and Linux: 32 permission-harness,
+27 report-reader/parser and six forward-cleanup tests. They include actual
+owned subprocess EOF/loss/deadline/byte-limit cases, stale or mismatched reports,
+missing service/denied access despite zero exit, malformed headers, source drift,
+privacy and failure preservation. Final-source read-only API 37 smoke reads both
+real empty report tags and cleanly stops its original live log stream. Boot,
+framework PIDs/start ticks and three app identity hashes remain unchanged.
+The smoke explicitly seeds an impossible synthetic victim to exercise only the
+no-match reader path; it reproduces no native fault. Its receipt is
+`artifacts/evidence/native-report-fallback/android-final-1792589582619746000/receipt.json`.
+The source/evidence manifest is beside it at `../manifest.json`. Hosted failure
+diagnostics and permission acceptance remain unverified for this follow-up.

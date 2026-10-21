@@ -1,0 +1,12 @@
+{
+  "native-directory": {
+    "exitCode": 0,
+    "seconds": 0.176,
+    "logSha256": "56c431ad0a3e1ad7690805a995358787506f267ca76202bca75df3b49cbe2228"
+  },
+  "foundation": {
+    "exitCode": 0,
+    "seconds": 49.461,
+    "logSha256": "7136a1ea5ac75dbc338312b0e26390ecb89bf889bf9bb34e22f95c13506ecd7a"
+  }
+}

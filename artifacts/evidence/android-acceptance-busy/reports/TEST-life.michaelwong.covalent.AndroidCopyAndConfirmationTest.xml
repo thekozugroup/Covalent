@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="life.michaelwong.covalent.AndroidCopyAndConfirmationTest" tests="15" skipped="0" failures="0" errors="0" timestamp="2026-10-21T16:08:04.322Z" hostname="MacBookPro" time="0.096">
+  <properties/>
+  <testcase name="setupGuidanceDoesNotPretendToBeAnActionCard" classname="life.michaelwong.covalent.AndroidCopyAndConfirmationTest" time="0.026"/>
+  <testcase name="setupLinksOnlyPrefillAddressesTheAppWouldAcceptByHand" classname="life.michaelwong.covalent.AndroidCopyAndConfirmationTest" time="0.016"/>
+  <testcase name="claimTokenFileIsBoundedAndUsesTheServerTokenShape" classname="life.michaelwong.covalent.AndroidCopyAndConfirmationTest" time="0.003"/>
+  <testcase name="signedConflictPoliciesCanPreviewAndRestoreIntoExistingContent" classname="life.michaelwong.covalent.AndroidCopyAndConfirmationTest" time="0.004"/>
+  <testcase name="noUserFacingStringLeaksEngineVocabulary" classname="life.michaelwong.covalent.AndroidCopyAndConfirmationTest" time="0.037"/>
+  <testcase name="setupCopyUsesTrustedClaimOutputAndDoesNotAdvertiseAnUnproducedLink" classname="life.michaelwong.covalent.AndroidCopyAndConfirmationTest" time="0.002"/>
+  <testcase name="manifestReceivesTheSetupLinkTheCopyDescribes" classname="life.michaelwong.covalent.AndroidCopyAndConfirmationTest" time="0.0"/>
+  <testcase name="anOutsideAppCannotPointAConfiguredInstallAtAnotherServer" classname="life.michaelwong.covalent.AndroidCopyAndConfirmationTest" time="0.001"/>
+  <testcase name="theRoleGrantExplainsItselfInsteadOfPrintingItsToken" classname="life.michaelwong.covalent.AndroidCopyAndConfirmationTest" time="0.0"/>
+  <testcase name="everyRecognisedFailureHasItsOwnPlainMessage" classname="life.michaelwong.covalent.AndroidCopyAndConfirmationTest" time="0.001"/>
+  <testcase name="folderSyncPairingDirectionsDoNotCallTheDeviceABackup" classname="life.michaelwong.covalent.AndroidCopyAndConfirmationTest" time="0.0"/>
+  <testcase name="transportFailuresBecomePlainLanguageInsteadOfRawExceptions" classname="life.michaelwong.covalent.AndroidCopyAndConfirmationTest" time="0.002"/>
+  <testcase name="destructiveConfirmationsOfferAWayOut" classname="life.michaelwong.covalent.AndroidCopyAndConfirmationTest" time="0.001"/>
+  <testcase name="destructiveConfirmationsNameTheirSubjectAndTheirConsequence" classname="life.michaelwong.covalent.AndroidCopyAndConfirmationTest" time="0.002"/>
+  <testcase name="everyDestructiveActionHasCompleteDistinctConfirmationCopy" classname="life.michaelwong.covalent.AndroidCopyAndConfirmationTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

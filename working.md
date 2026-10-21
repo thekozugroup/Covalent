@@ -1,4 +1,333 @@
-# Interlink companion and appliance robustness — 2026-10-20
+# Dedicated companion native verification — 2026-10-21
+
+The real Android folder journey now builds under the dedicated Interlink
+identity and its Expressive theme. It pairs first, chooses both folders with
+its synthetic peer offline, reconnects using retained trust, then exercises
+native copies, address/restart recovery, lost-grant repair and link settings.
+Companion-specific checks retain destination copies after source deletion and
+keep destination deletions; ordinary Covalent retains its opt-in policy checks.
+The generated bridge, test theme and test activity remain debug-only.
+
+Build/lint and both instrumentation classpaths pass. Full foundation validation
+passes in62.888s; all11 helper resolver checks pass, including explicit package
+selection, path injection and changed native bytes. Three individually verified
+Google Maven artifacts are pinned without changing prior hashes or policy.
+The unchanged debug companion APK is b2bb9709a4b0c2739bb832d3d99651d2e1959efbea16b80ef76e2461aa83df86;
+its eight native libraries match the previously exercised production bytes.
+
+Two actual failed device results stay preserved: the first generic journey
+expected deletion controls absent from this safer photo UI; its policy-corrected
+fresh run then timed out after a coordinate tap left DocumentsUI's ALLOW dialog
+open. A new exact-button accessibility action is dispatched once and still
+requires the real persisted folder grant. The confirmation-corrected run obtains both grants and transfers manual/Unicode
+files, then fails waiting for an authoritative changed address (184.330s JUnit).
+The next test correction guards the address input/confirmation readiness and
+adds bounded endpoint/button diagnostics at that exact deadline. Both classpaths
+compile and the new isolated run passes the full dedicated-package journey
+in458.364s JUnit / 466.038s wrapper, including both acknowledged-cycle retention
+checks and removal. Exact sources, APKs, UID, boot/framework and all previous
+failed evidence verify. No old pairing state or data is cleared. This single
+pass does not close the earlier intermittent post-address transfer stall.
+
+Hosted fed6107 CI39644102561 is terminal failed: seven software lanes, all86
+baseline tests (72.693s) and the ordinary-app SAF journey (422.116s) pass. Both
+CodeQL languages and policy pass. Permission recovery hits the same62-byte
+emulator read-color-buffer-DMA abort, correlated in live and DropBox reports
+2312ms after the prior successful tap; three identity digests survive Android
+framework restart8816. All73 archive entries and its GitHub digest verify.
+No renderer experiment or gate exemption is used; this remains a release block.
+See artifacts/evidence/api37-fed6107/result.json.
+The appliance runtime/image and physical devices are unchanged. Current private
+Interlink CI39644383871 at eb98079 cannot start due to account payments/spending
+limits. Physical roaming/imports, exact cloud-confirmed cleanup, production
+signing, natural authenticated updates and gold-image acceptance remain open.
+Next: actual companion entry/scaffold and large-font checks; correct the top
+summary that still asks for a source when a retained paused/manual photo link
+has an empty worker-folder list. See docs/interlink-native-journey.md and its
+retained evidence directory.
+
+---
+
+# Interlink companion and appliance robustness — 2026-10-21
+
+The dedicated photo companion now reveals source-folder/link setup only after a
+retained confirmed peer exists. Ordinary Covalent and incoming/repair selection
+rules stay intact. Its exact new debug APK builds and passes lint, then updates
+in place on the owned emulator with the same UID and no data clear. The actual
+unpaired screen shows pairing controls and no premature source/share controls.
+Paired/offline/repair branches are reviewed in source, not exercised by this
+small UI smoke. Package alignment/signature and all eight unchanged native
+libraries verify; route and full foundation validation pass. See
+docs/interlink-progressive-setup.md.
+
+Hosted0564034 CI39635433377 is terminal: five non-device lanes, all86 baseline
+tests (73.139s) and the full SAF journey (426.305s) pass. Shared foundation fails
+at the archived-client gate already corrected in e01dae1; macOS UI is cancelled;
+permission recovery and release gates fail. CodeQL Java/Kotlin passes; Swift is
+cancelled and its policy check skipped. Swift log retrieval returns404, so its
+cancellation cause is not established. The permission report now correlates
+live capture and DropBox with system_server1785/TID2018 signal6, 1983ms after
+Open settings returns0, followed by Android's framework restart8838. Its 62-byte
+abort SHA21459e59cfa55a94251c82e5d7e559328fced4bbbff93a4f139eb68d27d56bee
+exactly matches the existing workflow's known read-color-buffer-DMA assertion.
+The native stack includes mapper.ranchu.so; all three identity digests match.
+Artifact12364873359 verifies SHA548c6b4a9de8420de0fdd3bdda09ae29b99c3cffc67942263e427ae878fa17d5
+and all73 entries. No new fault, renderer change or exemption is used to obtain
+this diagnosis. See artifacts/evidence/api37-0564034/result.json. A supported
+permission-test environment is still required; release/hardware gates stay shut.
+
+The intermittent post-address Android transfer now retains both endpoints'
+bounded state if its existing deadline fails, correlated to the exact original
+request ID. No retry, input replay, deadline change, permission/data reset or
+production APK change is introduced. The separate owned ARM64 diagnostic
+journey passes in437.554s (JUnit435.768s): real manual/Unicode/address/restart
+transfers, lost-grant repair, settings, pause/resume, deletion and removal. Its
+boot/framework, app APK and captured sources are unchanged. The earlier failed
+journey stays byte-identical; the new failure branch is not exercised. The
+intermittent stall remains unresolved, and release acceptance stays closed. An initial instrumentation build omitted the packaged-engine
+flag and fails before pairing; its corrected build and receipt stay separate.
+See docs/android-address-recovery-diagnostics.md. Primary0564034 CI39635433377
+continues; e01dae1 and this follow-up stay on separate branches meanwhile.
+
+Hosted source0564034 CI39635433377 has a terminal shared-foundation failure:
+three retained historical .source snapshots are classified as undeclared API
+clients. The follow-up gate admits only those three exact paths and SHA-256
+values. Modified bytes, removed API text and adjacent unknown files still fail;
+current shipping clients keep all route/method checks. The actual route gate,
+existing fixtures, three new negative cases and full macOS foundation pass.
+See docs/frozen-client-evidence.md and
+artifacts/evidence/frozen-client-evidence/manifest.json.
+
+The follow-up publishes on codex/frozen-client-evidence while the original
+primary run's Android/container work continues. Primary PR51 stays at0564034;
+no push cancels its active jobs. No app, native worker, Pi image, physical device,
+account, pairing or media change. Address-change transfer recovery and the
+previous hosted framework abort remain unresolved; release gates stay closed.
+
+Android share acceptance now handles the node's explicit temporary lock refusal
+without making the user repeat setup. It keeps the exact destination and
+authenticated request, permits at most six attempts with 3.1s total backoff,
+and never replays uncertain network results or other sharing operations.
+Cancellation stops retries and preserves the interrupt flag. The server's
+nonblocking mutation lock and durable destination journal remain intact.
+
+The original client fails the new deterministic busy-response regression.
+All 222 JVM tests now pass, including ten new acceptance cases.
+Explicit typed error fields are required; inferred defaults and coerced values
+cannot authorize replay. Earlier source/results remain separate. Covalent and
+the dedicated Interlink debug APK compile, pass lint, and pass native package,
+16-KiB alignment and signature checks. Seven native-path checks pass on macOS
+and root Linux. QA now explicitly supports ARM64 while retaining its x86_64
+default; damaged ARM64 bytes cannot be replaced by valid Intel bytes.
+
+The earlier full SAF journey passes on fresh emulator-5606, including transfers,
+restart/address changes, lost-access repair, shared settings, pause/resume,
+synthetic deletion semantics and removal. Its boot/framework identities and
+source/failed-preflight receipts remain unchanged. Final strict-source checks
+stay separate: the reused paired fixture cannot expose its first-time pairing
+form; a new fresh fixture then exposes a chooser/status readiness race in QA.
+Both failures remain terminal. The corrected test waits for the real displayed,
+enabled chooser before one click and uses the same production APK, without
+clearing data. The final-source run passes pairing/acceptance and the first
+manual transfer. The changed peer/worker ports preserve identity and the new
+address becomes authoritative, but the next requested file misses its deadline.
+This remains a failed journey (200.369s; JUnit 198.698s), with unchanged
+boot/framework, sources, production APK and original failed receipt. Later
+recovery stages are not reached. The next software investigation is this
+address-change transfer; its cause is not yet established.
+
+The chooser-test rebuild also records a separately diagnosed macOS offloaded
+Go source file. The exact owned blocked Go-list child is terminated after a
+matching executable is restored from its local archive outside cloud storage.
+The new build passes in 1m2s with pinned Go1.26.10 at
+/Users/michaelwong/Library/Caches/Covalent/toolchains/go1.26.10-0b5183492292/go.
+The failed build and source/archive hashes remain separate.
+See docs/android-folder-acceptance.md and
+artifacts/evidence/android-acceptance-busy/manifest.json.
+
+Parent 69ff050 CI 39622053150 is terminal failed at acceptance; its seven
+non-device jobs, CodeQL, version sync and 86 baseline Android tests pass. Its
+permission/native-report phase was not reached. The prior framework abort
+remains unresolved. The new source needs hosted CI before release. Initial
+wrong-module and wrong-Go build attempts remain separate. No physical device,
+original media, account, Pi image, production signer or release gate changed.
+
+An actual Android 37 native fixture exposes a diagnostic parsing bug: report
+headers include an optional parent PID between victim PID and TID. Both readers
+now share a strict grammar accepting that bounded numeric field while ignoring
+its value. Existing correlation/privacy requirements remain intact.
+
+On fresh emulator-5600, one separate owned native fixture aborts once. The 8a17a76
+reader rejects its real in-window header; its original failed receipt remains.
+A separate read-only follow-up matches that same existing report after the fix,
+without replaying the fault, and keeps boot/framework PID/start-time identity.
+Only the exact verified owned executable/directory is removed. All 73 focused
+macOS/Linux checks pass. See docs/interlink-native-report-format.md and
+artifacts/evidence/native-report-parent-header/manifest.json. This affects QA
+diagnostics only; it does not establish or fix the hosted framework abort.
+The earlier 8a17a76 CI run 39615977362 finished failed. The tested format fix was
+promoted after that terminal result; its 69ff050 run failed earlier at folder
+acceptance as recorded above.
+
+Hosted d09d08e run 39609173300 is terminal: seven non-device lanes, 86 baseline
+tests and SAF pass; permission recovery and the release gate fail. The observed
+system_server1823/TID2059 receives signal 6 after Open settings returns 0 and
+before the failed Permissions tap. Android restarts the framework. Three
+synthetic identity hashes remain unchanged. Both DropBox reads are complete
+and nonempty but neither correlates a report. The cause and mismatch reason
+remain unknown. Artifact 12352067988 verifies ZIP SHA-256
+4ab147806460971083683d5e962d81ef169f740598f2c1b3a4489ddc0089df65;
+all 72 files/tested sources are bound in artifacts/evidence/api37-d09d08e/result.json.
+
+The diagnostic follow-up adds bounded fixed rejection counts without retaining
+rejected text or changing admission. All 70 focused macOS/Linux checks pass,
+including five new counter/privacy/strictness cases. The local API 37 probe is
+unavailable because its exact emulator5592 transport is absent; no fixture is
+restarted, and the earlier smoke is not relabeled. See
+docs/interlink-permission-qa.md. No app/runtime or release change is claimed;
+physical devices, image, accounts, pairing and media remain unchanged.
+
+Hosted bf25758 run39601425204 is terminal: seven non-device jobs, 86 baseline
+tests and SAF pass, while permission recovery and the release gate fail.
+The live recorder sees system_server1775 signal 6 after Open settings returns0
+and before the failed Permissions tap. Its live five-second drain yields no
+recognized native dump; no cause is established. The three synthetic identity
+digests remain unchanged. Artifact12347813609 has verified ZIP SHA-256
+df2f80f7ac8de66682e248228689288c037861a0c261b94b48b81809522dbceb.
+
+The diagnostic follow-up adds independent bounded reads of the existing Android
+DropBox native reports on a failed owned-emulator journey. Matching requires the
+same boot, capture-window native timestamp, observed PID/TID/process/signal and
+complete recognized service output. Raw reports stay in memory. Shared decoding
+keeps only approved metadata; private paths, symbols and messages stay discarded.
+Byte/deadline/read failures and source/boot drift cannot produce a match or
+relabel failed permission recovery. No APK runtime, renderer flags, acceptance
+criteria or device data are changed. See docs/interlink-permission-qa.md.
+
+All 65 focused tests pass independently on macOS and Linux: 32 permission
+harness, 27 report-reader/parser and six forward-cleanup checks. The report
+checks include actual owned child processes for EOF, nonzero exit, byte limits,
+silent hangs and overlong-line suffix rejection. Final-source read-only API 37
+smoke reads both real empty report tags, preserves the boot, framework PIDs/start
+ticks and all three app identity hashes, and stops the live log client cleanly.
+Its impossible synthetic victim only exercises no-match classification; it is
+not a real native crash or proof that hosted crash details are available.
+Source/evidence manifest: artifacts/evidence/native-report-fallback/manifest.json.
+
+The shared Android unlock gate now closes a missed-unlock registration gap and
+prevents repeated/concurrent notifications from starting the same action twice.
+Credentials and existing opt-in/ownership checks stay intact. Seven deterministic
+gate tests pass; five checks fail against the retained former-callback model,
+which is not an old-APK reproduction. See docs/interlink-startup-recovery.md.
+
+The full Android build passes in 6m55s: 212 debug/two release unit tests, both
+apps, lint, native provenance and package checks. Thirty permission-harness and
+six cleanup host tests pass. Five actual Android storage checks pass; sealed-
+storage cases use a context double rather than a real locked user. On fresh
+Interlink_Unlock_API 37/emulator5592, both actual permission routes pass with
+unchanged identities/framework. The final corrected reboot journey passes:
+one reboot, native ready API and foreground service return with Activity
+unresumed, 21.126 seconds stable, same APK/UID/three identity hashes, verified
+owned-forward absence/removal, and final pass publication after cleanup.
+
+The first reboot's native behavior passed for20.373s but its overall receipt
+remains failed because cleanup mistook an absent forward for an error. A separate
+same-boot follow-up proves native readiness, no remaining forwards, exact owned
+removal/readback and already-absent handling. The corrected full journey uses
+new receipts. Original failed build/admission/reboot evidence stays intact.
+Source-bound evidence: artifacts/evidence/android-unlock-startup.json.
+Debug APK SHA-256: f7f6b62362c8abfaf5d4b132b9fa17c32a48a270ace11d314d94cdc8bfb6ab9b.
+
+This is a software/emulator milestone. Hosted x86 API 37 permission recovery,
+real first unlock, phone/Pi hardware, roaming and production signing remain
+open. Original Android fixtures, signed-in devices, drive, image and source
+photos are unchanged. No release or main merge is promoted; the goal stays active.
+
+Hosted d57deda run39562643351 is terminal. Seven non-device jobs, all 86
+baseline tests and the SAF journey pass (437.290 seconds); permission recovery
+and the combined release gate fail. The new recorder sees system_server1751
+receive native signal 6, 1.472 host seconds after Open settings returns0 and
+before the failed Permissions tap. Android restarts the framework itself.
+All three synthetic identity digests remain unchanged. Five seconds of continued
+capture produce no recognized native dump/header/frame/abort-summary events.
+That absence does not establish why the native abort happened or why details
+were unavailable. Permission restoration also fails while services are missing.
+Artifact12329751390 is retained with verified SHA-256
+7d767dcce5f8f3b790a41f190721e843f9f8973152f7146bacb09300ef713927;
+artifacts/evidence/api37-d57deda/result.json binds this exact source and separate
+gates. The original recorder/source receipt and preceding failures remain intact.
+No app/runtime change, input replay, guest restart or release acceptance occurs.
+
+The native framework recorder now retains bounded approved dump metadata after
+an observed fatal signal in a known process. It correlates the separate logger
+and victim PIDs, refuses unknown/mismatched/malformed headers, and emits only
+fixed platform-library names, relative code offsets, bounded build IDs, fixed
+symbols and redacted abort-family/hash/length. Raw messages, thread names,
+registers, arbitrary paths/symbols and private libraries remain discarded.
+Fault/context/frame counts are bounded; omitted frames remain visible. Capture
+can drain the same stream for at most five seconds after a known native fault;
+stream loss during that drain still fails continuity. No input is replayed or
+acceptance deadline extended; no guest/app/service is restarted.
+
+All thirty host tests pass with resource warnings treated as errors. Eight new
+regressions include real child-process delayed records, loss during drain,
+privacy, victim/logger correlation, malformed context reset and bounds. The
+final-source read-only Android36 smoke on the retained boot reads two idle
+lines and one safe capture marker, stops its owned client/reader cleanly and
+preserves boot ID plus framework PIDs/start ticks. It has no native dump and
+is not proof of the API 37 cause or permission recovery. Its source-bound receipt
+is artifacts/interlink-qa/native-framework-smoke-1792566867768376000.json;
+the earlier-source smoke is retained separately. See docs/interlink-permission-qa.md.
+
+Hosted 1e54976 run39558337954 is terminal: seven non-device jobs, all 86
+baseline tests and the full SAF journey pass (415.979 seconds). Permission
+recovery fails while opening app settings. Its Open settings tap returns0;
+2.024 host seconds later the known system_server651 receives native signal 6,
+and Android starts system_server8025 on the same boot. All three synthetic
+identity digests remain unchanged. Timing establishes no cause or trigger.
+The previous e0dfc1c abort preceded its failed tap; the two runs are retained
+separately. Artifact12327728727 has verified ZIP SHA-256
+3fd06c816c2d000efac7ecb971306c7be264f1739326d7586ecdf8636e67a404;
+artifacts/evidence/api37-1e54976/result.json binds the source and distinct gates.
+The recorder follow-up was pushed separately as codex/native-framework-details
+while this exact run remained active, avoiding concurrency cancellation. It
+then advanced the review branch for the d57deda check recorded above.
+Permission recovery and the release gate remain unaccepted.
+
+Hosted e0dfc1c run 39552976561 is terminal. All seven non-device lanes,
+all 86 baseline instrumentation tests and the complete SAF folder journey pass
+(the latter in 422.361 seconds). The corrected idle/manual observation now has
+actual hosted journey evidence. The permission journey remains failed. Its
+continuous recorder sees system_server PID657 receive native signal 6 at
+06:40:10.236, before the failed Permissions tap starts (1.508 host seconds
+later). The tap and subsequent permission restoration report exit20/missing-service.
+This establishes an earlier core-framework failure, not its cause or trigger.
+All three recorded synthetic identity digests remain unchanged at failure.
+No tap is replayed, deadline extended or framework restarted by this follow-up.
+Artifact 12325408311 is retained with verified ZIP SHA-256
+7f28229f6fbf26d388bd2ab20df9e84bfe058c58919f9290e87b894bd2e7710d;
+artifacts/evidence/api37-e0dfc1c/result.json binds the exact source/run and
+separate passing/failing gates. The earlier focus/manual failures remain
+retained; this run does not establish their causes. No runtime change, main
+merge, device installation or production release is made by this evidence.
+
+Manual pairing now reports a missing local transport endpoint as the existing
+409 peer_endpoint_unavailable response. Previously pair/accept alone mapped
+that normal offline state to 400 invalid_contract, misleading clients into
+reporting a version/request problem. The appliance's real offline-startup test
+exposed this gap; its older pinned native core is not replaced by this change.
+The new real-router regression reproduces 400 before the repair, then verifies
+missing endpoint/certificate refusals, authentication, reuse of the same valid
+invitation after endpoint restoration and unchanged identity/trust settings.
+All 303 node library tests and 10 actual network-pairing tests pass. API route
+inventory, OpenAPI lint and Rust formatting pass. No APK/device update or
+release is published by these tests. The 07f1295 hosted run 39549469177 is terminal: seven non-device lanes pass,
+but one of 86 baseline tests fails at Espresso pressBack because its root window
+has no focus (CovalentAppTest.kt:96). The SAF and permission journeys are not
+reached. No cause is established and no product regression is inferred.
+Artifact 12323623061 is retained with verified SHA-256
+a9543799a00d849f4f640a1ab8f9a89bbe1523d6a350432f91ce82afd6616090.
+The complete release gate remains closed.
 
 Software work continues first at the user's request. Hosted 97bf199 run
 39541339765 is terminal: seven non-device lanes and all 86 baseline device
@@ -9,16 +338,31 @@ retained with verified ZIP SHA-256
 6f04dd0b96400d406ffd2335db78f4be4fcb9808a0e02a0579c121309f562867.
 No cause is assigned to the unavailable repaired API.
 
-The follow-up fixes a confirmed test gap: its refreshed-connection predicate
-previously accepted saved share/folder state without requiring native sync to
-be available and running. It now requires AVAILABLE, RUNNING and no issue for
-the unchanged five-second stability window and 90-second overall deadline.
-If the single manual-run mutation is rejected, a read-only observation records
-the current connection match and safe availability/lifecycle/issue values.
-No mutation replay, guest restart, deadline extension or app-runtime change is
-introduced. The instrumentation APK builds successfully in 16 seconds (53
-tasks). This is compile/package validation, not an executed device-journey pass;
-current hosted/device acceptance remains required.
+The 2c5fe4d run 39546668502 is now terminal: seven non-device lanes and all
+86 baseline instrumentation tests pass, but the SAF journey fails before its
+manual mutation. The exact repaired grant and READY share are present; sync is
+AVAILABLE, STOPPED and has no issue. The added RUNNING requirement is wrong for
+an idle manual link, whose worker starts only after the explicit run. Native
+service tests and Android status contracts both define that valid idle state.
+This finding does not explain the older 97bf199 manual-run rejection.
+The downloaded artifact 12321909085 is retained with verified SHA-256
+fa22c9f93935222acd693d50194f0be5bc4b22b1456055e73a609d6718642b83.
+Its native diagnostic log is empty; the permission journey is not reached.
+
+The corrected observation accepts only AVAILABLE with STOPPED or RUNNING and
+no issue, together with the exact repaired grant/share checks. The same refreshed
+connection must satisfy all conditions for the unchanged five seconds within
+90 seconds. Transient errors reset that interval; no manual mutation is retried.
+Safe errors now identify the allowlisted API code and clear prior errors after
+a successful read, so historical 503 responses cannot masquerade as the latest
+sample. The test APK builds in 11 seconds, all 18 focused Android lifecycle/status
+unit tests pass, and the native idle/manual-batch contract test passes. Test APK
+SHA-256: 82f8813947c6d99c030886cdbb8efe1de5f4e6feaab1ca2c6b9e22bb1b6b8885.
+This is a test-observation correction, not an app-runtime change or a full SAF,
+permission-journey, physical-device or release pass. The retained 07f1295 hosted
+run was allowed to finish before this follow-up advances PR51. The corrected
+idle-manual observation was also pushed separately as codex/idle-manual-repair;
+it does not change app runtime or claim to repair the unrelated focus failure.
 
 Earlier hosted source d9eb263, run 39526795075, is terminal: seven non-device lanes and all 87
 baseline/SAF tests pass, but the permission tap reports exit20/missing-service.
@@ -43,11 +387,11 @@ both framework PIDs. This is recorder validation, not a permission-journey pass.
 A separate historical crash-only observation attributes a fatal TimeoutException
 to the previously observed system_server PID5529, followed by application
 DeadSystemException failures. It establishes neither the timeout component nor
-the trigger; no Covalent causation is inferred. The latest API37 hosted journey
+the trigger; no Covalent causation is inferred. The latest API 37 hosted journey
 remains required. App/APK runtime bytes are unchanged.
 
 Earlier hosted source 126cec9
-run 39520547422 is terminal: seven lanes pass; the API37 lane passes all 86
+run 39520547422 is terminal: seven lanes pass; the API 37 lane passes all 86
 baseline tests plus the SAF journey, then fails at the permission harness's
 Open settings tap (exit 20). The combined release gate fails. Its error output
 was discarded; cause and tap delivery remain unknown, not an established app
@@ -58,7 +402,7 @@ output hashes, then observes fresh allowlisted UI state, framework IDs and
 identity hashes before cleanup. Nonzero input still fails; there is no input
 replay, guest restart or bypass of either recovery route. Cleanup failures no
 longer discard the primary error/receipt. Nine no-device regression checks pass
-and join Android foundation CI. The final headed API37 ARM64 run passes both
+and join Android foundation CI. The final headed API 37 ARM64 run passes both
 real grant routes, native ready/foreground-service checks, unchanged three
 identity hashes and stable boot/system_server/surfaceflinger. Its receipt binds
 the actual harness SHA-256. App runtime/APK bytes are unchanged. Evidence:
@@ -75,7 +419,7 @@ fails; the grant failure's cause is not established. The QA harness now uses
 the actual Permissions → Nearby devices → Allow controls and returns through
 Settings without launching the Activity or starting its service. Back actions
 are bounded independently of unavailable hierarchies, and the screen after
-the final Back is observed. The headed API37/ARM64 rerun passes both Settings
+the final Back is observed. The headed API 37/ARM64 rerun passes both Settings
 return and the runtime prompt, requiring native ready state, a foreground
 service and unchanged device/TLS/key-envelope hashes. They also match the
 retained failed run's baseline. App runtime and APK bytes are unchanged.
@@ -106,7 +450,7 @@ artifacts/interlink-qa/build-memory-510a1f7.json. Its hosted follow-up remains
 required. This documentation change does not relabel the runtime artifacts.
 
 Previous fully green hosted milestone 6177379d1e3c0dab4c514d49d9fa340d3eb0dcbd passes all
-jobs in run 39504560766: Android foundation, API37 device, both complete
+jobs in run 39504560766: Android foundation, API 37 device, both complete
 native containers, shared Rust/contracts, dependency review, both macOS jobs and
 the combined release-candidate software gate. CodeQL and version sync pass too.
 Android proves all 86 expected
@@ -132,11 +476,11 @@ without a permanent Back button. Temporary theme/font changes were restored.
 No paired link, phone original or physical installation was changed by this UI
 check. Private evidence: artifacts/interlink-qa/setup-clarity-*.png and
 setup-clarity-build.log; QA signing uses the existing Android Debug identity.
-The exact committed `6177379` minified APK passes API37 cold launch and initial
-permission denial/grant checks on the separate headed Interlink_QA_API37 AVD.
+The exact committed `6177379` minified APK passes API 37 cold launch and initial
+permission denial/grant checks on the separate headed Interlink_QA_API 37 AVD.
 Its hosted run 39504560766 now passes all software gates above.
 
-Permission recovery follow-up: a real revocation on API37 reproduced a startup
+Permission recovery follow-up: a real revocation on API 37 reproduced a startup
 screen with no permission action. Both apps' folder-sync surface now shows
 Allow access/Open settings and rechecks access on resume. Restoring access
 restarts only an opted-in host. The guarded debug companion journey passes
@@ -147,7 +491,7 @@ fixed disposable AVDs, not phones. CI now runs it after the existing 86 baseline
 tests and SAF journey. Exact runtime source 6b31fde6d127497e097591da8b49eb6d58dc174f
 passes the full cross-app Android gate, all 205 unit tests, both lint variants
 for both apps, and native/package/inventory checks. Its guarded debug journey
-passes on the headed API37 ARM64/4 KiB AVD. The minified QA APK passes both
+passes on the headed API 37 ARM64/4 KiB AVD. The minified QA APK passes both
 recovery routes and installed-byte readback. After an actual emulator reboot,
 the foreground service and UDP 18887 listener return before opening the
 Activity; the launcher remains foreground. All three protected identity-file
@@ -157,7 +501,7 @@ relabel those runtime bytes. Latest-head hosted follow-up remains separate.
 Receipts: artifacts/interlink-qa/permission-recovery-6b31fde-build.json,
 api37-permission-recovery-6b31fde/permission-recovery.json and
 interlink-6b31fde-qa.json in the same private evidence directory.
-The full cross-app gate caught two missing explicit API37 guards and the
+The full cross-app gate caught two missing explicit API 37 guards and the
 superseded unused denial string. Both permission launches are now guarded;
 the unused string is removed. No lint rule was suppressed. Retain the failed
 07fd041 full-check log; the corrected 6b31fde full gate passes without exceptions.

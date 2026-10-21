@@ -3,6 +3,31 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+// Copy one reviewed fixture into each generated source root; release has neither.
+abstract class StageInterlinkJourneySource : DefaultTask() {
+    @get:InputFile abstract val sourceFile: RegularFileProperty
+    @get:OutputDirectory abstract val outputDirectory: DirectoryProperty
+
+    @TaskAction fun stage() {
+        val source = sourceFile.get().asFile
+        val target = outputDirectory.file(source.name).get().asFile
+        target.parentFile.mkdirs()
+        source.copyTo(target, overwrite = true)
+    }
+}
+
+val interlinkJourneyBridge = tasks.register<StageInterlinkJourneySource>("stageInterlinkJourneyBridge") {
+    sourceFile.set(layout.projectDirectory.file("../app/src/debug/java/life/michaelwong/covalent/node/FolderSyncInstrumentationBridge.kt"))
+}
+val interlinkJourneyTest = tasks.register<StageInterlinkJourneySource>("stageInterlinkJourneyTest") {
+    sourceFile.set(layout.projectDirectory.file("../app/src/androidTest/java/life/michaelwong/covalent/node/SafFolderSyncJourneyInstrumentedTest.kt"))
+}
+
+androidComponents.onVariants(androidComponents.selector().withBuildType("debug")) { variant ->
+    variant.sources.kotlin?.addGeneratedSourceDirectory(interlinkJourneyBridge) { it.outputDirectory }
+    variant.androidTest?.sources?.kotlin?.addGeneratedSourceDirectory(interlinkJourneyTest) { it.outputDirectory }
+}
+
 // Separate installed identity; reuse the reviewed engine, grants and pairing code.
 android {
     namespace = "life.michaelwong.covalent"
@@ -67,6 +92,7 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")
     debugImplementation("androidx.compose.ui:ui-tooling")
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
     // Keep main and instrumentation classpaths consistent with test-ext 1.3.
     constraints {
         implementation("androidx.concurrent:concurrent-futures:1.2.0")
@@ -74,6 +100,7 @@ dependencies {
     }
     androidTestImplementation(platform("androidx.compose:compose-bom:2026.06.00"))
     androidTestImplementation("androidx.test.ext:junit:1.3.0")
+    androidTestImplementation("androidx.test.espresso:espresso-core:3.7.0")
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
 }
 

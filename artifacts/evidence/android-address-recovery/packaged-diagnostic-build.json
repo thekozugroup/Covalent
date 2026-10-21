@@ -1,0 +1,16 @@
+{
+  "command": [
+    "./apps/android/gradlew",
+    "-p",
+    "apps/android",
+    "--no-daemon",
+    "-PcovalentBuildSyncEngine=true",
+    ":app:assembleDebugAndroidTest"
+  ],
+  "exitCode": 0,
+  "seconds": 54.551,
+  "appApkBeforeSha256": "41d00b5fc927d9fbe60d286336eec5bf8259df811880cc29d79dbda588576661",
+  "appApkAfterSha256": "41d00b5fc927d9fbe60d286336eec5bf8259df811880cc29d79dbda588576661",
+  "testApkSha256": "5ae02f07d88abf45ee73336e0962e144341f74429ac13fc26184b3d2407f8fac",
+  "physicalDevicesChanged": false
+}

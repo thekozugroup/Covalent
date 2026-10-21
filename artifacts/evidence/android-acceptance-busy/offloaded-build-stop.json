@@ -1,0 +1,10 @@
+{
+  "format": 1,
+  "ownedGoPid": 70530,
+  "ownedGoParentPid": 70529,
+  "operation": "go list -deps -json .",
+  "causeVerified": "read blocked on offloaded regular toolchain file; cloud request did not materialize it",
+  "restoredExactGoExecutable": true,
+  "productionSourcesChanged": false,
+  "signalIntent": "SIGTERM"
+}

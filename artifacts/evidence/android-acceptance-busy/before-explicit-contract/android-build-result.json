@@ -1,0 +1,167 @@
+{
+  "format": 1,
+  "tests": 220,
+  "suites": [
+    {
+      "suite": "life.michaelwong.covalent.AndroidCopyAndConfirmationTest",
+      "tests": 15,
+      "sha256": "337b44c5203f742ff1a9ab76cbb51eaafdf8b41c5bb4a5a90736029845142ecd"
+    },
+    {
+      "suite": "life.michaelwong.covalent.AndroidRemediationTest",
+      "tests": 22,
+      "sha256": "61041964d31bfe9ac823692117804952c605ae6be480b53cbc284b6634ed0ab9"
+    },
+    {
+      "suite": "life.michaelwong.covalent.ContractTest",
+      "tests": 8,
+      "sha256": "31b1cc4f9c587e64870edfffd0c29a858e4f2739287a10d236abc3d7d6f70db8"
+    },
+    {
+      "suite": "life.michaelwong.covalent.DirectBootContractTest",
+      "tests": 4,
+      "sha256": "a49b4a59652fc3aa96346e2a18540002001ee72526ec35e3ac950b46231d0725"
+    },
+    {
+      "suite": "life.michaelwong.covalent.KeyProtectionContractTest",
+      "tests": 13,
+      "sha256": "5fd62db729a977e7fa90aa8459065c3d6d1775d83ec374d3a280e4710e4a4aa8"
+    },
+    {
+      "suite": "life.michaelwong.covalent.NodeErrorCodeCopyTest",
+      "tests": 7,
+      "sha256": "5e00799f1a445ef4d6569596a8df437643c4b6d4bfffd2db4a1f0be1ae7b00a5"
+    },
+    {
+      "suite": "life.michaelwong.covalent.ProductUXContractTest",
+      "tests": 6,
+      "sha256": "7436f7290b1b2dde6c3601b59864b9b317cbfc8be203d33413bbeced84ebbf01"
+    },
+    {
+      "suite": "life.michaelwong.covalent.RecoveryContractTest",
+      "tests": 8,
+      "sha256": "51d887b1cc11d2e0092f2662e6e61720d04dd8e635be0299c1b2270cd0d556ab"
+    },
+    {
+      "suite": "life.michaelwong.covalent.SafArchiveContractTest",
+      "tests": 3,
+      "sha256": "7d572d95248a79121b2091536d8209df33c3e5ff14ed644c1860ea439e9d7f8a"
+    },
+    {
+      "suite": "life.michaelwong.covalent.SafFailureAndSchedulerTest",
+      "tests": 10,
+      "sha256": "ffda4ccd0ebe8a5ff53b020cdd1fd609a46e54713b79b33676e20aa090761656"
+    },
+    {
+      "suite": "life.michaelwong.covalent.data.DurableTransferJournalTest",
+      "tests": 10,
+      "sha256": "cba750a18d7195f06ca3bf753d791939680f3f7cc37c6248afc4af441c287378"
+    },
+    {
+      "suite": "life.michaelwong.covalent.data.FolderAcceptanceRetryTest",
+      "tests": 7,
+      "sha256": "ed0d75de833d66f2c6689fdbd1883b96b39afc9b5ed2cf63276b8828917ad06e"
+    },
+    {
+      "suite": "life.michaelwong.covalent.node.AndroidConditionFeedTest",
+      "tests": 4,
+      "sha256": "337b956e4abc3ee8fed12ac3456da8a5841f76dd4d3f14e5101a979ce055ce70"
+    },
+    {
+      "suite": "life.michaelwong.covalent.node.FolderSyncLifecycleContractTest",
+      "tests": 11,
+      "sha256": "e0db758d5466f4759d1c8c480d8ce7838e6ad09e97148f934519410fbb02da61"
+    },
+    {
+      "suite": "life.michaelwong.covalent.node.PackagedSyncEngineTest",
+      "tests": 4,
+      "sha256": "e060c8d009c7dc5696498546d032eab5f5dfcd54eea000c729465304c69f8792"
+    },
+    {
+      "suite": "life.michaelwong.covalent.node.PeerRouteTest",
+      "tests": 2,
+      "sha256": "18141b6fd0dbe41085485c817c0f47221c57e015a37423634ac08a2ead5337a9"
+    },
+    {
+      "suite": "life.michaelwong.covalent.node.UserUnlockGateTest",
+      "tests": 7,
+      "sha256": "8f9a82a7e813bcf9ece251c927347377dfd1d04733f235de44b2857694fc7a31"
+    },
+    {
+      "suite": "life.michaelwong.covalent.sync.FolderLinkSettingsChangeStoreTest",
+      "tests": 6,
+      "sha256": "b423f1794adca3b2e2e882eed91d5d277a9a0176599ec471ff72326270fe92ee"
+    },
+    {
+      "suite": "life.michaelwong.covalent.sync.FolderSyncActionsTest",
+      "tests": 15,
+      "sha256": "452cf74cb5bbd3cd50330db50a14b6515576e7f3907778001b338d25185177f7"
+    },
+    {
+      "suite": "life.michaelwong.covalent.sync.FolderSyncClientTest",
+      "tests": 17,
+      "sha256": "c1227c28311c0352c1be80f7c1e48dcabae99c38708c721f187b3e305b04bc4f"
+    },
+    {
+      "suite": "life.michaelwong.covalent.sync.FolderSyncContractsTest",
+      "tests": 7,
+      "sha256": "f058374887ee030f218f96d533347733ff406a778edf227b1b254e90995a803f"
+    },
+    {
+      "suite": "life.michaelwong.covalent.sync.FolderSyncGrantStoreTest",
+      "tests": 13,
+      "sha256": "bc6c61cae5c8f086d4f0da6489bda4a2a943dd7eade5ad2f6fc24dad4e5cdb6b"
+    },
+    {
+      "suite": "life.michaelwong.covalent.sync.FolderSyncStatusReadTest",
+      "tests": 3,
+      "sha256": "787e6d1809510a838e475c4578376ff009a05d04d3fdafcbbabd1b83be7cd450"
+    },
+    {
+      "suite": "life.michaelwong.covalent.sync.PeerAddressUpdateTest",
+      "tests": 5,
+      "sha256": "e9779134611d6f12f7e6ce393dafa57a3ddc6144beac448101e39f20a2ac8b33"
+    },
+    {
+      "suite": "life.michaelwong.covalent.sync.SafStrictQueryTest",
+      "tests": 9,
+      "sha256": "5f85ab028b7e52721bf3291263fe11094e63add89385a10d52dc7fa921493a84"
+    },
+    {
+      "suite": "life.michaelwong.covalent.ui.FolderSyncPairingTest",
+      "tests": 1,
+      "sha256": "8edbdeb244bf5f0a2b301ae284ce9e7b6de59b2cb3b1feab465a6f9cfe3ea987"
+    },
+    {
+      "suite": "life.michaelwong.covalent.ui.OpenSourceNoticesTest",
+      "tests": 3,
+      "sha256": "6f40fb8ee4d34323808db38223f73d91777bced082d4ad72bc23f8bc3f958fe0"
+    }
+  ],
+  "failures": 0,
+  "errors": 0,
+  "skipped": 0,
+  "lintModules": [
+    "app",
+    "companion"
+  ],
+  "packagedNativeBuild": true,
+  "productionSigningAccepted": false,
+  "artifacts": {
+    "covalentDebug": {
+      "path": "apps/android/app/build/outputs/apk/debug/app-debug.apk",
+      "bytes": 58756385,
+      "sha256": "4ad3f7b4ab4e41b3821f1af9d995a82907e835eb9258c3f10b50c62dae737b02"
+    },
+    "covalentInstrumentation": {
+      "path": "apps/android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk",
+      "bytes": 1332735,
+      "sha256": "e23f445500940da2d2dc4c580e2e17fc51cd4d0ec499af3b71bbd7e1877caa53"
+    },
+    "interlinkDebug": {
+      "path": "apps/android/companion/build/outputs/apk/debug/companion-debug.apk",
+      "bytes": 67314363,
+      "sha256": "6a930e0a436a8b4e228e1c3fd92409bc3f2317b1d8e4f0293f163d06b5f6c753"
+    }
+  }
+}

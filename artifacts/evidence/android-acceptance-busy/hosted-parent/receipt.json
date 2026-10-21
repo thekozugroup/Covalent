@@ -1,0 +1,14 @@
+{
+  "format": 1,
+  "source": "69ff050eaac0cb2a896e6b281b6b71a095b1ea33",
+  "merge": "874e235442e516f632d93d55d473186bded84aa4",
+  "run": 39622053150,
+  "artifact": 12356638446,
+  "zipSha256": "df46c89ca30432165ed2428e05ee92123ef4d147984ae82bf7967e96ba61a7f5",
+  "terminal": true,
+  "conclusion": "failure",
+  "baselineInstrumentationTests": 86,
+  "folderJourney": "failed at acceptance before permission recovery",
+  "permissionRecoveryReached": false,
+  "relabelled": false
+}

@@ -1,0 +1,25 @@
+{
+  "sourceSha": "fed6107937f5c9208a899c1cc37c01c4f039a05f",
+  "runId": 39644102561,
+  "result": "failed",
+  "baselineTestsPassed": 86,
+  "baselineSeconds": 72.693,
+  "ordinaryCovalentSafJourneyPassed": true,
+  "journeySeconds": 422.116,
+  "companionJourneyCovered": false,
+  "permissionRecoveryPassed": false,
+  "permissionFailure": {
+    "kind": "known-emulator-read-color-buffer-DMA-assertion",
+    "victimPid": 1773,
+    "victimTid": 2009,
+    "signal": 6,
+    "msAfterPriorSuccessfulTap": 2312,
+    "abortSha256": "21459e59cfa55a94251c82e5d7e559328fced4bbbff93a4f139eb68d27d56bee",
+    "liveAndDropBoxAgree": true,
+    "frameworkRestartPid": 8816,
+    "threeIdentityDigestsUnchanged": true
+  },
+  "archiveSha256": "f63516142fe90b31931192313dd6579809b5c719e7b18d5682dfdbbca53eafad",
+  "physicalDeviceAccepted": false,
+  "releaseReady": false
+}

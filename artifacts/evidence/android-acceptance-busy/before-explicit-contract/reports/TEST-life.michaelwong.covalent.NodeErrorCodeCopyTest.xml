@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="life.michaelwong.covalent.NodeErrorCodeCopyTest" tests="7" skipped="0" failures="0" errors="0" timestamp="2026-10-21T15:51:36.169Z" hostname="MacBookPro" time="0.012">
+  <properties/>
+  <testcase name="theFailurePathNeverRendersAThrowableMessage" classname="life.michaelwong.covalent.NodeErrorCodeCopyTest" time="0.002"/>
+  <testcase name="theFirstRunCopyExplainsWhatToDoNext" classname="life.michaelwong.covalent.NodeErrorCodeCopyTest" time="0.002"/>
+  <testcase name="theRetiredPairingEndpointCodeIsNotMapped" classname="life.michaelwong.covalent.NodeErrorCodeCopyTest" time="0.0"/>
+  <testcase name="theFirstRunClaimCodesAreMappedToTheirOwnSentences" classname="life.michaelwong.covalent.NodeErrorCodeCopyTest" time="0.001"/>
+  <testcase name="everyMappedCodeResolvesToItsOwnStringAndNoneIsShared" classname="life.michaelwong.covalent.NodeErrorCodeCopyTest" time="0.001"/>
+  <testcase name="anUnknownCodeIsNotMappedSoTheCallerUsesAuthoredCopy" classname="life.michaelwong.covalent.NodeErrorCodeCopyTest" time="0.0"/>
+  <testcase name="folderSyncAndAddressRefreshCodesAreCoveredFromTheBackendSource" classname="life.michaelwong.covalent.NodeErrorCodeCopyTest" time="0.006"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

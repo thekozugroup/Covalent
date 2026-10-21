@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="life.michaelwong.covalent.data.FolderAcceptanceRetryTest" tests="7" skipped="0" failures="0" errors="0" timestamp="2026-10-21T15:51:36.295Z" hostname="MacBookPro" time="0.003">
+  <properties/>
+  <testcase name="immediateSuccessDoesNotWait" classname="life.michaelwong.covalent.data.FolderAcceptanceRetryTest" time="0.001"/>
+  <testcase name="interruptionDuringBackoffPreservesCancellationAndSendsNothingElse" classname="life.michaelwong.covalent.data.FolderAcceptanceRetryTest" time="0.0"/>
+  <testcase name="persistentBusyReturnsTheLastRefusalAfterSixAttempts" classname="life.michaelwong.covalent.data.FolderAcceptanceRetryTest" time="0.001"/>
+  <testcase name="otherErrorsAreNotRetried" classname="life.michaelwong.covalent.data.FolderAcceptanceRetryTest" time="0.0"/>
+  <testcase name="uncertainTransportAndInvalidResponsesAreNeverReplayed" classname="life.michaelwong.covalent.data.FolderAcceptanceRetryTest" time="0.001"/>
+  <testcase name="alreadyInterruptedCallerNeverSendsAcceptance" classname="life.michaelwong.covalent.data.FolderAcceptanceRetryTest" time="0.0"/>
+  <testcase name="transientBusyCompletesOnceAfterBoundedBackoff" classname="life.michaelwong.covalent.data.FolderAcceptanceRetryTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

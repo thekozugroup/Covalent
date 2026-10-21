@@ -1,0 +1,12 @@
+test_actual_package_layouts_and_crlf_keep_exact_identity (__main__.NativeDirectoryTests.test_actual_package_layouts_and_crlf_keep_exact_identity) ... ok
+test_arm64_selects_its_exact_bytes_and_installer_directory (__main__.NativeDirectoryTests.test_arm64_selects_its_exact_bytes_and_installer_directory) ... ok
+test_foreign_ambiguous_or_unsafe_package_paths_fail_closed (__main__.NativeDirectoryTests.test_foreign_ambiguous_or_unsafe_package_paths_fail_closed) ... ok
+test_installed_hash_plan_rejects_tampered_apk_bytes (__main__.NativeDirectoryTests.test_installed_hash_plan_rejects_tampered_apk_bytes) ... ok
+test_other_abi_bytes_cannot_substitute_for_tampered_arm64 (__main__.NativeDirectoryTests.test_other_abi_bytes_cannot_substitute_for_tampered_arm64) ... ok
+test_partial_duplicate_or_oversized_manifests_are_rejected (__main__.NativeDirectoryTests.test_partial_duplicate_or_oversized_manifests_are_rejected) ... ok
+test_unknown_abi_or_path_fragment_is_refused (__main__.NativeDirectoryTests.test_unknown_abi_or_path_fragment_is_refused) ... ok
+
+----------------------------------------------------------------------
+Ran 7 tests in 0.007s
+
+OK
