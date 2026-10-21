@@ -1,5 +1,22 @@
 # Interlink companion and appliance robustness — 2026-10-21
 
+An actual Android 37 native fixture exposes a diagnostic parsing bug: report
+headers include an optional parent PID between victim PID and TID. Both readers
+now share a strict grammar accepting that bounded numeric field while ignoring
+its value. Existing correlation/privacy requirements remain intact.
+
+On fresh emulator-5600, one separate owned native fixture aborts once. The 8a17a76
+reader rejects its real in-window header; its original failed receipt remains.
+A separate read-only follow-up matches that same existing report after the fix,
+without replaying the fault, and keeps boot/framework PID/start-time identity.
+Only the exact verified owned executable/directory is removed. All 73 focused
+macOS/Linux checks pass. See docs/interlink-native-report-format.md and
+artifacts/evidence/native-report-parent-header/manifest.json. This affects QA
+diagnostics only; it does not establish or fix the hosted framework abort.
+The existing 8a17a76 CI run 39615977362 remains active and must finish without
+being cancelled by a new PR-head push. The tested format fix is published on a
+separate branch first; promotion to the existing PR follows that terminal result.
+
 Hosted d09d08e run 39609173300 is terminal: seven non-device lanes, 86 baseline
 tests and SAF pass; permission recovery and the release gate fail. The observed
 system_server1823/TID2059 receives signal 6 after Open settings returns 0 and
@@ -12,7 +29,7 @@ all 72 files/tested sources are bound in artifacts/evidence/api37-d09d08e/result
 
 The diagnostic follow-up adds bounded fixed rejection counts without retaining
 rejected text or changing admission. All 70 focused macOS/Linux checks pass,
-including five new counter/privacy/strictness cases. The local API37 probe is
+including five new counter/privacy/strictness cases. The local API 37 probe is
 unavailable because its exact emulator5592 transport is absent; no fixture is
 restarted, and the earlier smoke is not relabeled. See
 docs/interlink-permission-qa.md. No app/runtime or release change is claimed;
@@ -20,7 +37,7 @@ physical devices, image, accounts, pairing and media remain unchanged.
 
 Hosted bf25758 run39601425204 is terminal: seven non-device jobs, 86 baseline
 tests and SAF pass, while permission recovery and the release gate fail.
-The live recorder sees system_server1775 signal6 after Open settings returns0
+The live recorder sees system_server1775 signal 6 after Open settings returns0
 and before the failed Permissions tap. Its live five-second drain yields no
 recognized native dump; no cause is established. The three synthetic identity
 digests remain unchanged. Artifact12347813609 has verified ZIP SHA-256
@@ -38,7 +55,7 @@ criteria or device data are changed. See docs/interlink-permission-qa.md.
 All 65 focused tests pass independently on macOS and Linux: 32 permission
 harness, 27 report-reader/parser and six forward-cleanup checks. The report
 checks include actual owned child processes for EOF, nonzero exit, byte limits,
-silent hangs and overlong-line suffix rejection. Final-source read-only API37
+silent hangs and overlong-line suffix rejection. Final-source read-only API 37
 smoke reads both real empty report tags, preserves the boot, framework PIDs/start
 ticks and all three app identity hashes, and stops the live log client cleanly.
 Its impossible synthetic victim only exercises no-match classification; it is
@@ -55,7 +72,7 @@ The full Android build passes in 6m55s: 212 debug/two release unit tests, both
 apps, lint, native provenance and package checks. Thirty permission-harness and
 six cleanup host tests pass. Five actual Android storage checks pass; sealed-
 storage cases use a context double rather than a real locked user. On fresh
-Interlink_Unlock_API37/emulator5592, both actual permission routes pass with
+Interlink_Unlock_API 37/emulator5592, both actual permission routes pass with
 unchanged identities/framework. The final corrected reboot journey passes:
 one reboot, native ready API and foreground service return with Activity
 unresumed, 21.126 seconds stable, same APK/UID/three identity hashes, verified
@@ -69,7 +86,7 @@ new receipts. Original failed build/admission/reboot evidence stays intact.
 Source-bound evidence: artifacts/evidence/android-unlock-startup.json.
 Debug APK SHA-256: f7f6b62362c8abfaf5d4b132b9fa17c32a48a270ace11d314d94cdc8bfb6ab9b.
 
-This is a software/emulator milestone. Hosted x86 API37 permission recovery,
+This is a software/emulator milestone. Hosted x86 API 37 permission recovery,
 real first unlock, phone/Pi hardware, roaming and production signing remain
 open. Original Android fixtures, signed-in devices, drive, image and source
 photos are unchanged. No release or main merge is promoted; the goal stays active.
@@ -77,7 +94,7 @@ photos are unchanged. No release or main merge is promoted; the goal stays activ
 Hosted d57deda run39562643351 is terminal. Seven non-device jobs, all 86
 baseline tests and the SAF journey pass (437.290 seconds); permission recovery
 and the combined release gate fail. The new recorder sees system_server1751
-receive native signal6, 1.472 host seconds after Open settings returns0 and
+receive native signal 6, 1.472 host seconds after Open settings returns0 and
 before the failed Permissions tap. Android restarts the framework itself.
 All three synthetic identity digests remain unchanged. Five seconds of continued
 capture produce no recognized native dump/header/frame/abort-summary events.
@@ -106,14 +123,14 @@ privacy, victim/logger correlation, malformed context reset and bounds. The
 final-source read-only Android36 smoke on the retained boot reads two idle
 lines and one safe capture marker, stops its owned client/reader cleanly and
 preserves boot ID plus framework PIDs/start ticks. It has no native dump and
-is not proof of the API37 cause or permission recovery. Its source-bound receipt
+is not proof of the API 37 cause or permission recovery. Its source-bound receipt
 is artifacts/interlink-qa/native-framework-smoke-1792566867768376000.json;
 the earlier-source smoke is retained separately. See docs/interlink-permission-qa.md.
 
 Hosted 1e54976 run39558337954 is terminal: seven non-device jobs, all 86
 baseline tests and the full SAF journey pass (415.979 seconds). Permission
 recovery fails while opening app settings. Its Open settings tap returns0;
-2.024 host seconds later the known system_server651 receives native signal6,
+2.024 host seconds later the known system_server651 receives native signal 6,
 and Android starts system_server8025 on the same boot. All three synthetic
 identity digests remain unchanged. Timing establishes no cause or trigger.
 The previous e0dfc1c abort preceded its failed tap; the two runs are retained
@@ -129,7 +146,7 @@ Hosted e0dfc1c run 39552976561 is terminal. All seven non-device lanes,
 all 86 baseline instrumentation tests and the complete SAF folder journey pass
 (the latter in 422.361 seconds). The corrected idle/manual observation now has
 actual hosted journey evidence. The permission journey remains failed. Its
-continuous recorder sees system_server PID657 receive native signal6 at
+continuous recorder sees system_server PID657 receive native signal 6 at
 06:40:10.236, before the failed Permissions tap starts (1.508 host seconds
 later). The tap and subsequent permission restoration report exit20/missing-service.
 This establishes an earlier core-framework failure, not its cause or trigger.
@@ -218,11 +235,11 @@ both framework PIDs. This is recorder validation, not a permission-journey pass.
 A separate historical crash-only observation attributes a fatal TimeoutException
 to the previously observed system_server PID5529, followed by application
 DeadSystemException failures. It establishes neither the timeout component nor
-the trigger; no Covalent causation is inferred. The latest API37 hosted journey
+the trigger; no Covalent causation is inferred. The latest API 37 hosted journey
 remains required. App/APK runtime bytes are unchanged.
 
 Earlier hosted source 126cec9
-run 39520547422 is terminal: seven lanes pass; the API37 lane passes all 86
+run 39520547422 is terminal: seven lanes pass; the API 37 lane passes all 86
 baseline tests plus the SAF journey, then fails at the permission harness's
 Open settings tap (exit 20). The combined release gate fails. Its error output
 was discarded; cause and tap delivery remain unknown, not an established app
@@ -233,7 +250,7 @@ output hashes, then observes fresh allowlisted UI state, framework IDs and
 identity hashes before cleanup. Nonzero input still fails; there is no input
 replay, guest restart or bypass of either recovery route. Cleanup failures no
 longer discard the primary error/receipt. Nine no-device regression checks pass
-and join Android foundation CI. The final headed API37 ARM64 run passes both
+and join Android foundation CI. The final headed API 37 ARM64 run passes both
 real grant routes, native ready/foreground-service checks, unchanged three
 identity hashes and stable boot/system_server/surfaceflinger. Its receipt binds
 the actual harness SHA-256. App runtime/APK bytes are unchanged. Evidence:
@@ -250,7 +267,7 @@ fails; the grant failure's cause is not established. The QA harness now uses
 the actual Permissions → Nearby devices → Allow controls and returns through
 Settings without launching the Activity or starting its service. Back actions
 are bounded independently of unavailable hierarchies, and the screen after
-the final Back is observed. The headed API37/ARM64 rerun passes both Settings
+the final Back is observed. The headed API 37/ARM64 rerun passes both Settings
 return and the runtime prompt, requiring native ready state, a foreground
 service and unchanged device/TLS/key-envelope hashes. They also match the
 retained failed run's baseline. App runtime and APK bytes are unchanged.
@@ -281,7 +298,7 @@ artifacts/interlink-qa/build-memory-510a1f7.json. Its hosted follow-up remains
 required. This documentation change does not relabel the runtime artifacts.
 
 Previous fully green hosted milestone 6177379d1e3c0dab4c514d49d9fa340d3eb0dcbd passes all
-jobs in run 39504560766: Android foundation, API37 device, both complete
+jobs in run 39504560766: Android foundation, API 37 device, both complete
 native containers, shared Rust/contracts, dependency review, both macOS jobs and
 the combined release-candidate software gate. CodeQL and version sync pass too.
 Android proves all 86 expected
@@ -307,11 +324,11 @@ without a permanent Back button. Temporary theme/font changes were restored.
 No paired link, phone original or physical installation was changed by this UI
 check. Private evidence: artifacts/interlink-qa/setup-clarity-*.png and
 setup-clarity-build.log; QA signing uses the existing Android Debug identity.
-The exact committed `6177379` minified APK passes API37 cold launch and initial
-permission denial/grant checks on the separate headed Interlink_QA_API37 AVD.
+The exact committed `6177379` minified APK passes API 37 cold launch and initial
+permission denial/grant checks on the separate headed Interlink_QA_API 37 AVD.
 Its hosted run 39504560766 now passes all software gates above.
 
-Permission recovery follow-up: a real revocation on API37 reproduced a startup
+Permission recovery follow-up: a real revocation on API 37 reproduced a startup
 screen with no permission action. Both apps' folder-sync surface now shows
 Allow access/Open settings and rechecks access on resume. Restoring access
 restarts only an opted-in host. The guarded debug companion journey passes
@@ -322,7 +339,7 @@ fixed disposable AVDs, not phones. CI now runs it after the existing 86 baseline
 tests and SAF journey. Exact runtime source 6b31fde6d127497e097591da8b49eb6d58dc174f
 passes the full cross-app Android gate, all 205 unit tests, both lint variants
 for both apps, and native/package/inventory checks. Its guarded debug journey
-passes on the headed API37 ARM64/4 KiB AVD. The minified QA APK passes both
+passes on the headed API 37 ARM64/4 KiB AVD. The minified QA APK passes both
 recovery routes and installed-byte readback. After an actual emulator reboot,
 the foreground service and UDP 18887 listener return before opening the
 Activity; the launcher remains foreground. All three protected identity-file
@@ -332,7 +349,7 @@ relabel those runtime bytes. Latest-head hosted follow-up remains separate.
 Receipts: artifacts/interlink-qa/permission-recovery-6b31fde-build.json,
 api37-permission-recovery-6b31fde/permission-recovery.json and
 interlink-6b31fde-qa.json in the same private evidence directory.
-The full cross-app gate caught two missing explicit API37 guards and the
+The full cross-app gate caught two missing explicit API 37 guards and the
 superseded unused denial string. Both permission launches are now guarded;
 the unused string is removed. No lint rule was suppressed. Retain the failed
 07fd041 full-check log; the corrected 6b31fde full gate passes without exceptions.

@@ -40,6 +40,10 @@ NATIVE_SYMBOLS=frozenset(("abort","__assert2","__fortify_fatal","__stack_chk_fai
     "android::base::LogMessage::~LogMessage()","art::Runtime::Abort(char const*)"))
 NATIVE_PATH=re.compile(r"/(?:system|system_ext|vendor|product)/(?:lib|lib64)/(?:[A-Za-z0-9_.-]+/){0,3}([A-Za-z0-9_.+-]+)"
     r"|/apex/com\.android\.[a-z0-9.]+/(?:lib|lib64)/(?:[A-Za-z0-9_.-]+/){0,3}([A-Za-z0-9_.+-]+)")
+# Android37 also writes a bounded numeric parent PID between pid and tid.
+# It is syntax only: correlation still uses the observed victim PID/TID/name,
+# and the unrelated parent identifier never enters retained metadata.
+NATIVE_HEADER=re.compile(r"pid: ([0-9]{1,10}), (?:ppid: [0-9]{1,10}, )?tid: ([0-9]{1,10}), name: .{0,256}  >>> ([^<>]{1,128}) <<<")
 SOURCE_SHA256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 
 
@@ -53,7 +57,7 @@ class NativeDumpDecoder:
         # only a header that matches a previously observed known-process signal.
         if payload.startswith("*** ***"):
             self.native_dumps.pop(logger,None);return None
-        header=re.fullmatch(r"pid: ([0-9]{1,10}), tid: ([0-9]{1,10}), name: .{0,256}  >>> ([^<>]{1,128}) <<<",payload)
+        header=NATIVE_HEADER.fullmatch(payload)
         if payload.lstrip().startswith("pid:"):
             self.native_dumps.pop(logger,None)
             if not header:return None

@@ -8,7 +8,7 @@ import selectors
 import subprocess
 import time
 
-from interlink_framework_trace import NativeDumpDecoder, SOURCE_SHA256 as DECODER_SHA256
+from interlink_framework_trace import NATIVE_HEADER, NativeDumpDecoder, SOURCE_SHA256 as DECODER_SHA256
 
 SOURCE_SHA256 = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 OWNED_SERIALS = frozenset(("emulator-5570", "emulator-5572", "emulator-5592"))
@@ -18,7 +18,7 @@ MAX_LINE = 8192
 TIMEOUT = 8
 MAX_EVENTS = 96
 STAMP = re.compile(r"Timestamp: (\d{4}-\d\d-\d\d \d\d:\d\d:\d\d(?:\.\d{1,9})?[+-]\d{4})")
-HEADER = re.compile(r"pid: ([0-9]{1,10}), tid: ([0-9]{1,10}), name: .{0,256}  >>> ([^<>]{1,128}) <<<")
+HEADER = NATIVE_HEADER
 
 
 class ReportParser(NativeDumpDecoder):

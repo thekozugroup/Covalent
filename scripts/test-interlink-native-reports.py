@@ -44,6 +44,29 @@ class ParserTests(unittest.TestCase):
         self.assertNotIn("knownSymbol", parser.events[-1])
         self.assertNotIn("/vendor/", json.dumps(parser.events))
 
+    def test_android37_parent_header_matches_without_retaining_parent_identifier(self):
+        lines = [line.replace("pid: 1775, tid:", "pid: 1775, ppid: 1234567890, tid:") for line in GOOD]
+        parser = self.parse(lines)
+        self.assertEqual(parser.reports, 1)
+        self.assertEqual(parser.events, self.parse().events)
+        self.assertNotIn("1234567890", json.dumps(parser.events))
+        self.assertNotIn("ppid", json.dumps(parser.events))
+        self.assertEqual(parser.diagnostic_counts["headersCorrelated"], 1)
+
+    def test_invalid_or_extra_parent_fields_cannot_weaken_header_correlation(self):
+        for parent in ("", "-1", SECRET, "1"*11, "1234, uid: 0"):
+            parser = self.parse([line.replace("pid: 1775, tid:", "pid: 1775, ppid: " + parent + ", tid:") for line in GOOD])
+            self.assertEqual(parser.events, [])
+            self.assertEqual(parser.diagnostic_counts["headerSyntaxRejected"], 1)
+
+    def test_live_decoder_and_report_reader_share_the_parent_header_grammar(self):
+        decoder = reports.NativeDumpDecoder()
+        decoder.native_faults = {1775: "system_server"}
+        event = decoder._native_dump(9000, GOOD[2].replace("pid: 1775, tid:", "pid: 1775, ppid: 1234, tid:"), {})
+        self.assertEqual(event, {"kind": "native-dump-header", "victimPid": 1775,
+                                 "victimTid": 1991, "process": "system_server"})
+        self.assertEqual(decoder._native_dump(9000, GOOD[3], {})["signal"], 6)
+
     def test_old_future_or_missing_timestamp_cannot_borrow_current_pid(self):
         for lines, start, end in ((GOOD, EPOCH+1, EPOCH+5), (GOOD, EPOCH-5, EPOCH-1),
                                   ([l for l in GOOD if not l.startswith("Timestamp:")], EPOCH-1, EPOCH+1)):

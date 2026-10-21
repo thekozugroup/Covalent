@@ -1,5 +1,12 @@
 # Android permission recovery checks
 
+The reader now supports Android 37's optional numeric `ppid` header field in
+both the live and DropBox paths. A separate owned native-process test reproduced
+the old rejection; a read-only follow-up parses that same report successfully
+without replaying the fault. All 73 focused macOS/Linux tests pass. This repairs
+diagnostic formatting, not the hosted framework crash or permission journey.
+See [actual format reproduction and limits](interlink-native-report-format.md).
+
 Hosted run 39609173300 at d09d08e is terminal. Seven non-device lanes, 86 baseline
 tests and the SAF journey pass. Permission recovery and the release gate fail.
 The recorder sees native signal 6 in the observed system_server1823/TID2059,
@@ -30,19 +37,19 @@ All 70 focused checks pass on both macOS and Linux: 32 report-reader/parser,
 32 permission-harness and six forward-cleanup tests, with resource warnings
 treated as errors. Five new regressions cover each rejection category, strict
 prefix refusal, unchanged admission/privacy and bounded counts. The prior
-API37 read-only smoke remains evidence for the earlier reader only. The new
+API 37 read-only smoke remains evidence for the earlier reader only. The new
 read-only probe cannot start because emulator5592 is currently absent; it is
 not a passing Android check, and no accepted fixture is restarted or replaced.
 No APK, app runtime, renderer flags, input replay, deadline, acceptance rule,
 production signing or release gate is changed by this diagnostic follow-up.
 
-The API37 gate exercises permission loss and both ways to restore access:
+The API 37 gate exercises permission loss and both ways to restore access:
 the app's runtime prompt and Settings → Permissions → Nearby devices → Allow.
 Returning from Settings must restart the opted-in native host itself. The test
 does not reopen the Activity or start the service to make that return pass.
 
 `scripts/interlink-api37-permission-test.py` accepts only the named QA AVDs
-at their fixed serials (including Interlink_Unlock_API37 at emulator-5592 for
+at their fixed serials (including Interlink_Unlock_API 37 at emulator-5592 for
 fresh startup checks). It installs and reads back the exact debug APK, refuses
 an existing non-debug app, requires the unpaired native-ready screen and a
 foreground service, and compares device/TLS/key-envelope hashes. It never clears
@@ -104,13 +111,13 @@ The `-T 1` stream can include prior buffered records. Such a record is not
 automatically attributed to this test. Device time, host arrival and explicit
 phases help establish ordering; even a captured crash alone does not prove its
 trigger. The framework PID/boot checks and both actual permission routes remain
-required. The new recorder's full API37 journey and latest-head hosted result
+required. The new recorder's full API 37 journey and latest-head hosted result
 remain separate acceptance gates.
 
 The final-source read-only Android36 smoke retains 396 examined lines and one
 safe capture phase. Source bytes, boot ID and system_server/surfaceflinger PIDs
 remain unchanged; the owned client and reader stop cleanly. This validates the
-recorder, not API37 permission recovery. Evidence is retained locally in
+recorder, not API 37 permission recovery. Evidence is retained locally in
 `artifacts/interlink-qa/framework-trace-android36-final-smoke.json`.
 
 A separate historical crash-buffer observation on that synthetic fixture shows
@@ -128,7 +135,7 @@ Run the real journey only after building `:companion:assembleDebug`:
 
 ```sh
 python3 -B scripts/interlink-api37-permission-test.py \
-  --serial emulator-5572 --avd Interlink_QA_API37 --evidence-dir PRIVATE_DIRECTORY
+  --serial emulator-5572 --avd Interlink_QA_API 37 --evidence-dir PRIVATE_DIRECTORY
 ```
 
 The permission receipt proves only this synthetic emulator journey. It does
@@ -139,7 +146,7 @@ not certify phone roaming, pairing, production signing or Pi hardware.
 The 1e54976 hosted run39558337954 separately passes all 86 baseline tests and
 the full SAF journey in 415.979 seconds. Permission recovery fails while opening
 app settings. Here the Open settings tap returns0 before system_server651's
-native signal6, by 2.024 host seconds. Android starts PID8025 on the same boot;
+native signal 6, by 2.024 host seconds. Android starts PID8025 on the same boot;
 three synthetic identity digests remain unchanged. The preceding e0dfc1c abort
 occurred before its failed tap. Neither ordering establishes a crash cause or
 trigger. Both runs use the previous recorder without native dump details;
@@ -147,7 +154,7 @@ the new recorder still needs its own full hosted check. The verified artifact
 and source-bound outcome are retained under artifacts/evidence/api37-1e54976/.
 
 
-The e0dfc1c hosted recording establishes a native signal6 in the previously
+The e0dfc1c hosted recording establishes a native signal 6 in the previously
 observed system_server PID657 before the failed Permissions tap. It establishes
 neither the initiating cause nor the trigger. The old recorder discarded the
 native dump; the new follow-up decodes a bounded subset in memory. Android's
@@ -178,14 +185,14 @@ promoted to errors.
 The source-bound Android36 read-only smoke on the retained boot reads two idle
 log lines and one capture marker, stops its reader/client cleanly, and preserves
 boot ID plus both framework PIDs/start ticks. It validates stream operation;
-it has no native dump and does not prove the API37 failure cause or permission
+it has no native dump and does not prove the API 37 failure cause or permission
 recovery. Evidence: `artifacts/interlink-qa/native-framework-smoke-1792566867768376000.json`.
 The earlier native crash and all failed journey artifacts remain retained.
 
 The d57deda hosted run39562643351 is now terminal. All seven non-device jobs,
 86 baseline tests and the complete SAF journey pass (437.290 seconds). The
 permission journey still fails. Its continuous recorder observes the known
-system_server1751 native signal6, 1.472 host seconds after Open settings returns0
+system_server1751 native signal 6, 1.472 host seconds after Open settings returns0
 and before the failed Permissions tap. Android starts another system_server;
 the harness does not restart it. The three synthetic identity digests remain
 unchanged. Permission restoration fails with missing framework services.
@@ -205,7 +212,7 @@ is inferred from the passing baseline/SAF checks.
 
 Hosted bf25758 run39601425204 also passes all seven non-device jobs, the
 86 baseline tests and SAF journey, then fails permission recovery. The live
-stream records system_server1775 signal6, 2.236 host seconds after Open settings
+stream records system_server1775 signal 6, 2.236 host seconds after Open settings
 returns0 and 1.616 seconds before the Permissions tap returns20. The stream
 stays live through its five-second drain without a recognized native dump.
 All three synthetic identity digests remain unchanged. The verified artifact
@@ -247,7 +254,7 @@ All 65 focused checks pass on macOS and Linux: 32 permission-harness,
 27 report-reader/parser and six forward-cleanup tests. They include actual
 owned subprocess EOF/loss/deadline/byte-limit cases, stale or mismatched reports,
 missing service/denied access despite zero exit, malformed headers, source drift,
-privacy and failure preservation. Final-source read-only API37 smoke reads both
+privacy and failure preservation. Final-source read-only API 37 smoke reads both
 real empty report tags and cleanly stops its original live log stream. Boot,
 framework PIDs/start ticks and three app identity hashes remain unchanged.
 The smoke explicitly seeds an impossible synthetic victim to exercise only the
