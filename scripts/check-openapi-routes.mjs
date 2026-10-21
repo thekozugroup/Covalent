@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { readFileSync, statSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
@@ -172,6 +173,15 @@ const nonClientRegions = [
   { label: "route-contract fixtures", match: (path) => path.startsWith("fixtures/openapi-routes/") },
   { label: "documentation", match: (path) => path.startsWith("docs/") || path.endsWith(".md") },
 ];
+
+// These exact historical bytes are evidence, never packaged clients. No directory
+// or extension is exempt: changes to a snapshot fail even if its API text is gone.
+// Unknown adjacent files still require a declared client tree.
+const frozenClientEvidence = new Map([
+  ["artifacts/evidence/android-acceptance-busy/baseline/CovalentNodeClient.kt.source", "7353ded0b5545257b1edf8168d5cc51b6614f863fba756c88d78b826eb4a163b"],
+  ["artifacts/evidence/android-acceptance-busy/baseline/FolderSyncClientTest.kt.source", "a0e8b2798b83fc678e0ef96e8f7ecf7077fe2cd0a52c786a804118b9fdae743b"],
+  ["artifacts/evidence/android-acceptance-busy/before-explicit-contract/CovalentNodeClient.kt.source", "900aa4d7272e6489c573b366830d39dd74575d4427b4373aafa3684f122a4ee4"],
+]);
 
 const failures = [];
 const fail = (message) => failures.push(message);
@@ -1250,12 +1260,21 @@ function scanAssertionTree(tree, tracked) {
 // prefix is an undeclared client until someone says otherwise.
 function classifyRepository(tracked) {
   for (const path of tracked) {
-    let contents;
+    let bytes;
     try {
-      contents = readFileSync(resolve(repositoryRoot, path), "utf8");
+      bytes = readFileSync(resolve(repositoryRoot, path));
     } catch {
+      if (frozenClientEvidence.has(path)) fail(`${path}: frozen client evidence is unreadable`);
       continue;
     }
+    const expectedEvidenceHash = frozenClientEvidence.get(path);
+    if (expectedEvidenceHash !== undefined) {
+      if (createHash("sha256").update(bytes).digest("hex") !== expectedEvidenceHash) {
+        fail(`${path}: frozen client evidence differs from its exact retained bytes`);
+      }
+      continue;
+    }
+    const contents = bytes.toString("utf8");
     if (!contents.includes("api/v1")) continue;
     const tree = clientTrees.find(
       (candidate) =>

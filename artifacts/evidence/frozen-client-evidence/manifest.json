@@ -1,0 +1,18 @@
+{
+  "files": {
+    "artifacts/evidence/frozen-client-evidence/result.json": "b3e5d439df6634ef101eafd289043179a5f454c3e0cac92c4c521cfec4a8e654"
+  },
+  "format": 1,
+  "hostedLinuxAccepted": false,
+  "parentCommit": "0564034368bab5c4e1b79350ee85cfc3532c4f96",
+  "primaryRunInterrupted": false,
+  "releasePromoted": false,
+  "runtimeChanged": false,
+  "scope": "Exact immutable evidence classification for route QA only",
+  "sources": {
+    "docs/frozen-client-evidence.md": "fd4507ac3c92100d83605ab53dc1245640fd696ead31cf85e051eb30774f627b",
+    "scripts/check-openapi-routes.mjs": "addf812532b57ad8aac5bc93d7518f3f444a541ebcf8b8e621b4b33835135014",
+    "scripts/test-openapi-routes.sh": "a7b208cebcee4e9a20cd3ca3dfba7cb979196c47744264fbba7f007a234b9285",
+    "working.md": "403a3835b05227eb6327b1b9a6794c21e516852cf7077cc262f9fab40fe7d6b2"
+  }
+}

@@ -1,5 +1,20 @@
 # Interlink companion and appliance robustness — 2026-10-21
 
+Hosted source0564034 CI39635433377 has a terminal shared-foundation failure:
+three retained historical .source snapshots are classified as undeclared API
+clients. The follow-up gate admits only those three exact paths and SHA-256
+values. Modified bytes, removed API text and adjacent unknown files still fail;
+current shipping clients keep all route/method checks. The actual route gate,
+existing fixtures, three new negative cases and full macOS foundation pass.
+See docs/frozen-client-evidence.md and
+artifacts/evidence/frozen-client-evidence/manifest.json.
+
+The follow-up publishes on codex/frozen-client-evidence while the original
+primary run's Android/container work continues. Primary PR51 stays at0564034;
+no push cancels its active jobs. No app, native worker, Pi image, physical device,
+account, pairing or media change. Address-change transfer recovery and the
+previous hosted framework abort remain unresolved; release gates stay closed.
+
 Android share acceptance now handles the node's explicit temporary lock refusal
 without making the user repeat setup. It keeps the exact destination and
 authenticated request, permits at most six attempts with 3.1s total backoff,

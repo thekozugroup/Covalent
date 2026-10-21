@@ -1,0 +1,23 @@
+{
+  "format": 1,
+  "parentCommit": "0564034368bab5c4e1b79350ee85cfc3532c4f96",
+  "hostPlatform": "macOS",
+  "routeGateExitCode": 0,
+  "routeFixtureExitCode": 0,
+  "newNegativeFixtures": [
+    "changed frozen bytes",
+    "removed API text still fails digest",
+    "adjacent unlisted source still fails classification"
+  ],
+  "fullFoundationExitCode": 0,
+  "fullFoundationLogLocalOnly": "/tmp/covalent-frozen-foundation-0564034.log",
+  "fullFoundationLogSha256": "57607c971ec68166fc275b81f96f7e5523103526e1b34a26ed636eb625e45c80",
+  "fullFoundationLogBytes": 4202,
+  "shippingRuntimeChanged": false,
+  "primaryRun": 39635433377,
+  "primarySharedJobFailure": 119344484472,
+  "primaryBranchUpdated": false,
+  "primaryAndroidRunInterrupted": false,
+  "physicalDeviceTouched": false,
+  "releaseReady": false
+}
