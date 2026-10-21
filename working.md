@@ -1,3 +1,92 @@
+# Android display admission — 2026-10-21
+
+An expanded notification shade reproduces the unchanged onboarding Back failure
+on the owned API37 ARM64 emulator. The old recorder reports unrecognized focus
+for all33 samples, matching the shape of hosted8b3cb32's144 unrecognized samples.
+The hosted raw title was discarded, so its actual cause remains unproved.
+
+The recorder now recognizes exact public shade/status-bar titles and scoped
+keyguard booleans. Before instrumentation, one owned-emulator setup wakes the
+screen, dismisses keyguard and closes panels; two complete consistent observations
+must prove an interactive display. Unknown/incomplete/locked states, command
+failure or a changed boot stop the gate before tests. No action repairs a running
+test; Back, test deadlines, original commands and JUnit verdicts stay unchanged.
+
+The deliberate shade case fails in20.592s and remains rejected by the original
+validator. Preparation clears that fixture; the test passes in7.503s. A confirmed
+sleep fixture then wakes with final-source setup, and the final unchanged test
+passes in5.964s with9 complete samples and stable boot/framework identities.
+A prior POWER observation did not prove sleep and remains separately retained.
+All214 APK source inputs and both installed APK hashes remain unchanged.
+
+All31 recorder/setup checks pass on macOS and isolated Linux; existing reader35,
+verdict87, foundation and shell checks pass. Owned emulator/VM are stopped with
+disks retained; the default VM/context and other emulators are preserved. See
+docs/android-test-display-readiness.md and its source-bound evidence manifest.
+Hosted acceptance, physical devices, production signing and final release remain
+open. No production app, ROM, account, pairing or original-media changes.
+
+---
+
+# Android focus failure evidence — 2026-10-21
+
+The existing baseline and SAF device phases now record bounded window-focus
+metadata while their original instrumentation command runs. Failure statuses
+freeze preceding observations, so a later recovered window cannot erase the
+focus history. Only fixed owner/state categories are retained. Original test
+arguments, output, JUnit validator, Back behavior and deadlines are unchanged.
+No production app, APK or ROM is changed.
+
+All16 observer tests pass on macOS and isolated Linux; existing bounded-reader
+checks pass35 tests, and the unchanged named-test verdict mutation battery
+passes for all87 required tests. Foundation and shell syntax pass. Real hermetic
+clients preserve exit0 for JUnit failure and17 for transport failure; cancellation
+returns143 and stops the owned client/sampler, with one launch per case. The
+original validator rejects the failed JUnit log. These fixtures are not device
+failure reproductions.
+
+The current-source observer identifies deliberate launcher/app/Settings focus
+changes on the owned API37 ARM64 fixture. The unchanged onboarding Back test
+passes in5.811s with10 complete samples and the same boot/framework processes.
+The debug APKs are retained byte-for-byte; all214 relevant APK source inputs
+match their earlier build. Final-run/ carries current-source proof; the first
+passing capture retains its earlier source hash before the ordinal reset guard.
+The emulator and separate Linux verification VM are stopped with disks retained.
+
+Hosted6944b16 still fails one of86 baseline tests at RootViewWithoutFocusException;
+SAF/permission journeys are not reached. The cause remains unproved. The new
+recorder is intended to identify the active focus owner during a future failure;
+local passing tests do not repair that failure or the earlier mapper abort.
+Physical checks remain deferred. See docs/android-focus-evidence.md and
+artifacts/evidence/android-focus-observer/. Full hosted/device/release acceptance
+remains open; accounts, pairing and original media are preserved.
+
+---
+
+# Repeated Android address handoffs — 2026-10-21
+
+The companion now has an explicit diagnostic mode that proves three receiver
+peer/worker-port changes in one session. Actual SAF transfers pass for generations
+2, 3 and 4 in185.612s JUnit /187.278s host time. Each round checks pinned pairing
+identities, the new address, exact file bytes, unchanged source originals and no
+remaining worker/guardian processes. The original120s transfer deadline stays
+unchanged; no transfer retry or request replay is added.
+
+The first build fails before compilation because its NDK path is missing. The
+corrected pinned environment passes the build in60.539s. The companion APK stays
+byte-identical; only instrumentation changes. A new owned API37 ARM64 emulator
+keeps the same boot and framework processes. Independent postflight confirms
+both synthetic fixture trees are absent. That emulator is stopped only after
+terminal/ownership verification, retaining its disk and all earlier fixtures.
+
+The normal gate still proves its complete one-handoff/restart/grant/settings
+journey. This diagnostic mode does not replace it. Three passing handoffs do not
+establish a cause or fix for the retained intermittent stall. See
+docs/android-address-recovery-diagnostics.md and artifacts/evidence/android-address-soak/.
+No production source, Pi image, account, personal media or real device changes.
+
+---
+
 # Sandboxed packaged-worker gate — 2026-10-21
 
 The exact fresh Mac archive's packaged workers now complete the real transfer

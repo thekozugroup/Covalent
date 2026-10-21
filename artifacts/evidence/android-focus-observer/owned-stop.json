@@ -1,0 +1,10 @@
+{
+  "format": 1,
+  "avd": "Interlink_Back_Focus_API37",
+  "serial": "emulator-5622",
+  "bootId": "ab65d276-41a8-443c-9c0a-fcde57e602c1",
+  "noActiveInstrumentationObserved": true,
+  "diskRetained": true,
+  "dataCleared": false,
+  "stopResponse": "OK: killing emulator, bye bye\nOK"
+}

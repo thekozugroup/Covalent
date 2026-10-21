@@ -1,0 +1,125 @@
+{
+  "format": 1,
+  "sourceSha256": "5cc578797a10672a63391f03cabd1676e304fba4f11252f98dfe6edcde017009",
+  "focusSourceSha256": "f49cff86435141258735608cbffbf3913be421736af31e2c73bba70350482673",
+  "boundedReaderSha256": "de1298052e65573cd1bfd023e3c3a2fe19e4204382048f17666f9766f6389807",
+  "ready": true,
+  "failure": null,
+  "actions": [
+    {
+      "action": "wake",
+      "read": {
+        "bytesRead": 0,
+        "limitReached": false,
+        "timedOut": false,
+        "exitCode": 0,
+        "clientStopped": true,
+        "failureClass": null
+      }
+    },
+    {
+      "action": "dismiss-keyguard",
+      "read": {
+        "bytesRead": 0,
+        "limitReached": false,
+        "timedOut": false,
+        "exitCode": 0,
+        "clientStopped": true,
+        "failureClass": null
+      }
+    },
+    {
+      "action": "collapse-panels",
+      "read": {
+        "bytesRead": 0,
+        "limitReached": false,
+        "timedOut": false,
+        "exitCode": 0,
+        "clientStopped": true,
+        "failureClass": null
+      }
+    }
+  ],
+  "observations": [
+    {
+      "read": {
+        "bytesRead": 47914,
+        "limitReached": false,
+        "timedOut": false,
+        "exitCode": 0,
+        "clientStopped": true,
+        "failureClass": null
+      },
+      "window": {
+        "currentFocus": "launcher",
+        "focusedApp": "launcher",
+        "mKeyguardOccluded": false,
+        "mPendingKeyguardOccluded": false,
+        "keyguardShowing": false,
+        "keyguardInputRestricted": false,
+        "keyguardOccluded": false,
+        "mAwake": true,
+        "mScreenOnEarly": true,
+        "mScreenOnFully": true,
+        "mShowingDream": false,
+        "mDreamingLockscreen": false,
+        "mTopFocusedDisplayId": 0
+      }
+    },
+    {
+      "read": {
+        "bytesRead": 47668,
+        "limitReached": false,
+        "timedOut": false,
+        "exitCode": 0,
+        "clientStopped": true,
+        "failureClass": null
+      },
+      "window": {
+        "currentFocus": "launcher",
+        "focusedApp": "launcher",
+        "mKeyguardOccluded": false,
+        "mPendingKeyguardOccluded": false,
+        "keyguardShowing": false,
+        "keyguardInputRestricted": false,
+        "keyguardOccluded": false,
+        "mAwake": true,
+        "mScreenOnEarly": true,
+        "mScreenOnFully": true,
+        "mShowingDream": false,
+        "mDreamingLockscreen": false,
+        "mTopFocusedDisplayId": 0
+      }
+    }
+  ],
+  "rawWindowDumpsRetained": false,
+  "rawCommandOutputRetained": false,
+  "instrumentationLaunched": false,
+  "recoveryDuringTests": false,
+  "bootId": "169706f8-5a79-45cf-a7a2-99c8e8230ebe",
+  "before": {
+    "read": {
+      "bytesRead": 46386,
+      "limitReached": false,
+      "timedOut": false,
+      "exitCode": 0,
+      "clientStopped": true,
+      "failureClass": null
+    },
+    "window": {
+      "currentFocus": "none",
+      "focusedApp": "launcher",
+      "mKeyguardOccluded": false,
+      "mPendingKeyguardOccluded": false,
+      "keyguardShowing": false,
+      "keyguardInputRestricted": false,
+      "keyguardOccluded": false,
+      "mAwake": false,
+      "mScreenOnEarly": false,
+      "mScreenOnFully": false,
+      "mShowingDream": false,
+      "mDreamingLockscreen": false,
+      "mTopFocusedDisplayId": 0
+    }
+  }
+}

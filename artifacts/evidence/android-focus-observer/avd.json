@@ -1,0 +1,28 @@
+{
+  "format": 1,
+  "avd": "Interlink_Back_Focus_API37",
+  "serial": "emulator-5622",
+  "newAttemptOnRetainedOwnedDisk": true,
+  "previousStoppedReceiptSha256": "f5527b2198022c125eb05ff339621c15c3bd5ed2486e6cd512574e895e40ca7f",
+  "dataCleared": false,
+  "command": [
+    "/Users/michaelwong/Library/Android/sdk/emulator/emulator",
+    "@Interlink_Back_Focus_API37",
+    "-port",
+    "5622",
+    "-memory",
+    "2048",
+    "-cores",
+    "2",
+    "-gpu",
+    "software",
+    "-no-snapshot",
+    "-no-boot-anim",
+    "-no-audio",
+    "-netdelay",
+    "none",
+    "-netspeed",
+    "full"
+  ],
+  "pidInformational": 86783
+}

@@ -1,0 +1,47 @@
+[
+  {
+    "case": "shade-before",
+    "command": [
+      "sh",
+      "-c",
+      ". \"$1\"; validate_android_api37_result \"$2\" \"$3\"",
+      "validate",
+      "/Users/michaelwong/Developer/Covalent/scripts/android-instrumentation-result.sh",
+      "/Users/michaelwong/Developer/Covalent/artifacts/evidence/android-window-titles/shade-before/instrumentation.log",
+      "/Users/michaelwong/Developer/Covalent/artifacts/evidence/android-window-titles/expected.txt"
+    ],
+    "exitCode": 1,
+    "log": "artifacts/evidence/android-window-titles/shade-before-verdict.log",
+    "sha256": "14d3fccb0d111dd1a4897e078b0c3debf16a5e35a4023a1585622df581a01922"
+  },
+  {
+    "case": "after-preparation",
+    "command": [
+      "sh",
+      "-c",
+      ". \"$1\"; validate_android_api37_result \"$2\" \"$3\"",
+      "validate",
+      "/Users/michaelwong/Developer/Covalent/scripts/android-instrumentation-result.sh",
+      "/Users/michaelwong/Developer/Covalent/artifacts/evidence/android-window-titles/after-preparation/instrumentation.log",
+      "/Users/michaelwong/Developer/Covalent/artifacts/evidence/android-window-titles/expected.txt"
+    ],
+    "exitCode": 0,
+    "log": "artifacts/evidence/android-window-titles/after-preparation-verdict.log",
+    "sha256": "b1a4fab913680fc24fbb0d85f9f3f08bd5d5ee6e5a329dcaaa01d2fd887eb529"
+  },
+  {
+    "case": "final-run",
+    "command": [
+      "sh",
+      "-c",
+      ". \"$1\"; validate_android_api37_result \"$2\" \"$3\"",
+      "validate",
+      "/Users/michaelwong/Developer/Covalent/scripts/android-instrumentation-result.sh",
+      "/Users/michaelwong/Developer/Covalent/artifacts/evidence/android-window-titles/final-run/instrumentation.log",
+      "/Users/michaelwong/Developer/Covalent/artifacts/evidence/android-window-titles/expected.txt"
+    ],
+    "exitCode": 0,
+    "log": "artifacts/evidence/android-window-titles/final-run-verdict.log",
+    "sha256": "b1a4fab913680fc24fbb0d85f9f3f08bd5d5ee6e5a329dcaaa01d2fd887eb529"
+  }
+]

@@ -1,0 +1,38 @@
+{
+  "command": [
+    "/Users/michaelwong/.pyenv/versions/3.11.1/bin/python3",
+    "-B",
+    "scripts/android_instrumentation_focus.py",
+    "--adb",
+    "/Users/michaelwong/Library/Android/sdk/platform-tools/adb",
+    "--serial",
+    "emulator-5622",
+    "--phase",
+    "baseline",
+    "--log",
+    "/Users/michaelwong/Developer/Covalent/artifacts/evidence/android-window-titles/after-preparation/instrumentation.log",
+    "--output",
+    "/Users/michaelwong/Developer/Covalent/artifacts/evidence/android-window-titles/after-preparation/focus.json",
+    "--",
+    "-e",
+    "class",
+    "life.michaelwong.covalent.CovalentAppTest#firstLaunchOffersDirectFolderSyncAndBackPreservesBackupDraft",
+    "life.michaelwong.covalent.test/androidx.test.runner.AndroidJUnitRunner"
+  ],
+  "exitCode": 0,
+  "seconds": 7.503,
+  "sourceHashes": {
+    "scripts/android_instrumentation_focus.py": "f49cff86435141258735608cbffbf3913be421736af31e2c73bba70350482673",
+    "scripts/prepare-android-test-display.py": "d2f63b601bf4b375640cbba6760e8be8c0405977d005a3f6e0de9e9e47f9c732",
+    "scripts/android-api37-device-test.sh": "c0c2ccab077bceb334ff7564d590f161154e0658627ad2ea305ca0fa7d7f65a8",
+    "scripts/test-android-instrumentation-focus.py": "b352166006f3366fb62adb79ba7d860052389b8f53bb378e3f735497c83f8554",
+    "scripts/test-android-test-display.py": "2d6f2adf433746df2f39d5396aef37b9386204139dea7e3a6744e971e324553f",
+    ".github/workflows/ci.yml": "b98ffc8103a7c8f8f41e5461a0e4955d692ad9de342cb37698f4c2d515d62726"
+  },
+  "apkSourceBindingsVerified": 214,
+  "apkRebuiltOrInstalled": false,
+  "testUnchanged": true,
+  "preparationBeforeInstrumentationOnly": true,
+  "physicalAccepted": false,
+  "hostedCauseProven": false
+}

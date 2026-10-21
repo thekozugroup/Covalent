@@ -1,0 +1,16 @@
+{
+  "format": 1,
+  "unchangedValidatorUsed": true,
+  "cases": [
+    {
+      "case": "actual-single-test",
+      "validatorExitCode": 0,
+      "accepted": true
+    },
+    {
+      "case": "synthetic-junit-failure",
+      "validatorExitCode": 1,
+      "accepted": false
+    }
+  ]
+}

@@ -1,0 +1,99 @@
+{
+  "format": 1,
+  "baseCommit": "b41e3db0536090594d92a3cd541e697e9e63a357",
+  "productionSourceChanged": false,
+  "companionApkChanged": false,
+  "earlierIntermittentFailureResolved": false,
+  "physicalDeviceAccepted": false,
+  "releaseReady": false,
+  "sources": {
+    "apps/android/app/src/androidTest/java/life/michaelwong/covalent/node/SafFolderSyncJourneyInstrumentedTest.kt": {
+      "sha256": "1154b1dca883fd0e33d27cd6ee17cc9d925edfc179bb8ea7640d3568bc8e44ff",
+      "bytes": 91050
+    },
+    "docs/android-address-recovery-diagnostics.md": {
+      "sha256": "01f04a6cfc9129e16c4754cb4e567abb07e8a62f0cf8b7a7963ae492617ed8e5",
+      "bytes": 6961
+    },
+    "working.md": {
+      "sha256": "02d1902a3557b6aae3b50839f06d883c62bf4d270e49471cff869e8b9244de83",
+      "bytes": 60529
+    }
+  },
+  "evidence": {
+    "run.py": {
+      "sha256": "3e35cabcf4a016846f3b725b63c2b0618b7747c7776b30f1d73ad93023e941af",
+      "bytes": 8595
+    },
+    "build/build.json": {
+      "sha256": "6f3324c6d479f216fb865771d09822568a44bed7e27ba23e485de1a8200babda",
+      "bytes": 30182
+    },
+    "build-env-corrected/build.json": {
+      "sha256": "9e329830c370c4075d3388e4e7474147cadc3e6753cf85845633664b3ad43de2",
+      "bytes": 30183
+    },
+    "run/receipt.json": {
+      "sha256": "96d8a5fbf053f12ce0362b19f1cb155c3da896bfb8bee2895bdecdf4a5be48c4",
+      "bytes": 31627
+    },
+    "run/instrumentation.log": {
+      "sha256": "0b1742e950bca71aec51a8ab3db7371da333d60f42617de617fdd20715003741",
+      "bytes": 889
+    },
+    "run/markers.log": {
+      "sha256": "8a72b71330366a6555ec779e073b4f4fe6c289dfb47acaf19b5c4e929e9c2473",
+      "bytes": 1105
+    },
+    "run/expected.txt": {
+      "sha256": "73b439b5a77a0a5f255ac7d92ec6824583c4223f36762c3b355778145862e8ef",
+      "bytes": 129
+    },
+    "run/validation.log": {
+      "sha256": "b1a4fab913680fc24fbb0d85f9f3f08bd5d5ee6e5a329dcaaa01d2fd887eb529",
+      "bytes": 68
+    },
+    "postflight.json": {
+      "sha256": "585ce8fff9d7511e14ea162e0a0a322b9846c21c8871e727fa5639a25d54d18f",
+      "bytes": 396
+    },
+    "owned-stop.json": {
+      "sha256": "0a7c0da4e2ada31e5a23a4e9a7763089933f2b03de9f914e779ba773ec0f15a5",
+      "bytes": 425
+    },
+    "checks.json": {
+      "sha256": "a147bddc211f1131ec2809922c1b13e501c9a5e83cd036da55765ad61295c040",
+      "bytes": 271
+    }
+  },
+  "localOnlyEvidence": {
+    "build-env-corrected/build.log": {
+      "sha256": "a2df6519bc234203e8df329e588d7ba52057381bd6e0bc14ed385e6a625aaacc",
+      "bytes": 25515
+    },
+    "avd.json": {
+      "sha256": "8f95856b8ae6eb8b2b8956a9469b3ab2e8fea7b88680ee2be26ae8a1b1abace6",
+      "bytes": 465
+    },
+    "avd-create.log": {
+      "sha256": "5cdcaa79e25a6206bb3ae0ea023c55d13f785d09d4af6ef3516449a7f6bf0b48",
+      "bytes": 1788
+    },
+    "emulator.log": {
+      "sha256": "d04224d72bbf7b47de3d82771adbe5b339ecf38a6e1a4b9245bd8a4e43883391",
+      "bytes": 10329
+    },
+    "live-screen.png": {
+      "sha256": "ad5bdf641c56a36de297ea398568fc1d0cd1eefbb0110875ba952019b1c97244",
+      "bytes": 196632
+    },
+    "build/build.log": {
+      "sha256": "1834bc3e814fbb14c0a007027ab41a497e06642d7f909480eadb9d1303bb15bb",
+      "bytes": 1531
+    },
+    "foundation-final.log": {
+      "sha256": "030dc99ad6b7b1d662b390cd330ba0565871c2806f0de0e365e86f3079028fb7",
+      "bytes": 4317
+    }
+  }
+}

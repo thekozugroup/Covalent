@@ -1,0 +1,31 @@
+{
+  "commandsObserved": [
+    {
+      "command": [
+        "python3",
+        "-B",
+        "-W",
+        "error::ResourceWarning",
+        "scripts/test-interlink-native-reports.py"
+      ],
+      "tests": 35,
+      "passed": true
+    },
+    {
+      "command": [
+        "./scripts/test-android-instrumentation-result.sh"
+      ],
+      "derivedSourceTests": 87,
+      "passed": true
+    },
+    {
+      "command": [
+        "./scripts/validate-foundation.sh"
+      ],
+      "passed": true
+    }
+  ],
+  "evidence": "Terminal completion and explicit success output observed in tool session75303; full stdout was not retained to a file",
+  "finalCommandExitCode": 0,
+  "originalVerdictParserUnchanged": true
+}

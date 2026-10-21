@@ -798,6 +798,14 @@ framework_pids() {
          END { printf "surfaceflinger=%s system_server=%s", (sf ? sf : "unreadable"), (ss ? ss : "unreadable") }'
 }
 
+# CE unlock does not establish an interactive test surface. Prepare once, before
+# any instrumentation; a later focus loss still fails the original test.
+if ! python3 -B "$repo_root/scripts/prepare-android-test-display.py" \
+  --adb "$adb" --serial "$serial" --output "$evidence_dir/display-preparation.json"; then
+  echo "Owned emulator display is not ready; instrumentation was not started." >&2
+  exit 1
+fi
+
 echo "--- API-37-gate: guest state at instrumentation start ---"
 printf 'CE key set        : '
 "$adb" -s "$serial" shell dumpsys mount 2>/dev/null \
@@ -836,7 +844,9 @@ run_instrumentation_phase() {
   phase_expectation=$2
   shift 2
   phase_log="$evidence_dir/instrumentation-$phase_name.log"
-  if ! "$adb" -s "$serial" shell am instrument -w -r "$@" \
+  if ! python3 -B "$repo_root/scripts/android_instrumentation_focus.py" \
+    --adb "$adb" --serial "$serial" --phase "$phase_name" --log "$phase_log" \
+    --output "$evidence_dir/window-focus-$phase_name.json" -- "$@" \
     life.michaelwong.covalent.test/androidx.test.runner.AndroidJUnitRunner >"$phase_log" 2>&1; then
     cat "$phase_log" >&2
     echo "Android instrumentation phase '$phase_name' failed on $serial." >&2

@@ -1,5 +1,55 @@
 # Intermittent Android address-change transfer
 
+## Repeated address handoffs
+
+An explicit `covalentAddressRecoveryOnly=true` instrumentation argument now
+exercises three consecutive receiver peer/worker-port changes in one session.
+It uses the real companion, Android's system folder picker, persisted SAF
+grants, JNI and the packaged rclone/guardian. Every round verifies the retained
+device ID, certificate and fingerprint; an authoritative new address; a unique
+file's exact received bytes; the next successful run generation; unchanged
+source originals; and zero remaining worker/guardian processes.
+
+The normal gate still runs one handoff followed by its full restart, lost-grant,
+settings, pause/deletion and removal journey. The diagnostic mode exits after
+the three handoffs through the same `finally` cleanup. It does not stand in for
+that complete gate. Its separate postflight independently checks that both the
+second-node data directory and system-picker fixture have been removed.
+
+On the new owned `Interlink_Address_Soak_API37` ARM64 emulator, all three
+handoffs pass: generations 2, 3 and 4. JUnit reports 185.612 seconds; the host
+wrapper measures 187.278 seconds. The framework processes and boot remain
+unchanged. This is synthetic Android software evidence; it neither reproduces
+nor diagnoses the retained intermittent failure below. Failure diagnostics
+remain in place, and the original 120-second transfer limit is unchanged.
+There is no new transfer retry or request replay.
+
+The first build stops before compilation because the NDK environment path is
+missing. With the pinned NDK and Go paths provided, the build passes in 60.539
+seconds, including the companion APK/test APK and Covalent's test compilation.
+The companion APK stays byte-identical (`5315e7ee...b531b9ec92`); only the test
+APK changes. No production source, release signature or Pi image changes.
+Receipts, source hashes, named-test validation, round markers and independent
+cleanup checks are retained in `artifacts/evidence/android-address-soak/`.
+Only this attempt's new emulator is stopped after terminal/ownership checks;
+its disk and all older fixtures remain.
+
+To request this focused mode on an explicitly owned disposable emulator:
+
+```sh
+adb -s "$ANDROID_SERIAL" shell am instrument -w -r \
+  -e class life.michaelwong.covalent.node.SafFolderSyncJourneyInstrumentedTest#nativeManualSafRunRegistersAcrossRestartAndIsolatesLostGrant \
+  -e covalentAddressRecoveryOnly true \
+  life.michaelwong.interlink.test/androidx.test.runner.AndroidJUnitRunner
+```
+
+Build packaged instrumentation and prove the exact named test and all three
+round markers. An adb exit code alone is insufficient. This test owns synthetic
+grants and modifies only its disposable app/fixture state; do not run it on a
+signed-in installation or a phone containing personal media.
+
+## Retained original failure and earlier follow-up
+
 The final 0564034 app passes pairing, share acceptance and its first actual SAF
 transfer. One retained journey then misses the existing transfer deadline after
 its peer and worker ports change. Both paired identities and the authoritative

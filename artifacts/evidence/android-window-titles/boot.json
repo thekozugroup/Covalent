@@ -1,0 +1,30 @@
+{
+  "format": 1,
+  "avd": "Interlink_Back_Focus_API37",
+  "serial": "emulator-5622",
+  "retainedOwnedDisk": true,
+  "dataCleared": false,
+  "command": [
+    "/Users/michaelwong/Library/Android/sdk/emulator/emulator",
+    "@Interlink_Back_Focus_API37",
+    "-port",
+    "5622",
+    "-memory",
+    "2048",
+    "-cores",
+    "2",
+    "-gpu",
+    "software",
+    "-no-snapshot",
+    "-no-boot-anim",
+    "-no-audio",
+    "-netdelay",
+    "none",
+    "-netspeed",
+    "full"
+  ],
+  "pidInformational": 43275,
+  "reasonForSdkLaunch": "Instrumentation diagnostics requires pinned owned port5622; mobilecli boot exposes no port option",
+  "initialPreflightFalsePositiveCorrected": true,
+  "preflightNoEmulatorStarted": true
+}

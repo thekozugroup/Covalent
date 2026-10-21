@@ -1,0 +1,25 @@
+{
+  "read": {
+    "bytesRead": 47685,
+    "limitReached": false,
+    "timedOut": false,
+    "exitCode": 0,
+    "clientStopped": true,
+    "failureClass": null
+  },
+  "window": {
+    "currentFocus": "launcher",
+    "focusedApp": "launcher",
+    "mKeyguardOccluded": false,
+    "mPendingKeyguardOccluded": false,
+    "keyguardShowing": false,
+    "keyguardInputRestricted": false,
+    "keyguardOccluded": false,
+    "mAwake": true,
+    "mScreenOnEarly": true,
+    "mScreenOnFully": true,
+    "mShowingDream": false,
+    "mDreamingLockscreen": false,
+    "mTopFocusedDisplayId": 0
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "command": [
+    "/Users/michaelwong/Library/Android/sdk/platform-tools/adb",
+    "-s",
+    "emulator-5622",
+    "shell",
+    "input",
+    "keyevent",
+    "KEYCODE_SLEEP"
+  ],
+  "exitCode": 0,
+  "observation": {
+    "read": {
+      "bytesRead": 46386,
+      "limitReached": false,
+      "timedOut": false,
+      "exitCode": 0,
+      "clientStopped": true,
+      "failureClass": null
+    },
+    "window": {
+      "currentFocus": "none",
+      "focusedApp": "launcher",
+      "mKeyguardOccluded": false,
+      "mPendingKeyguardOccluded": false,
+      "keyguardShowing": false,
+      "keyguardInputRestricted": false,
+      "keyguardOccluded": false,
+      "mAwake": false,
+      "mScreenOnEarly": false,
+      "mScreenOnFully": false,
+      "mShowingDream": false,
+      "mDreamingLockscreen": false,
+      "mTopFocusedDisplayId": 0
+    }
+  },
+  "reasonForSdkCommand": "Deterministic sleep fixture; mobilecli POWER is a toggle and did not establish sleep in the earlier observation"
+}

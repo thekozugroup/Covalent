@@ -1,0 +1,1 @@
+life.michaelwong.covalent.CovalentAppTest#firstLaunchOffersDirectFolderSyncAndBackPreservesBackupDraft

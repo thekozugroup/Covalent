@@ -1,0 +1,38 @@
+{
+  "format": 1,
+  "sourceSha256": "af65286e7f88230803ad685dd8307f1fdfa92853512052ef51bdfcd316de0a4e",
+  "fixtureSha256": "bf0f8b4d8ffeebabc414a0c68d15de0c28e9b6537956e0ac0fb5b2d9955ca247",
+  "noRealAndroidDeviceContacted": true,
+  "cases": [
+    {
+      "mode": "junit",
+      "exitCode": 0,
+      "seconds": 0.915,
+      "instrumentationLaunches": 1,
+      "samplerStopped": true,
+      "originalClientStopped": true,
+      "failureRecords": 1,
+      "metadataRedacted": true
+    },
+    {
+      "mode": "transport",
+      "exitCode": 17,
+      "seconds": 0.7,
+      "instrumentationLaunches": 1,
+      "samplerStopped": true,
+      "originalClientStopped": true,
+      "failureRecords": 1,
+      "metadataRedacted": true
+    },
+    {
+      "mode": "cancel",
+      "exitCode": 143,
+      "seconds": 0.124,
+      "instrumentationLaunches": 1,
+      "samplerStopped": true,
+      "originalClientStopped": true,
+      "failureRecords": 0,
+      "metadataRedacted": true
+    }
+  ]
+}
