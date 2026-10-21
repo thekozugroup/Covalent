@@ -1,0 +1,12 @@
+{
+  "scope": "negative control only; exact archived worker launched from ordinary unsandboxed Python parent",
+  "workerSha256": "bee3bd75502463ac334ae43941ace81996a6527fdcf20540db184400a426d2e5",
+  "exitCode": -5,
+  "signal": "SIGTRAP",
+  "seconds": 0.469,
+  "stdoutBytes": 0,
+  "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stderrBytes": 0,
+  "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "workerUnchanged": true
+}

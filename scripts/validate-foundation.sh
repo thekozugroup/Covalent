@@ -73,6 +73,10 @@ scripts/build-personal-macos-app.sh
 scripts/build-personal-android-apk.sh
 scripts/test-personal-macos-app-builder.sh
 scripts/test-macos-sync-engine-packaging.sh
+scripts/test-macos-sandboxed-address-handoff.py
+scripts/test-macos-sandboxed-address-handoff-contract.py
+packaging/macos-qa/sandboxed-worker-parent.m
+packaging/macos-qa/Parent.entitlements
 scripts/build-android-sync-engine.sh
 scripts/build-linux-sync-engine.sh
 scripts/test-linux-sync-engine-notice-packaging.sh
@@ -151,6 +155,7 @@ node ./scripts/test-setup-guidance.mjs
 ./scripts/test-setup-paths.sh
 ./scripts/test-personal-macos-app-builder.sh
 ./scripts/test-macos-sync-engine-packaging.sh
+python3 -B ./scripts/test-macos-sandboxed-address-handoff-contract.py
 ./scripts/test-android-native-package.sh
 python3 -B ./scripts/test-collect-sync-engine-notices.py
 python3 -B ./scripts/test-collect-caddy-distribution-evidence.py

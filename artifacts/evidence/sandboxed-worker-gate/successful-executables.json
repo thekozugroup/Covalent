@@ -1,0 +1,23 @@
+{
+  "cargoOriginalExecutableSha256": "26fc340128cb2299d344aafdc8d6e767c2034a4f84b4da9323c8de96ab3c5d10",
+  "cargoOriginalExecutableBytes": 83424064,
+  "qaExecutables": {
+    "sandboxed-worker-parent": {
+      "sha256": "a2583c6871fd4327abe939c2593c77ae13f8ea3a86fe09f5ce5c75b4b166d0bf",
+      "bytes": 70960
+    },
+    "one_way_links": {
+      "sha256": "1ef8c0186a53bc953ca1b6eb1cd6b9fe647f6275b457a8c931b0b2f3d7fc80fd",
+      "bytes": 82957728
+    },
+    "covalent-rclone": {
+      "sha256": "bee3bd75502463ac334ae43941ace81996a6527fdcf20540db184400a426d2e5",
+      "bytes": 19949392
+    },
+    "covalent-engine-guardian": {
+      "sha256": "af57eee286e0f5145bd2434f61bb1e6a87395da673a0a3a3e172c69f658a4238",
+      "bytes": 53632
+    }
+  },
+  "scope": "measured after the passing run; runner also checked the original Cargo binary and exact archived workers stayed unchanged during execution"
+}

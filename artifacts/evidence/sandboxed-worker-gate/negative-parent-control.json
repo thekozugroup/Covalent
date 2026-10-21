@@ -1,0 +1,11 @@
+{
+  "scope": "owned QA parent only, signed without App Sandbox; no worker copied or launched",
+  "originalSandboxedParentSha256": "a2583c6871fd4327abe939c2593c77ae13f8ea3a86fe09f5ce5c75b4b166d0bf",
+  "originalSandboxedParentUnchanged": true,
+  "negativeParentSha256": "524422cfcba2a3eed9869176198c2b786f0095e8b9713d4aaee99e328ccce402",
+  "exitCode": 65,
+  "seconds": 0.331,
+  "guardRejectedUnrestrictedParent": true,
+  "stdout": "SANDBOX_WORKER_GATE outside_read_denied=false private_temp_writable=true\n",
+  "stderrBytes": 0
+}

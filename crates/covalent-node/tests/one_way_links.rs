@@ -1368,11 +1368,20 @@ async fn collection_links_isolate_sources_and_preserve_files_when_a_source_canno
 async fn request_batch(node: &NodeRuntime, folder: Uuid, generation: u64, revision: u64) -> Value {
     let request = json!({"folderId": folder, "requestId": Uuid::new_v4(),
         "expectedGeneration": generation, "settingsRevision": revision});
+    submit_batch(node, &request).await;
+    request
+}
+
+// A retained request remains the same intent while the service temporarily
+// holds its mutation lock. Replays obey the same retryable-busy contract as
+// initial admission; they must not manufacture another request ID/generation.
+async fn submit_batch(node: &NodeRuntime, request: &Value) -> u64 {
     let deadline = Instant::now() + WAIT_LIMIT;
+    let mut busy_count = 0;
     loop {
-        let response = call(node, "POST", "/api/v1/sync/run", Some(&request)).await;
+        let response = call(node, "POST", "/api/v1/sync/run", Some(request)).await;
         if response.status == 200 {
-            return request;
+            return busy_count;
         }
         assert!(
             response.status == 503
@@ -1381,6 +1390,7 @@ async fn request_batch(node: &NodeRuntime, folder: Uuid, generation: u64, revisi
             "run request failed: {}",
             response.body
         );
+        busy_count += 1;
         tokio::time::sleep(POLL_INTERVAL).await;
     }
 }
@@ -2190,7 +2200,8 @@ async fn manual_link_survives_both_endpoint_moves_and_retains_pairing() {
                 assert_eq!(wait_batch(node, folder, 3, "succeeded").await["lifecycle"], "stopped");
             }
             assert_eq!(fs::read(target_root.join("after-sender-move.jpg")).unwrap(), b"sender moved\n");
-            post_ok(&target, "/api/v1/sync/run", run.clone()).await;
+            let replay_busy = submit_batch(&target, &run).await;
+            eprintln!("ADDRESS_HANDOFF_PHASE completed_run_replay complete=true busy_responses={replay_busy}");
             eprintln!("ADDRESS_HANDOFF_PHASE sender_run complete=true generation=3");
 
             source.stop().await.expect("stop moved sender");
@@ -2203,7 +2214,8 @@ async fn manual_link_survives_both_endpoint_moves_and_retains_pairing() {
             // pairing or manufacturing another manual generation.
             refresh_address_when_idle(&source, &target_move, "receiver_move_reopened_replay").await;
             refresh_address_when_idle(&target, &source_move, "sender_move_reopened_replay").await;
-            post_ok(&target, "/api/v1/sync/run", run).await;
+            let replay_busy = submit_batch(&target, &run).await;
+            eprintln!("ADDRESS_HANDOFF_PHASE reopened_run_replay complete=true busy_responses={replay_busy}");
             for node in [&source, &target] {
                 let retained = wait_batch(node, folder, 3, "succeeded").await;
                 assert_eq!(retained["lifecycle"], "stopped");

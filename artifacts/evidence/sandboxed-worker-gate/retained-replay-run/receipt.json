@@ -1,0 +1,103 @@
+{
+  "archivedAppInventorySha256": "b17de062c0da8a6f1626a7a296ae63ca8ed64229a25e304b4f7cd7d8f2fc4de5",
+  "archivedExecutables": {
+    "covalent-engine-guardian": "af57eee286e0f5145bd2434f61bb1e6a87395da673a0a3a3e172c69f658a4238",
+    "covalent-rclone": "bee3bd75502463ac334ae43941ace81996a6527fdcf20540db184400a426d2e5"
+  },
+  "commands": [
+    {
+      "exitCode": 0,
+      "label": "archive-before",
+      "seconds": 0.406,
+      "stderrSha256": "55897e6a309063fbbc94efc43473dbf72bc2a6a34e271b6e4a328eadf45b95d4",
+      "stdoutSha256": "662c995623526420a76561d7470bc84763d508ba40094bfed5a80342d18eab06",
+      "timedOut": false
+    },
+    {
+      "exitCode": 0,
+      "label": "cargo-build",
+      "seconds": 4.706,
+      "stderrSha256": "8140c64d158f2285c93678a926c6f6d6a60a0e1b0308192eef4390303118fd5d",
+      "stdoutSha256": "49258045df54deda22deddcb0e84711f450d1b5155a135713671dfea232611ed",
+      "timedOut": false
+    },
+    {
+      "exitCode": 0,
+      "label": "compile-parent",
+      "seconds": 1.478,
+      "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "timedOut": false
+    },
+    {
+      "exitCode": 0,
+      "label": "sign-test-copy",
+      "seconds": 0.144,
+      "stderrSha256": "c63bb7ec30c98394424cc98b2184088f5bd1e45d3cd43732f15dec0085e56538",
+      "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "timedOut": false
+    },
+    {
+      "exitCode": 0,
+      "label": "sign-qa-parent",
+      "seconds": 0.022,
+      "stderrSha256": "be51002b050f9114a6603a6a4dbf3a783bbc39616358e3506b949e90c58165f4",
+      "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "timedOut": false
+    },
+    {
+      "exitCode": 0,
+      "label": "verify-qa-app",
+      "seconds": 0.081,
+      "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "timedOut": false
+    },
+    {
+      "exitCode": 0,
+      "label": "read-parent-entitlements",
+      "seconds": 0.012,
+      "stderrSha256": "57c30ad47a22146ecfe5e0187b75a2f02937d42eac534a865b1ecdc1d4695a6e",
+      "stdoutSha256": "11ba5b2c4198d11974fd881ae7351be9f38f3b6e5bc0307e933b0a7f9c414c36",
+      "timedOut": false
+    },
+    {
+      "exitCode": 0,
+      "label": "read-test-entitlements",
+      "seconds": 0.013,
+      "stderrSha256": "181afb8a0c04d00f1335a46820868abc24801a4a57fbeceb521cd0f77b7c4a78",
+      "stdoutSha256": "367fd06da553732455876f7e31bd0abc7862848d7f1464f41eeadb6121efb568",
+      "timedOut": false
+    },
+    {
+      "exitCode": 0,
+      "label": "address-handoff",
+      "seconds": 137.552,
+      "stderrSha256": "448295746b10b2e6dfc9a028bc3cb3c8d40f7182564ad79ccc82766a30217e96",
+      "stdoutSha256": "f50d6a955fcd03784409a54525ca3457343f8d1e16b247ef1083bcdf137bc204",
+      "timedOut": false
+    },
+    {
+      "exitCode": 0,
+      "label": "archive-after",
+      "seconds": 0.526,
+      "stderrSha256": "a60c8e41ccdd99bcadbaa0f91409fa409e81f4a9cc6024cfb13a5c0588a0e3f0",
+      "stdoutSha256": "662c995623526420a76561d7470bc84763d508ba40094bfed5a80342d18eab06",
+      "timedOut": false
+    }
+  ],
+  "packagedExecutablesUnchanged": true,
+  "privateTemporaryStorageWritable": true,
+  "productionAppModified": false,
+  "result": "passed",
+  "sandboxRestrictionObserved": true,
+  "schemaVersion": 1,
+  "sourceInputs": {
+    "apps/apple/Config/CovalentNode.entitlements": "c33d1b2d8735b9f1483ec3312c462540f1f5335d5b7a474823b40e2990f3ea28",
+    "crates/covalent-node/tests/one_way_links.rs": "0de6b7647f6b00fa31df6aa001d9df596acf0fe3c6d08dc9f88483ccf146fff5",
+    "packaging/macos-qa/Parent.entitlements": "947ca934d695b9f0965e992f2c6485deb4a6f316a07aec141dc50a914419d742",
+    "packaging/macos-qa/sandboxed-worker-parent.m": "5a4773723a77ed015a23a4d193b8679432ed35f5d630c157e6815ff143576330",
+    "scripts/test-macos-sandboxed-address-handoff.py": "ae5bd9b3fdc26428696079d0302520b51d01ba7afc9726bd7bb1be21d0519221"
+  },
+  "test": "manual_link_survives_both_endpoint_moves_and_retains_pairing"
+}

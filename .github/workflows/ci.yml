@@ -165,11 +165,23 @@ jobs:
       - name: Verify paired manual sync after both endpoints move
         run: |
           set -euo pipefail
-          engine="$RUNNER_TEMP/CovalentMac.xcarchive/Products/Applications/Covalent.app/Contents/MacOS"
-          COVALENT_TEST_SYNC_WORKER="$engine/covalent-rclone" \
-          COVALENT_TEST_SYNC_GUARDIAN="$engine/covalent-engine-guardian" \
-            cargo test --locked -p covalent-node --test one_way_links -- \
-              --ignored --exact manual_link_survives_both_endpoint_moves_and_retains_pairing --nocapture
+          # Packaged helpers require a sandboxed parent. A shell-launched Cargo
+          # test cannot supply their inherited sandbox. The QA parent runs the
+          # actual test with byte-identical archived helpers and verifies a
+          # real kernel denial before transferring any synthetic photo files.
+          python3 -B scripts/test-macos-sandboxed-address-handoff.py \
+            "$RUNNER_TEMP/CovalentMac.xcarchive/Products/Applications/Covalent.app" \
+            "$RUNNER_TEMP/covalent-sandboxed-address-handoff"
+      - name: Retain sandboxed worker gate evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: macos-sandboxed-address-handoff
+          path: |
+            ${{ runner.temp }}/covalent-sandboxed-address-handoff/receipt.json
+            ${{ runner.temp }}/covalent-sandboxed-address-handoff/*.log
+          if-no-files-found: ignore
+          retention-days: 14
 
   android-foundation:
     name: Android foundation

@@ -1,0 +1,13 @@
+{
+  "result": "failed",
+  "scope": "valid sandboxed parent; all three transfers passed; completed-request replay after reopening hit the intentional retryable mutation-lock response",
+  "status": 503,
+  "code": "folder_sync_busy",
+  "testSeconds": 135.83,
+  "cleanupConfirmed": true,
+  "receiptSha256": "8c568e65ac25687d1896a69c080d7cedda819462ae214ad5d30ed6c04b53ba8c",
+  "stderrSha256": "afd407277e6860c55cc1adf1ab5bf15916cb23c82b778c996377e2f8bd51d96a",
+  "originalTestSourceSha256": "506efbea2c70fe479054096fea11f1ead927241b859110b1c4086c2333cf8ec5",
+  "originalTestSourceCommit": "9437714ab534bd843432a93702340d5f6efd7d27",
+  "productionAppModified": false
+}

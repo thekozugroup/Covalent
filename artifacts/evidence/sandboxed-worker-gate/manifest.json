@@ -1,0 +1,136 @@
+{
+  "acceptanceBoundary": [
+    "Hosted corrected sandboxed-parent gate remains open.",
+    "Android API37 and older intermittent post-address transfer stall remain open.",
+    "Real Pi/phone, cloud-confirmed cleanup, private updater, flash/readback and gold-image acceptance remain separate."
+  ],
+  "baselineCommit": "9437714ab534bd843432a93702340d5f6efd7d27",
+  "checks": {
+    "actualArchiveBuiltSeconds": 258.406,
+    "clippyWarningsDeniedSeconds": 1.433,
+    "formatting": "passed",
+    "foundationSeconds": 46.846,
+    "offlineSelectionFixtures": 9,
+    "routeGateAndNegativeFixtures": "passed before final metadata; checked again before commit",
+    "sandboxedParentExecutionSeconds": 137.552,
+    "sandboxedScenarioTestSeconds": 136.43,
+    "stagedWhitespace": "passed"
+  },
+  "evidenceBindings": {
+    "README.md": {
+      "bytes": 3096,
+      "sha256": "d1e31267d12d3684be6e974ca093bee7918a50e531699539c650f1cfea3b9d77"
+    },
+    "actual-archive-run/receipt.json": {
+      "bytes": 3902,
+      "sha256": "8c568e65ac25687d1896a69c080d7cedda819462ae214ad5d30ed6c04b53ba8c"
+    },
+    "archive-build.json": {
+      "bytes": 42754,
+      "sha256": "ba24c51165582a08aadb27c8fccb95b7d710449827dbd438cb155351f495d2c2"
+    },
+    "archived-worker-shell-control.json": {
+      "bytes": 497,
+      "sha256": "2a6d497dd18d352b3bebdde04e58aea6c53242ae8330ac5e381bae0e51061094"
+    },
+    "clippy.json": {
+      "bytes": 377,
+      "sha256": "14420aaa296d88ec04d8fa11082760c37adbbd9d3c45344b33eddd3b1b825d07"
+    },
+    "first-sandboxed-run-summary.json": {
+      "bytes": 664,
+      "sha256": "8735a8b89779019589f1fc7e27e1ae3893ab5bb0e59be3539c6c47a3156dcd4b"
+    },
+    "foundation-final.json": {
+      "bytes": 1097,
+      "sha256": "8cbf207dd8039a615da888aaa8993a408edfcc789eeafbc1e15cece66e480385"
+    },
+    "foundation.json": {
+      "bytes": 864,
+      "sha256": "d4827ee16bce3a407804874117cb4597d53ab4dcc231b1ad20e1871e3d8eb358"
+    },
+    "hosted-943-failure.json": {
+      "bytes": 2974,
+      "sha256": "ae5a3ac878669c740d920685fd30a2b9b97612f096da0acca02c6627926a58bb"
+    },
+    "hosted-parent-snapshot.json": {
+      "bytes": 25703,
+      "sha256": "96cd8f7d17f8ea1090e8e5a598b4fd8b2b0f4b2b51f358f482f0715ae3d40ca7"
+    },
+    "negative-parent-control.json": {
+      "bytes": 528,
+      "sha256": "c53da990232730f2fa19dd960ecb6d81cecfea754b567a23beebb95aa6c2e5c2"
+    },
+    "retained-replay-run/address-handoff.stderr.log": {
+      "bytes": 1237,
+      "sha256": "448295746b10b2e6dfc9a028bc3cb3c8d40f7182564ad79ccc82766a30217e96"
+    },
+    "retained-replay-run/address-handoff.stdout.log": {
+      "bytes": 710,
+      "sha256": "f50d6a955fcd03784409a54525ca3457343f8d1e16b247ef1083bcdf137bc204"
+    },
+    "retained-replay-run/receipt.json": {
+      "bytes": 4203,
+      "sha256": "e3b3366460494a29cbe6db4881b5b31c486921176fa6b25c255bbb618380dfae"
+    },
+    "successful-executables.json": {
+      "bytes": 897,
+      "sha256": "091cca26d8a383a80fe8e1a4d4bb68fac99d5e60fc8506615f3e9b2b6250a7ba"
+    }
+  },
+  "retainedIgnoredArtifacts": {
+    "actual-archive-run/address-handoff.stderr.log": {
+      "bytes": 1243,
+      "sha256": "afd407277e6860c55cc1adf1ab5bf15916cb23c82b778c996377e2f8bd51d96a"
+    },
+    "actual-archive-run/address-handoff.stdout.log": {
+      "bytes": 807,
+      "sha256": "4018ad6035f83bcec0c7e223cc636bfc4c55c8b7553873e13f89f66310d344b3"
+    },
+    "clippy.log": {
+      "bytes": 168,
+      "sha256": "425ce2703fcbfa45915e7031c4375e1c56a23a3a746c03f34652edcdaae6ecf5"
+    },
+    "foundation-final.log": {
+      "bytes": 4317,
+      "sha256": "7876a47bf05f5a7a0592ce4b00a6bf0432d41c7ae8d54e189570ee117dbda140"
+    },
+    "foundation.log": {
+      "bytes": 4317,
+      "sha256": "dcbb5f410a69a6bf30c8a3d3c8ddd151fd088fac4c28cf3c8a71c2118dd49921"
+    },
+    "hosted-943-full-decoded.log": {
+      "bytes": 611353,
+      "sha256": "272619ea793b666f83d513ad18b4f7b1328294424c5b89045d3a7db97a318b1f"
+    },
+    "retained-replay-run/cargo-build.stderr.log": {
+      "bytes": 169,
+      "sha256": "8140c64d158f2285c93678a926c6f6d6a60a0e1b0308192eef4390303118fd5d"
+    },
+    "retained-replay-run/cargo-build.stdout.log": {
+      "bytes": 202378,
+      "sha256": "49258045df54deda22deddcb0e84711f450d1b5155a135713671dfea232611ed"
+    }
+  },
+  "schemaVersion": 1,
+  "scope": "Test harness, CI, evidence and documentation only. Production runtime, APK, Pi image and physical devices unchanged.",
+  "sourceBindings": {
+    ".github/workflows/ci.yml": "9350e58abe64f2c280a7ac392e79d125f080e1da4326f76464b74cbbfd407eb5",
+    "Cargo.lock": "590c07f6ba8a47f8fbadd7ca500f9c02f9582bbf0ed361d5f0d5577539124421",
+    "Cargo.toml": "a40eac6a0e640a4b62cebd04e0540cd7e69a95f54ab938ca322d6eec340acb00",
+    "apps/apple/Config/CovalentMac.entitlements": "4a8626b251e5e8bb343067db67f74d6fec93ddf1b0ec48e0914e8532b3aeb914",
+    "apps/apple/Config/CovalentNode.entitlements": "c33d1b2d8735b9f1483ec3312c462540f1f5335d5b7a474823b40e2990f3ea28",
+    "crates/covalent-node/tests/one_way_links.rs": "0de6b7647f6b00fa31df6aa001d9df596acf0fe3c6d08dc9f88483ccf146fff5",
+    "docs/security/sandboxed-worker-gate.md": "bf121f7c5758ed3449eaa3b9e0e03a1bf3c376b7d6ec3bceb19fbcaa162623fa",
+    "packaging/macos-qa/Parent.entitlements": "947ca934d695b9f0965e992f2c6485deb4a6f316a07aec141dc50a914419d742",
+    "packaging/macos-qa/sandboxed-worker-parent.m": "5a4773723a77ed015a23a4d193b8679432ed35f5d630c157e6815ff143576330",
+    "packaging/sync-engine/engine-guardian.c": "c50b5cf10a287c4c061b7891978fd2681b5c96910eb2c69c922beae349140579",
+    "rust-toolchain.toml": "279d77167cec5426fa80f457cd066dc74a360fbe4e2816f4f3fa01487a918fdc",
+    "scripts/test-macos-sandboxed-address-handoff-contract.py": "1f4c98c02972131173574fc3bfce6069d841b06268b2830488134c6080cd36df",
+    "scripts/test-macos-sandboxed-address-handoff.py": "ae5bd9b3fdc26428696079d0302520b51d01ba7afc9726bd7bb1be21d0519221",
+    "scripts/validate-foundation.sh": "d490dcbb39bbaa9b33ee9ca02ea4e7eddad0ea16e837305570be1eb92eccde61",
+    "scripts/verify-apple-silicon-bundle.sh": "f2d0d89d5fdaa5ee7d66d3d6532da5b500f0e78b140a7209f96a92b823eedd54",
+    "working.md": "9c930248e5f0a729d78181d65723e638ff319445273c0b30984f4ea16a456d72"
+  },
+  "sourceNote": "The archive is built from baseline production inputs. The new Rust integration-test helper is compiled separately by the runner. Final foundation binds all executable gate inputs; working/evidence notes are written afterward."
+}
