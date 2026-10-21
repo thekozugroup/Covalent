@@ -1,0 +1,24 @@
+{
+  "arch": "arm64",
+  "command": [
+    "docker",
+    "buildx",
+    "build",
+    "--builder",
+    "colima",
+    "--platform",
+    "linux/arm64",
+    "--target",
+    "alpine-evidence-export",
+    "--progress",
+    "plain",
+    "--output",
+    "type=local,dest=/Users/michaelwong/Developer/Covalent/artifacts/evidence/runtime-build-recovery/actual-arm64",
+    "-f",
+    "/Users/michaelwong/Developer/Covalent/artifacts/evidence/runtime-build-recovery/Dockerfile.evidence",
+    "."
+  ],
+  "exitCode": 1,
+  "elapsedSeconds": 4.204,
+  "dockerfileSha256": "3ffee9b7c932ac1f76ba7be2060c092064ea9dafe40c4ce4d7014aeba8455599"
+}

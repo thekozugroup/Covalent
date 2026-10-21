@@ -1,0 +1,29 @@
+{
+  "runId": 39658372282,
+  "headCommit": "1a2874eec4e0107c7516d912a5d7fb01e4e0b69b",
+  "jobId": 119424577060,
+  "jobConclusion": "failure",
+  "test": "manual_link_survives_both_endpoint_moves_and_retains_pairing",
+  "failure": "initial batch preparation timed out before either address changed",
+  "testSeconds": 76.11,
+  "observedPhaseMarkers": [
+    "paired"
+  ],
+  "lastStatus": {
+    "availability": "available",
+    "lifecycle": "needsAttention",
+    "issue": "initialScan",
+    "connectionFreshness": "neverObserved",
+    "healthFreshness": "neverObserved",
+    "folders": [],
+    "generation": 1,
+    "batchPhase": "preparing"
+  },
+  "rawLog": {
+    "path": "hosted-macos-bundle-119424577060.log",
+    "bytes": 611266,
+    "sha256": "6db3cabd5cdbbc85968e001f18e5bb37001fadb1edc3e0815b788e02cb94f43b",
+    "committed": false
+  },
+  "scope": "Records the failure without asserting a root cause or a pairing/address-recovery fix. No rerun, timeout extension or gate exemption."
+}

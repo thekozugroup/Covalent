@@ -181,6 +181,7 @@ const frozenClientEvidence = new Map([
   ["artifacts/evidence/android-acceptance-busy/baseline/CovalentNodeClient.kt.source", "7353ded0b5545257b1edf8168d5cc51b6614f863fba756c88d78b826eb4a163b"],
   ["artifacts/evidence/android-acceptance-busy/baseline/FolderSyncClientTest.kt.source", "a0e8b2798b83fc678e0ef96e8f7ecf7077fe2cd0a52c786a804118b9fdae743b"],
   ["artifacts/evidence/android-acceptance-busy/before-explicit-contract/CovalentNodeClient.kt.source", "900aa4d7272e6489c573b366830d39dd74575d4427b4373aafa3684f122a4ee4"],
+  ["artifacts/evidence/native-address-handoff/first-run.log", "eb7f961f49a751b42d0741b62ad82c836cff11c79ab67c8323fc5a0af102e0ce"],
 ]);
 
 const failures = [];

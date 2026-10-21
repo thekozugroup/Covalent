@@ -24,6 +24,13 @@ F = module('alpine_fixtures', 'test-collect-alpine-runtime-evidence.py')
 
 
 class PackagedTests(unittest.TestCase):
+    def test_committed_packaged_lock_is_bound_to_current_source_lock(self):
+        root = Path(__file__).resolve().parent.parent / 'packaging/docker/alpine'
+        lock, data = V.C.load_lock(root / 'runtime-source-lock.json')
+        packaged = json.loads((root / 'packaged-evidence-lock.json').read_bytes())
+        self.assertEqual(packaged['sourceLockSHA256'], V.C.sha(data))
+        self.assertEqual(set(packaged['targets']), set(lock['architectures']))
+
     def setUp(self):
         self.prepare()
 

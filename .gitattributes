@@ -1,0 +1,7 @@
+# Preserve upstream patch context prefixes and mail separators byte for byte.
+packaging/docker/alpine/musl-1.2.5-r24/aport/*.patch -whitespace
+# APK database records require the final empty record delimiter.
+artifacts/evidence/runtime-build-recovery/isolated-amd64/installed whitespace=-blank-at-eof
+artifacts/evidence/runtime-build-recovery/isolated-amd64/builder-installed whitespace=-blank-at-eof
+artifacts/evidence/runtime-build-recovery/isolated-arm64/installed whitespace=-blank-at-eof
+artifacts/evidence/runtime-build-recovery/isolated-arm64/builder-installed whitespace=-blank-at-eof

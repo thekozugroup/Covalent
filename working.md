@@ -1,3 +1,43 @@
+# Runtime security and build recovery — 2026-10-21
+
+The actual Alpine evidence exports pass on arm64 (145.365s) and amd64
+(665.422s). Both independent verifications match all 13 installed packages,
+156 source files, notices, recipe trees and the copied CA against the reviewed
+locks. Both musl packages now require the signed 1.2.5-r24 security revision.
+The full 24-file upstream recipe is vendored with strict pinned primary URLs;
+source recipes remain data and are never executed. The packaged review pins
+are regenerated from these actual exports. Complete application image
+functional, payload, size and vulnerability acceptance remains separate.
+
+The OpenAPI gate's historical failed-run log now requires its exact original
+path and SHA256. Negative fixtures reject mutations, a removed API prefix and
+an adjacent unlisted log. Validation results are retained with the milestone.
+
+The original Docker VM was full and both initial exports failed before
+compilation. Those failures are retained. Builds use a separate owned profile;
+the existing default context, containers and cache are preserved.
+
+Hosted 1a2874e CI39658372282 adds an open macOS gate failure: the first batch
+remains preparing with no worker health/folders, before either address moves.
+A controlled local probe succeeds with the original worker and a hardened-only
+copy; the copy with app sandbox-inheritance entitlements traps from an ordinary
+shell parent. This supports investigating a valid sandboxed CI parent, without
+claiming a proven hosted cause or weakening shipped signatures.
+
+The verified 9330537 hosted artifact correlates the known 62-byte mapper abort
+with system_server's SIGABRT before the failed Permissions tap. A replacement
+framework starts afterward. All three synthetic identity digests are retained.
+The initiating trigger and successful permission recovery remain unproved.
+No reruns or flag changes conceal the failures. See
+docs/security/runtime-build-recovery.md and artifacts/evidence/runtime-build-recovery/.
+
+Next: complete application image acceptance, correct the packaged-worker test
+launch context and investigate the older intermittent Android transfer stall.
+The Pi runtime, image, APK, physical devices, accounts and original media are
+unchanged. Physical checks remain deferred; no release or gold-image claim.
+
+---
+
 # Native address handoff gate — 2026-10-21
 
 Software-first milestone: the real maintained desktop worker passes three manual

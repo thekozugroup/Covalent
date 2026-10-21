@@ -362,9 +362,16 @@ def load_lock(path: Path) -> tuple[dict, bytes]:
             raise EvidenceError('source inputs exceed bound')
         url = urllib.parse.urlsplit(row['url'])
         expected_recipe = f"/alpinelinux/aports/{origins[key[0]]}/main/{key[0]}/{urllib.parse.quote(key[1], safe='')}"
+        # Alpine's primary server can publish a signed security revision before
+        # its GitHub mirror has that commit. Admit only the same exact recipe
+        # file at its locked commit, with no alternate query or redirect.
+        primary_recipe = (row['url'] == 'https://git.alpinelinux.org/aports/plain/main/'
+                          f"{key[0]}/{urllib.parse.quote(key[1], safe='')}?id={origins[key[0]]}")
         expected_archive = f"/distfiles/v3.23/{key[1]}"
-        if (url.scheme != 'https' or url.query or url.fragment or url.username or url.password
+        if (url.scheme != 'https' or (url.query and not primary_recipe)
+                or url.fragment or url.username or url.password
                 or url.port or not ((url.netloc == 'raw.githubusercontent.com' and url.path == expected_recipe)
+                or primary_recipe
                 or (url.netloc == 'distfiles.alpinelinux.org' and url.path == expected_archive)
                 or (key == ('openssl', 'openssl-3.5.9.tar.gz') and row['url'] == OPENSSL_RELEASE_URL)
                 or (key == ('ca-certificates', 'ca-certificates-20261020.tar.bz2') and row['url'] == CA_RELEASE_URL))):

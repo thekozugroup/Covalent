@@ -1,0 +1,52 @@
+{
+  "sourceLockSHA256": "3f66f233ed4eb174b4b3c1b0a1b8165a3f33011e22e96d5705883f80807badc8",
+  "packagedLockSHA256": "1da2397744d92ed03049d641c1355e8f6b89e2a2d7c25ed0309d35688ccd50d2",
+  "results": [
+    {
+      "arch": "amd64",
+      "command": [
+        "python3",
+        "-B",
+        "scripts/verify-alpine-runtime-evidence.py",
+        "--arch",
+        "amd64",
+        "--bundle",
+        "/Users/michaelwong/Developer/Covalent/artifacts/evidence/runtime-build-recovery/isolated-amd64/bundle",
+        "--installed",
+        "/Users/michaelwong/Developer/Covalent/artifacts/evidence/runtime-build-recovery/isolated-amd64/installed",
+        "--ca-bundle",
+        "/Users/michaelwong/Developer/Covalent/artifacts/evidence/runtime-build-recovery/isolated-amd64/ca.crt",
+        "--lock",
+        "/Users/michaelwong/Developer/Covalent/packaging/docker/alpine/runtime-source-lock.json",
+        "--packaged-lock",
+        "/Users/michaelwong/Developer/Covalent/packaging/docker/alpine/packaged-evidence-lock.json"
+      ],
+      "exitCode": 0,
+      "elapsedSeconds": 0.108,
+      "output": "ALPINE_PACKAGED_EVIDENCE {\"caSHA256\":\"5961c0a3c65459931c023e0075c09733f09aea4ca439cb85bc4a08bb4f3f568b\",\"inventorySHA256\":\"fef90fba649a9749cb05c629a8b7ab693ec6ce8ec7de689abeed0643917184a9\",\"noticeSHA256\":\"fd22d9aae5a91344b8a331fe5bf58037dc3ea499864c1360493f5a4f1ce74db0\",\"packages\":13,\"sourceFiles\":156,\"sourceSHA256\":\"392f28bcc96a62527c3e3ebd27ed4c7bf40791f538afc2a3b0be16b3a23f4499\",\"status\":\"passed\",\"target\":\"linux-amd64\"}"
+    },
+    {
+      "arch": "arm64",
+      "command": [
+        "python3",
+        "-B",
+        "scripts/verify-alpine-runtime-evidence.py",
+        "--arch",
+        "arm64",
+        "--bundle",
+        "/Users/michaelwong/Developer/Covalent/artifacts/evidence/runtime-build-recovery/isolated-arm64/bundle",
+        "--installed",
+        "/Users/michaelwong/Developer/Covalent/artifacts/evidence/runtime-build-recovery/isolated-arm64/installed",
+        "--ca-bundle",
+        "/Users/michaelwong/Developer/Covalent/artifacts/evidence/runtime-build-recovery/isolated-arm64/ca.crt",
+        "--lock",
+        "/Users/michaelwong/Developer/Covalent/packaging/docker/alpine/runtime-source-lock.json",
+        "--packaged-lock",
+        "/Users/michaelwong/Developer/Covalent/packaging/docker/alpine/packaged-evidence-lock.json"
+      ],
+      "exitCode": 0,
+      "elapsedSeconds": 0.094,
+      "output": "ALPINE_PACKAGED_EVIDENCE {\"caSHA256\":\"5961c0a3c65459931c023e0075c09733f09aea4ca439cb85bc4a08bb4f3f568b\",\"inventorySHA256\":\"62855c0e4a915edda29e3a0ca6ed7b247c379241661a739b248e313567fb98ed\",\"noticeSHA256\":\"c15a208bac276d95fcb38ae2ee6061a965baec6fb7b074fae9a53dd4bd81c308\",\"packages\":13,\"sourceFiles\":156,\"sourceSHA256\":\"392f28bcc96a62527c3e3ebd27ed4c7bf40791f538afc2a3b0be16b3a23f4499\",\"status\":\"passed\",\"target\":\"linux-arm64\"}"
+    }
+  ]
+}

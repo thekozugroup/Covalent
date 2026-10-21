@@ -1,0 +1,45 @@
+{
+  "command": [
+    "git",
+    "diff",
+    "--cached",
+    "--check"
+  ],
+  "exitCode": 0,
+  "attributeScope": "Exact upstream patch data retain context prefixes/mail separators; four exact raw APK databases retain their final record delimiter. Ordinary source retains whitespace checks.",
+  "attributeSHA256": "0691b83c3516f79e23e68f8a44ca91fadf5f8fcce345f92da24c9b0183126b02",
+  "initialUpstreamPatchDiagnostics": 192,
+  "finalTrackedChecks": [
+    {
+      "command": [
+        "git",
+        "diff",
+        "--cached",
+        "--check"
+      ],
+      "exitCode": 0,
+      "elapsedSeconds": 0.033,
+      "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "command": [
+        "node",
+        "scripts/check-openapi-routes.mjs"
+      ],
+      "exitCode": 0,
+      "elapsedSeconds": 0.893,
+      "stdoutSha256": "7429cea9911dd6400d26ba31c3ce8ed99c7b8c27884a1dce07cc78da8a159db6",
+      "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "command": [
+        "./scripts/test-openapi-routes.sh"
+      ],
+      "exitCode": 0,
+      "elapsedSeconds": 10.629,
+      "stdoutSha256": "b47bed805bd1ca6f4915eddbb4ed67ecf12e3d18fb05522deb9a62217feefc6a",
+      "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ]
+}

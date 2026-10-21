@@ -1,0 +1,37 @@
+{
+  "scope": "Read-only version probes from an ordinary Python/shell parent. Only an owned copy was re-signed. Not the hosted binary or a full app/sync acceptance test.",
+  "entitlementsSHA256": "c33d1b2d8735b9f1483ec3312c462540f1f5335d5b7a474823b40e2990f3ea28",
+  "results": [
+    {
+      "case": "original-linker-signed",
+      "exitCode": 0,
+      "elapsedSeconds": 0.047,
+      "sha256": "07cb75e9292c3c3a08322f4e34a6b1e6f91599b43ae917ae64f6d13bfb864922",
+      "stdoutBytes": 195,
+      "stdoutSha256": "517ef11e1d21ed3d5eae40f1deefd9bf75c863b0133423034a8d00d873ccff6e",
+      "stderrBytes": 0,
+      "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "case": "copy-inherit-sandbox-and-runtime",
+      "exitCode": -5,
+      "elapsedSeconds": 0.497,
+      "sha256": "7c9f1d8edafbccc07ba78e52bef7945e8d42c7fb2c7cd8d4b31705538e327b2a",
+      "stdoutBytes": 0,
+      "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderrBytes": 0,
+      "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "case": "copy-runtime-only-no-inherit-entitlements",
+      "exitCode": 0,
+      "elapsedSeconds": 0.386,
+      "sha256": "9f0550a243b71a4104a8d455c43dfb40113ab910f531739a93e4cd96bd9531e7",
+      "stdoutBytes": 195,
+      "stdoutSha256": "517ef11e1d21ed3d5eae40f1deefd9bf75c863b0133423034a8d00d873ccff6e",
+      "stderrBytes": 0,
+      "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "originalUnchanged": true
+}
