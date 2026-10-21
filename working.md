@@ -1,5 +1,24 @@
 # Interlink companion and appliance robustness — 2026-10-20
 
+Hosted 1481c16 run 39514337288 passes Android foundation, Rust/contracts, both
+containers, dependencies and both macOS jobs. Its device job passes all 86
+baseline tests and the SAF journey, then fails at the added permission
+harness's ADB grant command after opening Settings (exit 20). The full gate
+fails; the grant failure's cause is not established. The QA harness now uses
+the actual Permissions → Nearby devices → Allow controls and returns through
+Settings without launching the Activity or starting its service. Back actions
+are bounded independently of unavailable hierarchies, and the screen after
+the final Back is observed. The headed API37/ARM64 rerun passes both Settings
+return and the runtime prompt, requiring native ready state, a foreground
+service and unchanged device/TLS/key-envelope hashes. They also match the
+retained failed run's baseline. App runtime and APK bytes are unchanged.
+Earlier framework/launcher ANRs were cleared with Wait on the same owned AVD;
+no emulator restart or data reset was used. The earlier harness back-stack
+failure and receipts remain. Evidence:
+artifacts/interlink-qa/api37-settings-permission-recovery.log and
+api37-settings-permission-recovery/permission-recovery.json. Latest-head hosted
+acceptance remains required; the previous hosted grant failure is not relabeled.
+
 Build reliability follow-up: c1ee2b8 run 39510203636 passes Android foundation,
 Rust, both containers, dependencies, macOS, CodeQL and version sync. Its device
 job fails in :app:packageRelease with explicit Java heap exhaustion in
@@ -76,14 +95,16 @@ superseded unused denial string. Both permission launches are now guarded;
 the unused string is removed. No lint rule was suppressed. Retain the failed
 07fd041 full-check log; the corrected 6b31fde full gate passes without exceptions.
 
-The compact Pi checkpoint is GPhotoOS-rpi5-nvme-0.3.1-5e50c9d.img in the private
-Interlink checkout. Interrupted-update faults and offline image validation pass;
-75 Linux Python tests, including 90 installation/restoration interruption
-cases, nine Android shell and 70 Java import checks pass at that checkpoint.
-Recovery removes partial added files and retains the new helper through
-interrupted restoration. The last watchdog wait rechecks accepted health.
-Further helper-flush work is tracked in the private appliance checkout. Private
-GitHub CI cannot start because of account billing/spending limits. No physical
+The compact Pi checkpoint is GPhotoOS-rpi5-nvme-0.3.1-19a9a2f.img in the private
+Interlink checkout. Offline image validation, 76 root-Linux tests, ten Android
+shell checks and 66 signed Android staging scenarios pass. The current updater
+fixes Android-incompatible desktop-Java APIs; the historical updater still
+requires a separate safe bootstrap. Host signing safeguards pass 12 real SDK
+checks. Two real system APK 5 → 7 → 5 scans preserve selected synthetic data;
+the repeat includes storage access and Android Keystore. This is not the full
+signed 27-component migration. The legacy assisted updater refuses this
+development version before ADB contact. Private run 39519742686 at c6cdff3 cannot
+start either job because of account billing/spending limits. No physical
 boot or Google Photos deletion acceptance is inferred. User requests software
 work first. Source retention supports retain/off; delete-after-cloud-backup is
 not implemented. Production companion signing/publication, physical Pi/Solstice,

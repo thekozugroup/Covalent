@@ -123,7 +123,11 @@ python3 -B scripts/interlink-api37-permission-test.py \
 
 The guard accepts only the two fixed QA AVD/serial pairs, refuses an existing
 non-debug app and verifies installed APK bytes. It exercises actual permission
-revocation, app Settings return and the runtime grant dialog, then requires
+revocation, the Settings Permissions → Nearby devices → Allow controls and the
+runtime grant dialog. It returns through Settings with at most four observed
+Back actions; unavailable hierarchies do not consume that limit, and the final
+return is observed. No ADB grant, Activity launch or service-start shortcut
+substitutes for the Settings recovery path. It then requires
 the native API's unpaired-ready state and foreground service. Device identity,
 TLS identity and key-envelope hashes must remain unchanged. Only an unpaired
 debug fixture is supported; it never clears app data or tests on a phone.

@@ -133,6 +133,42 @@ def main():
             raise RuntimeError("permission recovery actions missing")
         return tree
 
+    def grant_in_settings(tree):
+        # Exercise the user route. A shell `pm grant` bypasses these controls
+        # and failed on the hosted API37 guest after opening Settings.
+        tap(tree, text="Permissions")
+        tree = wait_ui(lambda t: has_text(t, "Nearby devices"), "Nearby devices in app permissions")
+        tap(tree, text="Nearby devices")
+        tree = wait_ui(lambda t: has_text(t, "Allow"), "Nearby devices permission options")
+        tap(tree, text="Allow")
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            package = run("shell", "dumpsys", "package", PACKAGE)
+            if re.search(r"(?m)^\s*" + re.escape(PERMISSION) + r": granted=true(?:,|$)", package):
+                break
+            time.sleep(0.5)
+        else:
+            raise RuntimeError("Settings did not grant Nearby devices access")
+        # Return through the actual Settings back stack. Do not launch the app
+        # or start its service: onResume must perform the recovery itself.
+        deadline = time.monotonic() + 120
+        back_actions = 0
+        while time.monotonic() < deadline:
+            tree = dump()
+            if tree is None:
+                time.sleep(1)
+                continue
+            if any(n.get("package") == PACKAGE for n in tree.iter("node")):
+                return
+            if not any(n.get("package") in {"com.android.settings", "com.android.permissioncontroller", "com.google.android.permissioncontroller"} for n in tree.iter("node")):
+                raise RuntimeError("Unexpected app while returning from permission settings")
+            if back_actions >= 4:
+                raise RuntimeError("Settings back stack exceeded four observed pages")
+            run("shell", "input", "keyevent", "KEYCODE_BACK")
+            back_actions += 1
+            time.sleep(0.5)
+        raise RuntimeError("Settings did not return to the companion")
+
     try:
         if run("emu", "avd", "name").splitlines()[0] != args.avd:
             raise RuntimeError("emulator AVD name differs from the requested owned fixture")
@@ -177,12 +213,9 @@ def main():
         tree = revoke_and_open()
         mark("revoked permission shows actionable recovery")
         tap(tree, text="Open settings")
-        wait_ui(lambda t: has_text(t, "Interlink") and has_text(t, "Permissions") and
+        tree = wait_ui(lambda t: has_text(t, "Interlink") and has_text(t, "Permissions") and
                 any(n.get("package") == "com.android.settings" for n in t.iter("node")), "Interlink app settings")
-        # Grant while Settings is foreground; only Back may return to the Activity.
-        # No launch, refresh button or service start is allowed before ready().
-        run("shell", "pm", "grant", PACKAGE, PERMISSION)
-        run("shell", "input", "keyevent", "KEYCODE_BACK")
+        grant_in_settings(tree)
         ready()
         if hashes() != before:
             raise RuntimeError("saved identity changed after Settings recovery")
@@ -198,6 +231,7 @@ def main():
         if after != before:
             raise RuntimeError("saved identity changed after runtime recovery")
         receipt["identitySha256After"] = after
+        permission_mutated = False  # Both real grant routes already restored it.
         mark("runtime grant restarts native host and preserves identities")
         receipt["result"] = "passed"
     finally:
