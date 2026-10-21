@@ -1,6 +1,33 @@
 # Interlink companion and appliance robustness — 2026-10-20
 
-Software work continues first at the user's request. Hosted source 126cec9
+Software work continues first at the user's request. Latest hosted source
+d9eb263, run 39526795075, is terminal: seven non-device lanes and all 87
+baseline/SAF tests pass, but the permission tap reports exit20/missing-service.
+The subsequent framework observation has no system_server PID. The full gate
+fails; neither crash cause nor tap delivery is established by that evidence.
+
+The current follow-up starts a bounded, redacted framework log stream before
+APK installation/permission mutations, waits for actual stream readiness and
+records phase times around the one input attempt. It captures only approved
+crash/watchdog/low-memory/process metadata; no raw logs, messages, arguments,
+account labels or paths are retained. Events and remembered PIDs are each
+bounded to 256; dead/reused PIDs lose attribution. Capture remains active through
+failure observation and cleanup. Premature loss invalidates an otherwise passing
+journey. Only its owned adb log client is stopped; no guest restart, input replay
+or acceptance bypass is introduced. All 22 host regression tests pass, including
+real managed subprocess readiness/loss/cleanup checks with resource warnings
+treated as errors. The first real Android36 read-only smoke captures 428 lines,
+retains one safe phase event, stops its reader/client cleanly and keeps the same
+boot/framework PIDs. The final-source Android36 read-only smoke captures 396 lines, stops its
+reader/client cleanly, reports unchanged source bytes and preserves boot ID and
+both framework PIDs. This is recorder validation, not a permission-journey pass.
+A separate historical crash-only observation attributes a fatal TimeoutException
+to the previously observed system_server PID5529, followed by application
+DeadSystemException failures. It establishes neither the timeout component nor
+the trigger; no Covalent causation is inferred. The latest API37 hosted journey
+remains required. App/APK runtime bytes are unchanged.
+
+Earlier hosted source 126cec9
 run 39520547422 is terminal: seven lanes pass; the API37 lane passes all 86
 baseline tests plus the SAF journey, then fails at the permission harness's
 Open settings tap (exit 20). The combined release gate fails. Its error output

@@ -16,6 +16,7 @@ import sys
 import time
 import uuid
 import xml.etree.ElementTree as ET
+from interlink_framework_trace import FrameworkTrace
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -105,11 +106,19 @@ def main():
     ui_path = f"/data/local/tmp/interlink-permission-{uuid.uuid4().hex}.xml"
     permission_mutated = False
     fixture_owned = False
+    trace = None
 
     def run(*command, check=True, timeout=30):
-        result = subprocess.run(
-            [adb, "-s", args.serial, *command], capture_output=True, text=True, timeout=timeout,
-        )
+        tap_input = command[:3] == ("shell", "input", "tap")
+        if trace is not None and tap_input:trace.mark("input-tap-started")
+        try:
+            result = subprocess.run(
+                [adb, "-s", args.serial, *command], capture_output=True, text=True, timeout=timeout,
+            )
+        except subprocess.TimeoutExpired:
+            if trace is not None and tap_input:trace.mark("input-tap-timeout")
+            raise
+        if trace is not None and tap_input:trace.mark("input-tap-returned",result.returncode)
         if check and result.returncode:
             diagnostic = command_diagnostic(command, result)
             receipt.setdefault("commandFailures", []).append(diagnostic)
@@ -119,6 +128,7 @@ def main():
 
     def mark(phase):
         receipt["phases"].append(phase)
+        if trace is not None:trace.mark(phase)
         print(f"PASS: {phase}", flush=True)
 
     def dump():
@@ -247,6 +257,8 @@ def main():
         if run("shell", "getprop", "ro.build.version.sdk") != "37" or run("shell", "getprop", "sys.boot_completed") != "1":
             raise RuntimeError("fixture must be a booted API 37 emulator")
         receipt["frameworkBefore"] = framework()
+        trace = FrameworkTrace(adb,args.serial,receipt["frameworkBefore"])
+        trace.start()  # Read-only capture starts before APK install or permission mutations.
         if run("shell", "pm", "path", PACKAGE, check=False):
             run("shell", "run-as", PACKAGE, "true")  # Refuse an existing non-debug installation.
         run("install", "-r", str(apk), timeout=120)
@@ -311,6 +323,7 @@ def main():
         receipt["result"] = "passed"
     except (RuntimeError, subprocess.SubprocessError, OSError, ET.ParseError) as error:
         receipt["failureClass"] = type(error).__name__
+        if trace is not None:trace.mark("failure-observation-started")
         # Observe the existing guest before cleanup. A failing input command
         # might have delivered the tap; keep that distinction without accepting
         # its nonzero exit, replaying input, or restarting the emulator.
@@ -321,9 +334,11 @@ def main():
                     receipt[name] = observe()
                 except (RuntimeError, subprocess.SubprocessError, OSError, ET.ParseError) as observation_error:
                     receipt[name] = {"observationFailureClass": type(observation_error).__name__}
+        if trace is not None:trace.mark("failure-observation-completed")
         raise
     finally:
         cleanup_failures = []
+        if trace is not None:trace.mark("cleanup-started")
         if fixture_owned:
             actions = [("remove owned UI dump", ("shell", "rm", "-f", ui_path))]
             if permission_mutated:
@@ -333,6 +348,14 @@ def main():
                     run(*command)
                 except (RuntimeError, subprocess.SubprocessError, OSError) as cleanup_error:
                     cleanup_failures.append({"action": name, "failureClass": type(cleanup_error).__name__})
+        if trace is not None:
+            try:
+                trace.mark("cleanup-completed")
+                receipt["frameworkTrace"] = trace.stop()
+                if receipt["frameworkTrace"]["sourceChanged"] or not receipt["frameworkTrace"]["streamReady"] or not receipt["frameworkTrace"]["streamLiveBeforeStop"] or receipt["frameworkTrace"]["readerAliveAfterStop"] or receipt["frameworkTrace"]["failureClass"]:
+                    cleanup_failures.append({"action":"retain continuous framework trace","failureClass":"TraceUnavailable"})
+            except (RuntimeError,subprocess.SubprocessError,OSError) as trace_error:
+                cleanup_failures.append({"action":"stop owned framework trace","failureClass":type(trace_error).__name__})
         cleanup_invalidated_pass = bool(cleanup_failures) and receipt["result"] == "passed"
         if cleanup_failures:
             receipt["cleanupFailures"] = cleanup_failures
