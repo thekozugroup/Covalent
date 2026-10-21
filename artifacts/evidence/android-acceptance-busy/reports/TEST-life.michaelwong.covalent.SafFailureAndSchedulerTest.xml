@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="life.michaelwong.covalent.SafFailureAndSchedulerTest" tests="10" skipped="0" failures="0" errors="0" timestamp="2026-10-21T16:08:05.027Z" hostname="MacBookPro" time="0.004">
+  <properties/>
+  <testcase name="providerStreamsPreserveSchedulerInterruption" classname="life.michaelwong.covalent.SafFailureAndSchedulerTest" time="0.001"/>
+  <testcase name="folderReplacementClearsRejectedSelectionButCancellationPreservesIt" classname="life.michaelwong.covalent.SafFailureAndSchedulerTest" time="0.0"/>
+  <testcase name="sourceProviderFailureIsNotMistakenForNetworkFailure" classname="life.michaelwong.covalent.SafFailureAndSchedulerTest" time="0.0"/>
+  <testcase name="unexpectedExecutionStillCompletesTheSchedulerAttemptForRetry" classname="life.michaelwong.covalent.SafFailureAndSchedulerTest" time="0.001"/>
+  <testcase name="schedulerInterruptionNeverStartsAnotherArchiveRequest" classname="life.michaelwong.covalent.SafFailureAndSchedulerTest" time="0.0"/>
+  <testcase name="revokedPermissionNamesTheFolderUsedByTheTransfer" classname="life.michaelwong.covalent.SafFailureAndSchedulerTest" time="0.0"/>
+  <testcase name="schedulerRecoveryFailureStillReturnsARetryOutcome" classname="life.michaelwong.covalent.SafFailureAndSchedulerTest" time="0.001"/>
+  <testcase name="providerCursorStopsBeforeGrowingPastItsTransferLimit" classname="life.michaelwong.covalent.SafFailureAndSchedulerTest" time="0.0"/>
+  <testcase name="stoppedJobSuppressesItsQueuedMainThreadCompletion" classname="life.michaelwong.covalent.SafFailureAndSchedulerTest" time="0.0"/>
+  <testcase name="restoreProviderFailureIsNotMistakenForNetworkFailure" classname="life.michaelwong.covalent.SafFailureAndSchedulerTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

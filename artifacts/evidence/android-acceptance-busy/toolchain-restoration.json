@@ -1,0 +1,20 @@
+{
+  "format": 1,
+  "cause": "Pinned source file offloaded by macOS; original go list blocked reading it",
+  "oldBuildGoPidInformational": 70530,
+  "oldFileBytes": 48995,
+  "oldFileAllocatedBlocks": 0,
+  "cloudDownloadRequestsExitCode": 0,
+  "localArchive": "/Users/michaelwong/Documents/ChatGPT/GPhoto OS/.cache/toolchains/go1.26.10.darwin-arm64.tar.gz",
+  "archiveSha256": "0b5183492292ada170f9b561a834863808dd02edba599e4ad0e89899330020b3",
+  "archiveBytes": 64669745,
+  "archiveUnchanged": true,
+  "restoredOutsideCloud": "/Users/michaelwong/Library/Caches/Covalent/toolchains/go1.26.10-0b5183492292/go",
+  "goExecutableSha256": "5742f0004c49c005313d88cd06df964b09cad6bcf2eac4506bdb90abc923b1f4",
+  "goExecutableMatchesPreviouslyUsed": true,
+  "goVersion": "go version go1.26.10 darwin/arm64",
+  "restoredSourceFileSha256": "aa55f8ad51446d2876b02726587a5eaa046fb72b139b2cc75da15ed6de7f4fc4",
+  "restoredSourceAllocatedBlocks": 96,
+  "productionSourceChanged": false,
+  "previousBuildRestarted": false
+}

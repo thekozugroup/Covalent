@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="life.michaelwong.covalent.data.DurableTransferJournalTest" tests="10" skipped="0" failures="0" errors="0" timestamp="2026-10-21T16:08:05.032Z" hostname="MacBookPro" time="0.014">
+  <properties/>
+  <testcase name="moreThanEightInterruptedArchiveJobsRetainEveryAcknowledgement" classname="life.michaelwong.covalent.data.DurableTransferJournalTest" time="0.009"/>
+  <testcase name="restorePlanAndJobMustAllMatchBeforeRequest" classname="life.michaelwong.covalent.data.DurableTransferJournalTest" time="0.001"/>
+  <testcase name="mismatchedPendingJobMetadataFailsClosedBeforeRequest" classname="life.michaelwong.covalent.data.DurableTransferJournalTest" time="0.001"/>
+  <testcase name="serverAckBeforeLocalCleanupIsSafelyRetriedAfterRecreation" classname="life.michaelwong.covalent.data.DurableTransferJournalTest" time="0.001"/>
+  <testcase name="mismatchedAcknowledgementJobMetadataFailsClosedBeforeAck" classname="life.michaelwong.covalent.data.DurableTransferJournalTest" time="0.0"/>
+  <testcase name="acknowledgementMustRecommitBeforeNetworkAndFailureRetainsRecoverableState" classname="life.michaelwong.covalent.data.DurableTransferJournalTest" time="0.0"/>
+  <testcase name="failedTerminalCommitLeavesRequestRecoverableAndBlocksAcknowledgement" classname="life.michaelwong.covalent.data.DurableTransferJournalTest" time="0.001"/>
+  <testcase name="acknowledgementBoundToDifferentTerminalRecordFailsClosedBeforeAck" classname="life.michaelwong.covalent.data.DurableTransferJournalTest" time="0.0"/>
+  <testcase name="terminalResultAndPendingAcknowledgementCommitAtomicallyAcrossRecreation" classname="life.michaelwong.covalent.data.DurableTransferJournalTest" time="0.0"/>
+  <testcase name="exactRequestMustCommitBeforeNetworkAndSurvivesStoreRecreation" classname="life.michaelwong.covalent.data.DurableTransferJournalTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

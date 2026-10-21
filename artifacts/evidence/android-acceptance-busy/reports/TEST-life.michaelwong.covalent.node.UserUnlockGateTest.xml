@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="life.michaelwong.covalent.node.UserUnlockGateTest" tests="7" skipped="0" failures="0" errors="0" timestamp="2026-10-21T16:08:05.066Z" hostname="MacBookPro" time="0.008">
+  <properties/>
+  <testcase name="aCallbackDuringRegistrationWaitsForItsUnregisterHandle" classname="life.michaelwong.covalent.node.UserUnlockGateTest" time="0.004"/>
+  <testcase name="unlockBetweenInitialCheckAndRegistrationIsNotLost" classname="life.michaelwong.covalent.node.UserUnlockGateTest" time="0.0"/>
+  <testcase name="racingNotificationsUnregisterAndStartOnlyOnce" classname="life.michaelwong.covalent.node.UserUnlockGateTest" time="0.002"/>
+  <testcase name="anActionFailureDoesNotLeaveAnObserverOrReplayTheAction" classname="life.michaelwong.covalent.node.UserUnlockGateTest" time="0.001"/>
+  <testcase name="lockedOrRepeatedNotificationsCannotStartTheAction" classname="life.michaelwong.covalent.node.UserUnlockGateTest" time="0.001"/>
+  <testcase name="registrationFailureDoesNotRunTheAction" classname="life.michaelwong.covalent.node.UserUnlockGateTest" time="0.0"/>
+  <testcase name="anAlreadyUnlockedUserNeedsNoObserver" classname="life.michaelwong.covalent.node.UserUnlockGateTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

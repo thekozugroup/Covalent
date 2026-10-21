@@ -1,0 +1,93 @@
+To honour the JVM settings for this build a single-use Daemon process will be forked. For more on this, please refer to https://docs.gradle.org/9.7.1/userguide/gradle_daemon.html#sec:disabling_the_daemon in the Gradle documentation.
+Daemon will be stopped at the end of the build 
+
+> Task :app:buildAndroidJni
+    Building arm64-v8a (aarch64-linux-android)
+    Finished `release` profile [optimized] target(s) in 0.45s
+    Building x86_64 (x86_64-linux-android)
+    Finished `release` profile [optimized] target(s) in 0.18s
+  arm64-v8a JNI library:  9873976 bytes (floor 4194304, budget 12517376)
+  x86_64 JNI library:  11628856 bytes (floor 4194304, budget 12517376)
+
+> Task :app:buildAndroidSyncEngine
+go: downloading github.com/rclone/rclone v1.75.1
+go: downloading golang.org/x/crypto v0.57.0
+go: downloading golang.org/x/sys v0.48.0
+go: downloading github.com/spf13/cobra v1.10.2
+go: downloading github.com/coreos/go-semver v0.3.1
+go: downloading github.com/Azure/go-ntlmssp v0.1.1
+go: downloading github.com/pkg/xattr v0.4.12
+go: downloading github.com/spf13/pflag v1.0.10
+go: downloading github.com/pkg/sftp v1.13.11
+go: downloading golang.org/x/text v0.42.0
+go: downloading golang.org/x/sync v0.23.0
+go: downloading github.com/xanzy/ssh-agent v0.3.3
+go: downloading github.com/aalpar/deheap v1.1.2
+go: downloading github.com/prometheus/client_golang v1.23.2
+go: downloading golang.org/x/time v0.15.0
+go: downloading github.com/youmark/pkcs8 v0.0.0-20240726163527-a2c0da244d78
+go: downloading golang.org/x/net v0.60.0
+go: downloading moul.io/http2curl/v2 v2.3.0
+go: downloading github.com/mitchellh/go-homedir v1.1.0
+go: downloading github.com/peterh/liner v1.2.2
+go: downloading github.com/unknwon/goconfig v1.0.0
+go: downloading github.com/coreos/go-systemd/v22 v22.6.0
+go: downloading gopkg.in/natefinch/lumberjack.v2 v2.2.1
+go: downloading github.com/adrg/xdg v0.5.3
+go: downloading github.com/shirou/gopsutil/v4 v4.26.6
+go: downloading github.com/jzelinskie/whirlpool v0.0.0-20201016144138-0675e54bb004
+go: downloading github.com/zeebo/blake3 v0.2.4
+go: downloading github.com/zeebo/xxh3 v1.1.0
+go: downloading github.com/go-chi/chi/v5 v5.3.1
+go: downloading github.com/skratchdot/open-golang v0.0.0-20200116055534-eef842397966
+go: downloading github.com/lanrat/extsort v1.4.2
+go: downloading github.com/mattn/go-colorable v0.1.15
+go: downloading golang.org/x/term v0.46.0
+go: downloading github.com/go-git/go-billy/v5 v5.9.0
+go: downloading github.com/kr/fs v0.1.0
+go: downloading github.com/Max-Sum/base32768 v0.0.0-20230304063302-18e6ce5945fd
+go: downloading github.com/rfjakob/eme v1.2.0
+go: downloading gopkg.in/yaml.v3 v3.0.1
+go: downloading github.com/beorn7/perks v1.0.1
+go: downloading github.com/cespare/xxhash/v2 v2.3.0
+go: downloading github.com/prometheus/client_model v0.6.2
+go: downloading github.com/prometheus/common v0.70.0
+go: downloading github.com/prometheus/procfs v0.21.1
+go: downloading google.golang.org/protobuf v1.36.11
+go: downloading github.com/mattn/go-runewidth v0.0.24
+go: downloading github.com/abbot/go-http-auth v0.4.0
+go: downloading github.com/google/uuid v1.6.0
+go: downloading github.com/mattn/go-isatty v0.0.23
+go: downloading github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822
+go: downloading github.com/klauspost/cpuid/v2 v2.4.0
+go: downloading github.com/clipperhouse/uax29/v2 v2.7.0
+  arm64-v8a rclone: 21638080 bytes, sha256=1db1b5e859edc16ef074e14e980e338b4bbfa8503bce369fc52b5b3f083ef72e
+  x86_64 rclone: 23213376 bytes, sha256=7576dd530ebee374ec12ff315929190485757cb47df70df6ee85420c7efb976d
+  arm64-v8a guardian: 14912 bytes, sha256=2fcc818aa81d0c470ceb632022c924481cee63feef86521d16404856a73f7253
+  x86_64 guardian: 14616 bytes, sha256=b12ecb82d6c7b695a74ef4f9ad131a6d50fa9cd8597c8d8111ce5ec480ce1d28
+/Users/michaelwong/Developer/Covalent/scripts/build-android-sync-engine.sh: line 203: 70530 Terminated: 15          env GOOS=android GOARCH="$goarch" CGO_ENABLED=1 CC="$toolchain/bin/$compiler" go list -deps -json . > "$report"
+
+> Task :app:buildAndroidSyncEngine FAILED
+
+[Incubating] Problems report is available at: file:///Users/michaelwong/Developer/Covalent/apps/android/build/reports/problems/problems-report.html
+
+FAILURE: Build failed with an exception.
+
+* What went wrong:
+Execution failed for task ':app:buildAndroidSyncEngine' (registered in build file 'app/build.gradle.kts').
+> Process 'command '/Users/michaelwong/Developer/Covalent/scripts/build-android-sync-engine.sh'' finished with non-zero exit value 143 (this value may indicate that the process was terminated with the SIGTERM signal)
+
+* Try:
+> Run with --stacktrace option to get the stack trace.
+> Run with --info or --debug option to get more log output.
+> Run with --scan to get full insights from a Build Scan (powered by Develocity).
+> Get more help at https://help.gradle.org.
+
+Deprecated Gradle features were used in this build, making it incompatible with Gradle 10.
+
+You can use '--warning-mode all' to show the individual deprecation warnings and determine if they come from your own scripts or plugins.
+
+For more on this, please refer to https://docs.gradle.org/9.7.1/userguide/command_line_interface.html#sec:command_line_warnings in the Gradle documentation.
+
+BUILD FAILED in 9m 12s
+2 actionable tasks: 2 executed

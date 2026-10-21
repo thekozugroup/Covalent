@@ -1,5 +1,53 @@
 # Interlink companion and appliance robustness — 2026-10-21
 
+Android share acceptance now handles the node's explicit temporary lock refusal
+without making the user repeat setup. It keeps the exact destination and
+authenticated request, permits at most six attempts with 3.1s total backoff,
+and never replays uncertain network results or other sharing operations.
+Cancellation stops retries and preserves the interrupt flag. The server's
+nonblocking mutation lock and durable destination journal remain intact.
+
+The original client fails the new deterministic busy-response regression.
+All 222 JVM tests now pass, including ten new acceptance cases.
+Explicit typed error fields are required; inferred defaults and coerced values
+cannot authorize replay. Earlier source/results remain separate. Covalent and
+the dedicated Interlink debug APK compile, pass lint, and pass native package,
+16-KiB alignment and signature checks. Seven native-path checks pass on macOS
+and root Linux. QA now explicitly supports ARM64 while retaining its x86_64
+default; damaged ARM64 bytes cannot be replaced by valid Intel bytes.
+
+The earlier full SAF journey passes on fresh emulator-5606, including transfers,
+restart/address changes, lost-access repair, shared settings, pause/resume,
+synthetic deletion semantics and removal. Its boot/framework identities and
+source/failed-preflight receipts remain unchanged. Final strict-source checks
+stay separate: the reused paired fixture cannot expose its first-time pairing
+form; a new fresh fixture then exposes a chooser/status readiness race in QA.
+Both failures remain terminal. The corrected test waits for the real displayed,
+enabled chooser before one click and uses the same production APK, without
+clearing data. The final-source run passes pairing/acceptance and the first
+manual transfer. The changed peer/worker ports preserve identity and the new
+address becomes authoritative, but the next requested file misses its deadline.
+This remains a failed journey (200.369s; JUnit 198.698s), with unchanged
+boot/framework, sources, production APK and original failed receipt. Later
+recovery stages are not reached. The next software investigation is this
+address-change transfer; its cause is not yet established.
+
+The chooser-test rebuild also records a separately diagnosed macOS offloaded
+Go source file. The exact owned blocked Go-list child is terminated after a
+matching executable is restored from its local archive outside cloud storage.
+The new build passes in 1m2s with pinned Go1.26.10 at
+/Users/michaelwong/Library/Caches/Covalent/toolchains/go1.26.10-0b5183492292/go.
+The failed build and source/archive hashes remain separate.
+See docs/android-folder-acceptance.md and
+artifacts/evidence/android-acceptance-busy/manifest.json.
+
+Parent 69ff050 CI 39622053150 is terminal failed at acceptance; its seven
+non-device jobs, CodeQL, version sync and 86 baseline Android tests pass. Its
+permission/native-report phase was not reached. The prior framework abort
+remains unresolved. The new source needs hosted CI before release. Initial
+wrong-module and wrong-Go build attempts remain separate. No physical device,
+original media, account, Pi image, production signer or release gate changed.
+
 An actual Android 37 native fixture exposes a diagnostic parsing bug: report
 headers include an optional parent PID between victim PID and TID. Both readers
 now share a strict grammar accepting that bounded numeric field while ignoring
@@ -13,9 +61,9 @@ Only the exact verified owned executable/directory is removed. All 73 focused
 macOS/Linux checks pass. See docs/interlink-native-report-format.md and
 artifacts/evidence/native-report-parent-header/manifest.json. This affects QA
 diagnostics only; it does not establish or fix the hosted framework abort.
-The existing 8a17a76 CI run 39615977362 remains active and must finish without
-being cancelled by a new PR-head push. The tested format fix is published on a
-separate branch first; promotion to the existing PR follows that terminal result.
+The earlier 8a17a76 CI run 39615977362 finished failed. The tested format fix was
+promoted after that terminal result; its 69ff050 run failed earlier at folder
+acceptance as recorded above.
 
 Hosted d09d08e run 39609173300 is terminal: seven non-device lanes, 86 baseline
 tests and SAF pass; permission recovery and the release gate fail. The observed

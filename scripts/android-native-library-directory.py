@@ -20,15 +20,18 @@ HELPERS = {
     "libcovalentrclone.so": "rclone-sha256.txt",
     "libengineguardian.so": "engine-guardian-sha256.txt",
 }
+ABI_DIRECTORIES = {"arm64-v8a": "arm64", "x86_64": "x86_64"}
 
 
-def resolve(apk: pathlib.Path, package_output: bytes) -> tuple[str, dict[str, str]]:
+def resolve(apk: pathlib.Path, package_output: bytes, abi: str = "x86_64") -> tuple[str, dict[str, str]]:
+    if abi not in ABI_DIRECTORIES:
+        raise ValueError("unsupported fixture ABI")
     if not 0 < len(package_output) <= 4096:
         raise ValueError("installed package response exceeds its bound or is empty")
     lines = package_output.decode("ascii", "strict").splitlines()
     if len(lines) != 1 or (match := PACKAGE_APK.fullmatch(lines[0])) is None:
         raise ValueError("expected the exact Covalent base APK under /data/app")
-    directory = str(pathlib.PurePosixPath(match[1]).parent / "lib/x86_64")
+    directory = str(pathlib.PurePosixPath(match[1]).parent / "lib" / ABI_DIRECTORIES[abi])
     hashes = {}
     with zipfile.ZipFile(apk) as archive:
         names = archive.namelist()
@@ -49,8 +52,8 @@ def resolve(apk: pathlib.Path, package_output: bytes) -> tuple[str, dict[str, st
                 records[parts[0]] = (parts[1], int(parts[2]))
             if set(records) != {"arm64-v8a", "x86_64"}:
                 raise ValueError("helper manifest omits a packaged ABI")
-            digest, size = records["x86_64"]
-            library = archive.getinfo("lib/x86_64/" + helper)
+            digest, size = records[abi]
+            library = archive.getinfo("lib/" + abi + "/" + helper)
             if not 0 < size <= 64 * 1024 * 1024 or library.file_size != size:
                 raise ValueError("helper size differs from its bounded manifest")
             actual = hashlib.sha256()
@@ -69,9 +72,14 @@ def resolve(apk: pathlib.Path, package_output: bytes) -> tuple[str, dict[str, st
 
 def main() -> int:
     try:
-        if len(sys.argv) != 2:
-            raise ValueError("usage: android-native-library-directory.py debug.apk < pm-path.txt")
-        directory, hashes = resolve(pathlib.Path(sys.argv[1]), sys.stdin.buffer.read(4097))
+        args = sys.argv[1:]
+        if len(args) == 1:
+            abi = "x86_64"
+        elif len(args) == 3 and args[1] == "--abi":
+            abi = args[2]
+        else:
+            raise ValueError("usage: android-native-library-directory.py debug.apk [--abi arm64-v8a|x86_64] < pm-path.txt")
+        directory, hashes = resolve(pathlib.Path(args[0]), sys.stdin.buffer.read(4097), abi)
         print(directory)
         for helper, digest in hashes.items():
             print(digest, helper)

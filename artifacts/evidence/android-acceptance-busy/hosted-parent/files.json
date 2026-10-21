@@ -1,0 +1,352 @@
+[
+  {
+    "path": "_temp/covalent-android-api37/instrumentation-baseline.log",
+    "bytes": 59886,
+    "sha256": "90f5b8a96ec50ea7175658f9024d720faf9c2b637b3f51372b1bc855039f295a"
+  },
+  {
+    "path": "_temp/covalent-android-api37/sync-diagnostic.log",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "_temp/covalent-android-api37/instrumentation-folder-journey.log",
+    "bytes": 3143,
+    "sha256": "2f1479b4b266673664c8bc5757310d64113941a19cd392e9bdb43102493cfa7e"
+  },
+  {
+    "path": "Covalent/Covalent/apps/android/app/build/reports/lint-results-debug.html",
+    "bytes": 110520,
+    "sha256": "dfc2bde291b053b0dc9258944d8f3e8040936c417f5db2f78254e1131171da1e"
+  },
+  {
+    "path": "Covalent/Covalent/apps/android/app/build/reports/lint-results-debug.txt",
+    "bytes": 814,
+    "sha256": "7c941f5045bd6b4f50111990d1e23ecc5c4b3d0cb0cb308187d7994f403b083a"
+  },
+  {
+    "path": "Covalent/Covalent/apps/android/app/build/reports/lint-results-debug.xml",
+    "bytes": 1117,
+    "sha256": "04b654ce4caa6b69dbba3cf392230eb8dec0a29b7e512c87a028963ec1aa3d61"
+  },
+  {
+    "path": "Covalent/Covalent/apps/android/app/build/reports/lint-results-release.html",
+    "bytes": 109625,
+    "sha256": "66e876ac2ce7f01ab644081ed284a884b96f7cee810809d4159671604e4e9643"
+  },
+  {
+    "path": "Covalent/Covalent/apps/android/app/build/reports/lint-results-release.txt",
+    "bytes": 814,
+    "sha256": "7c941f5045bd6b4f50111990d1e23ecc5c4b3d0cb0cb308187d7994f403b083a"
+  },
+  {
+    "path": "Covalent/Covalent/apps/android/app/build/reports/lint-results-release.xml",
+    "bytes": 1117,
+    "sha256": "04b654ce4caa6b69dbba3cf392230eb8dec0a29b7e512c87a028963ec1aa3d61"
+  },
+  {
+    "path": "Covalent/Covalent/apps/android/app/build/test-results/testDebugUnitTest/TEST-life.michaelwong.covalent.AndroidCopyAndConfirmationTest.xml",
+    "bytes": 2666,
+    "sha256": "8dd3e402e1125b5a92954b9d581e4f4e1564d73e3fc6fab4eb47771ef49f4a7c"
+  },
+  {
+    "path": "Covalent/Covalent/apps/android/app/build/test-results/testDebugUnitTest/TEST-life.michaelwong.covalent.AndroidRemediationTest.xml",
+    "bytes": 3608,
+    "sha256": "c440d8828ac948662e2180fed993bb30694eb5b25aed2785b246c2b80c49a69e"
+  },
+  {
+    "path": "Covalent/Covalent/apps/android/app/build/test-results/testDebugUnitTest/TEST-life.michaelwong.covalent.ContractTest.xml",
+    "bytes": 1360,
+    "sha256": "9b2685baf99dfaec82bac0901e2a79bf8ffc75fe1fbef85af4d8ccbbccdcd017"
+  },
+  {
+    "path": "Covalent/Covalent/apps/android/app/build/test-results/testDebugUnitTest/TEST-life.michaelwong.covalent.DirectBootContractTest.xml",
+    "bytes": 937,
+    "sha256": "6de8b26e944d3eb3230ba3bd958bde832616fba34353ffcf827fcbf49cc2e55c"
+  },
+  {
+    "path": "Covalent/Covalent/apps/android/app/build/test-results/testDebugUnitTest/TEST-life.michaelwong.covalent.KeyProtectionContractTest.xml",
+    "bytes": 2339,
+    "sha256": "20a003a0bb2d2e04a516dcf067ee1214a63a8252420343daa95018882bdc9269"
+  },
+  {
+    "path": "Covalent/Covalent/apps/android/app/build/test-results/testDebugUnitTest/TEST-life.michaelwong.covalent.NodeErrorCodeCopyTest.xml",
+    "bytes": 1329,
+    "sha256": "8e73dd17a6e180450a498519e8db763f0dfaba0f6a29d913de245c1f3cf4235f"
+  },
+  {
+    "path": "Covalent/Covalent/apps/android/app/build/test-results/testDebugUnitTest/TEST-life.michaelwong.covalent.ProductUXContractTest.xml",
+    "bytes": 1177,
+    "sha256": "c38c1e5395d5fbe608a194f347ffb27512dbcad48d04187553785c899e9cebaa"
+  },
+  {
+    "path": "Covalent/Covalent/apps/android/app/build/test-results/testDebugUnitTest/TEST-life.michaelwong.covalent.RecoveryContractTest.xml",
+    "bytes": 1516,
+    "sha256": "04d8e011cee3c543c1a4b9089b8b68093bd5e9d50e2e5a7f303769aadfdf7fd4"
+  },
+  {
+    "path": "Covalent/Covalent/apps/android/app/build/test-results/testDebugUnitTest/TEST-life.michaelwong.covalent.SafArchiveContractTest.xml",
+    "bytes": 757,
+    "sha256": "ad53095fa6c4375820afda6c2a25f6667a484126d0fed8c1b923e333a29a2ef5"
+  },
+  {
+    "path": "Covalent/Covalent/apps/android/app/build/test-results/testDebugUnitTest/TEST-life.michaelwong.covalent.SafFailureAndSchedulerTest.xml",
+    "bytes": 1856,
+    "sha256": "1096b9af37d96a6195149cfb137f2e061c61790489aa9c0e380f7143696ffe5b"
+  },
+  {
+    "path": "Covalent/Covalent/apps/android/app/build/test-results/testDebugUnitTest/TEST-life.michaelwong.covalent.data.DurableTransferJournalTest.xml",
+    "bytes": 2003,
+    "sha256": "a195e016d8d4e67c251faac1eadaffa71c4a4cba60525a52150692d08726b31e"
+  },
+  {
+    "path": "Covalent/Covalent/apps/android/app/build/test-results/testDebugUnitTest/TEST-life.michaelwong.covalent.node.AndroidConditionFeedTest.xml",
+    "bytes": 991,
+    "sha256": "ba5e64361fbc21393158586a9a4fac0059cf84ab974b6e4b2c888ae6618ed479"
+  },
+  {
+    "path": "Covalent/Covalent/apps/android/app/build/test-results/testDebugUnitTest/TEST-life.michaelwong.covalent.node.FolderSyncLifecycleContractTest.xml",
+    "bytes": 2204,
+    "sha256": "407c658ace2250c6e706adf00a36cac2d2053bc83a822689483353ffd455de43"
+  },
+  {
+    "path": "Covalent/Covalent/apps/android/app/build/test-results/testDebugUnitTest/TEST-life.michaelwong.covalent.node.PackagedSyncEngineTest.xml",
+    "bytes": 925,
+    "sha256": "ebc8852cb166f4dfda3eebd97af4b57f23761b0b1d0cbeb2ae53710925a067d3"
+  },
+  {
+    "path": "Covalent/Covalent/apps/android/app/build/test-results/testDebugUnitTest/TEST-life.michaelwong.covalent.node.PeerRouteTest.xml",
+    "bytes": 609,
+    "sha256": "f6d2069e3abf07ec0f5d2836479a904bb15070ec63c53e2253e5ba1b0f5e7968"
+  },
+  {
+    "path": "Covalent/Covalent/apps/android/app/build/test-results/testDebugUnitTest/TEST-life.michaelwong.covalent.node.UserUnlockGateTest.xml",
+    "bytes": 1340,
+    "sha256": "da48e543e2f89f99a95d1f45bb5f86b31d56feb5e738ebb17fe2b54e5d547a95"
+  },
+  {
+    "path": "Covalent/Covalent/apps/android/app/build/test-results/testDebugUnitTest/TEST-life.michaelwong.covalent.sync.FolderLinkSettingsChangeStoreTest.xml",
+    "bytes": 1337,
+    "sha256": "cd4d39efdd52b1439c939e90548774deea06b455686efe9b45d0fc49ea0d3b04"
+  },
+  {
+    "path": "Covalent/Covalent/apps/android/app/build/test-results/testDebugUnitTest/TEST-life.michaelwong.covalent.sync.FolderSyncActionsTest.xml",
+    "bytes": 2824,
+    "sha256": "712a667a3b34d3864a0cd5b7e4ae4867008b3b6269ac66f24e5d0a9f93101289"
+  },
+  {
+    "path": "Covalent/Covalent/apps/android/app/build/test-results/testDebugUnitTest/TEST-life.michaelwong.covalent.sync.FolderSyncClientTest.xml",
+    "bytes": 2801,
+    "sha256": "b519a9c072f0d534f1468910b60996d3bc2c43c59abab6804b8c9198b63c1421"
+  },
+  {
+    "path": "Covalent/Covalent/apps/android/app/build/test-results/testDebugUnitTest/TEST-life.michaelwong.covalent.sync.FolderSyncContractsTest.xml",
+    "bytes": 1464,
+    "sha256": "d87f606c2037510ebcccb0192307e17f21daeb29f3f577c880a26fa8ee7d4c60"
+  },
+  {
+    "path": "Covalent/Covalent/apps/android/app/build/test-results/testDebugUnitTest/TEST-life.michaelwong.covalent.sync.FolderSyncGrantStoreTest.xml",
+    "bytes": 2490,
+    "sha256": "fff03a0b802cb67f875aaeef817b77a297432a95d38389671dc018fc7b2b43e5"
+  },
+  {
+    "path": "Covalent/Covalent/apps/android/app/build/test-results/testDebugUnitTest/TEST-life.michaelwong.covalent.sync.FolderSyncStatusReadTest.xml",
+    "bytes": 823,
+    "sha256": "cbe88feb589fc6132cf8d8d3768c43493f6ef3be47032b8a7a724baa8562a278"
+  },
+  {
+    "path": "Covalent/Covalent/apps/android/app/build/test-results/testDebugUnitTest/TEST-life.michaelwong.covalent.sync.PeerAddressUpdateTest.xml",
+    "bytes": 1141,
+    "sha256": "407b9ff155ee87da9a7098da946fb26771cfe2940aabc68317701c01ec802ded"
+  },
+  {
+    "path": "Covalent/Covalent/apps/android/app/build/test-results/testDebugUnitTest/TEST-life.michaelwong.covalent.sync.SafStrictQueryTest.xml",
+    "bytes": 1650,
+    "sha256": "c394fe6a81bf4a90431557503d617c4e13c4943f77f3bbd9a94968ed64a85d83"
+  },
+  {
+    "path": "Covalent/Covalent/apps/android/app/build/test-results/testDebugUnitTest/TEST-life.michaelwong.covalent.ui.FolderSyncPairingTest.xml",
+    "bytes": 489,
+    "sha256": "c15cde4fc7aabe002f4005368f49e76320877182fd73cd4c2053011e37ca20b6"
+  },
+  {
+    "path": "Covalent/Covalent/apps/android/app/build/test-results/testDebugUnitTest/TEST-life.michaelwong.covalent.ui.OpenSourceNoticesTest.xml",
+    "bytes": 778,
+    "sha256": "7cb7fe35ba3cf46602371324511a836ee58c72d778e2d8395df2e94e4e246c3a"
+  },
+  {
+    "path": "Covalent/Covalent/apps/android/app/build/test-results/testDebugUnitTest/binary/output-events.bin",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "Covalent/Covalent/apps/android/app/build/test-results/testDebugUnitTest/binary/results-generic.bin",
+    "bytes": 32962,
+    "sha256": "d3cb93a0346d16982b9a8ed1676ebce5b24fee0de4b1c984f73e9b0fecd18d8d"
+  },
+  {
+    "path": "Covalent/Covalent/apps/android/app/build/generated/syncEngine/reports/android-native-distribution-summary.json",
+    "bytes": 10699,
+    "sha256": "880efac8cfdff4fa1025fa484c0c4d5b4f0e414811569dc45259a00b5f96ec3b"
+  },
+  {
+    "path": "Covalent/Covalent/apps/android/app/build/generated/syncEngine/reports/android-sync-engine-link-provenance-index.json",
+    "bytes": 848,
+    "sha256": "171f7a4c288988d8bd56caec922e93c029f501ddd79e13eb4237176641c869e5"
+  },
+  {
+    "path": "Covalent/Covalent/apps/android/app/build/generated/syncEngine/reports/android-target-license-inventory.json",
+    "bytes": 51546,
+    "sha256": "b6c3c3082cd260c9c5c74fc543b12b6fd78a676ae04d3a5b6d6d4910cbee6abd"
+  },
+  {
+    "path": "Covalent/Covalent/apps/android/app/build/generated/syncEngine/reports/go-target-deps-arm64-v8a.ndjson",
+    "bytes": 1851440,
+    "sha256": "43f7c5daf667a2a31585330021e50249648d7dd5bfb777a54a72c40612bde5d9"
+  },
+  {
+    "path": "Covalent/Covalent/apps/android/app/build/generated/syncEngine/reports/go-target-deps-x86_64.ndjson",
+    "bytes": 1853626,
+    "sha256": "3fe376f2f44ab666d318f83aecafb339c7ab6955e8f2a9aca44fb9c361c6c19c"
+  },
+  {
+    "path": "Covalent/Covalent/apps/android/app/build/generated/syncEngine/reports/guardian-driver-arm64-v8a.txt",
+    "bytes": 4434,
+    "sha256": "e69dc3507ad1da83f533b3001a1834cd2d1163b724cc1a90f6ea151800ebb5c4"
+  },
+  {
+    "path": "Covalent/Covalent/apps/android/app/build/generated/syncEngine/reports/guardian-driver-x86_64.txt",
+    "bytes": 4282,
+    "sha256": "9ae3e72359219cc7931bb8c99297299e3bad3070d0f34bd7ce83ecf9446e2ec5"
+  },
+  {
+    "path": "Covalent/Covalent/apps/android/app/build/generated/syncEngine/reports/guardian-dynamic-arm64-v8a.txt",
+    "bytes": 981,
+    "sha256": "1661441838e63641aa980e7dc509a3273bea15fb5bfeeefbe791c3e8902beb93"
+  },
+  {
+    "path": "Covalent/Covalent/apps/android/app/build/generated/syncEngine/reports/guardian-dynamic-x86_64.txt",
+    "bytes": 981,
+    "sha256": "c914885c0fa1b104dda4d0c029466158dbfe5a973cea63ef1194dda3f3894e57"
+  },
+  {
+    "path": "Covalent/Covalent/apps/android/app/build/generated/syncEngine/reports/guardian-link-arm64-v8a.map",
+    "bytes": 7550,
+    "sha256": "acd17c619936f7226569e869a865aa36a488de03fefebb82ea51bb3a1dd825ea"
+  },
+  {
+    "path": "Covalent/Covalent/apps/android/app/build/generated/syncEngine/reports/guardian-link-provenance-arm64-v8a.json",
+    "bytes": 2605,
+    "sha256": "23b60d3f718370c343a2ee216dac3317808576d8bbaa67d9e6583eded058c9d9"
+  },
+  {
+    "path": "Covalent/Covalent/apps/android/app/build/generated/syncEngine/reports/guardian-link-provenance-x86_64.json",
+    "bytes": 2597,
+    "sha256": "57899380d3a988e658b86cad35de3e7e63baa19fe4acab79fbba9017a3e85e81"
+  },
+  {
+    "path": "Covalent/Covalent/apps/android/app/build/generated/syncEngine/reports/guardian-link-x86_64.map",
+    "bytes": 7124,
+    "sha256": "89ee86159f655c24b37aa39d6bc5de0a927266376743499b97f739937f61ab3f"
+  },
+  {
+    "path": "Covalent/Covalent/apps/android/app/build/generated/syncEngine/reports/guardian-symbols-arm64-v8a.txt",
+    "bytes": 8490,
+    "sha256": "30b06d2dfba9d8e729169df2956e91528dbfe625ab39653fe77e8257b9e4af0f"
+  },
+  {
+    "path": "Covalent/Covalent/apps/android/app/build/generated/syncEngine/reports/guardian-symbols-x86_64.txt",
+    "bytes": 7710,
+    "sha256": "43ebc74f7b0bb7bf92285fa3a8dc284c15c72a37f3aa3a076b31448ddce41f83"
+  },
+  {
+    "path": "Covalent/Covalent/apps/android/app/build/generated/syncEngine/reports/rclone-driver-arm64-v8a.txt",
+    "bytes": 5210,
+    "sha256": "af5c32606e6a9709d59e5554b6957e9efbf0f255b22d850dc694ede5296a6c39"
+  },
+  {
+    "path": "Covalent/Covalent/apps/android/app/build/generated/syncEngine/reports/rclone-driver-x86_64.txt",
+    "bytes": 5139,
+    "sha256": "e172c9e0e8c042913a84e5b79c2e42fbe727b9da9b9f10875b9e1d2ab2692174"
+  },
+  {
+    "path": "Covalent/Covalent/apps/android/app/build/generated/syncEngine/reports/rclone-dynamic-arm64-v8a.txt",
+    "bytes": 1123,
+    "sha256": "31d01c48fb49804b933a00bd49031013366187fcb21c632ea330ad75635614d5"
+  },
+  {
+    "path": "Covalent/Covalent/apps/android/app/build/generated/syncEngine/reports/rclone-dynamic-x86_64.txt",
+    "bytes": 1123,
+    "sha256": "1f1d28243a93d6d54df7865aa4044b1fca0ef4010ee5f8e0f037a678f9553efc"
+  },
+  {
+    "path": "Covalent/Covalent/apps/android/app/build/generated/syncEngine/reports/rclone-link-arm64-v8a.map",
+    "bytes": 3768805,
+    "sha256": "5466bf2ec8d216e9468cc3f62a431487f94a168898ad50c248cb63f560497175"
+  },
+  {
+    "path": "Covalent/Covalent/apps/android/app/build/generated/syncEngine/reports/rclone-link-provenance-arm64-v8a.json",
+    "bytes": 2757,
+    "sha256": "ca94890bef887e39f0fa9a99788f2d977a1fe1bd117804f1899ef6175596b7a9"
+  },
+  {
+    "path": "Covalent/Covalent/apps/android/app/build/generated/syncEngine/reports/rclone-link-provenance-x86_64.json",
+    "bytes": 2749,
+    "sha256": "12cfbd889205f36b8cf09fe2e968517ed3e956571becea4b6abc9d0de9d079fd"
+  },
+  {
+    "path": "Covalent/Covalent/apps/android/app/build/generated/syncEngine/reports/rclone-link-x86_64.map",
+    "bytes": 3797780,
+    "sha256": "8171383284bd28b2cd850c4e9cc60d62a40de3592f471c526e16feed064b89ee"
+  },
+  {
+    "path": "Covalent/Covalent/apps/android/app/build/generated/syncEngine/reports/source-build.json",
+    "bytes": 397,
+    "sha256": "83c6c69abbff953647ac262d8b5e5bb90019882c39625a55e96b300fad968c83"
+  },
+  {
+    "path": "Covalent/Covalent/apps/android/app/build/generated/jniLibs/provenance/jni-driver-arm64-v8a.txt",
+    "bytes": 2379,
+    "sha256": "47845a1d2aceb458a81b3c3cca940a7df594659afce1b8e93892665488209021"
+  },
+  {
+    "path": "Covalent/Covalent/apps/android/app/build/generated/jniLibs/provenance/jni-driver-x86_64.txt",
+    "bytes": 2304,
+    "sha256": "70ad08d09081115a1de8d9f239396d44d2ac996934623ae8754747a19d9c4b13"
+  },
+  {
+    "path": "Covalent/Covalent/apps/android/app/build/generated/jniLibs/provenance/jni-dynamic-arm64-v8a.txt",
+    "bytes": 1334,
+    "sha256": "7185fec6addb3778cf364ae3cafb7bd8f2cf0a54e8c85ac6bd871cbfbfd44534"
+  },
+  {
+    "path": "Covalent/Covalent/apps/android/app/build/generated/jniLibs/provenance/jni-dynamic-x86_64.txt",
+    "bytes": 1333,
+    "sha256": "19e4d0098df9112369bee9bd78da1156f3ee78a8114111ccd182f397a7aadb4c"
+  },
+  {
+    "path": "Covalent/Covalent/apps/android/app/build/generated/jniLibs/provenance/jni-link-arm64-v8a.map",
+    "bytes": 16700664,
+    "sha256": "a6db5cabe94055265b066836303f5fa5b44265bd9bbd8670b123675c3f5f0f41"
+  },
+  {
+    "path": "Covalent/Covalent/apps/android/app/build/generated/jniLibs/provenance/jni-link-provenance-arm64-v8a.json",
+    "bytes": 3670,
+    "sha256": "ae6ca22450a0ad2e118f672243d38f1a0f8ee3efe327edf02101d99e8394f751"
+  },
+  {
+    "path": "Covalent/Covalent/apps/android/app/build/generated/jniLibs/provenance/jni-link-provenance-x86_64.json",
+    "bytes": 3659,
+    "sha256": "ebd3a3994d7a350a4c3348de52f9c5c9475cd2cef642a159b6989cdb3706ca65"
+  },
+  {
+    "path": "Covalent/Covalent/apps/android/app/build/generated/jniLibs/provenance/jni-link-x86_64.map",
+    "bytes": 15152619,
+    "sha256": "77dac14214e0702fd8a19d00ac4393393b1d67128befb69245c2c4e3084d01b7"
+  },
+  {
+    "path": "Covalent/Covalent/apps/android/app/build/generated/jniLibs/covalent-android-native-provenance.sha256",
+    "bytes": 1438,
+    "sha256": "4069814b3adff94f0fc966bdc855b2ee08f27c75880109ad147518f57125a3fb"
+  }
+]

@@ -1,0 +1,289 @@
+
+> Task :app:buildAndroidJni
+    Building arm64-v8a (aarch64-linux-android)
+    Finished `release` profile [optimized] target(s) in 0.47s
+    Building x86_64 (x86_64-linux-android)
+    Finished `release` profile [optimized] target(s) in 0.23s
+  arm64-v8a JNI library:  9873976 bytes (floor 4194304, budget 12517376)
+  x86_64 JNI library:  11628856 bytes (floor 4194304, budget 12517376)
+
+> Task :app:buildAndroidSyncEngine
+go: downloading github.com/rclone/rclone v1.75.1
+go: downloading golang.org/x/crypto v0.57.0
+go: downloading golang.org/x/sys v0.48.0
+go: downloading github.com/spf13/cobra v1.10.2
+go: downloading github.com/spf13/pflag v1.0.10
+go: downloading github.com/coreos/go-semver v0.3.1
+go: downloading github.com/pkg/xattr v0.4.12
+go: downloading github.com/pkg/sftp v1.13.11
+go: downloading golang.org/x/text v0.42.0
+go: downloading github.com/xanzy/ssh-agent v0.3.3
+go: downloading github.com/Azure/go-ntlmssp v0.1.1
+go: downloading golang.org/x/sync v0.23.0
+go: downloading github.com/jzelinskie/whirlpool v0.0.0-20201016144138-0675e54bb004
+go: downloading github.com/zeebo/blake3 v0.2.4
+go: downloading github.com/zeebo/xxh3 v1.1.0
+go: downloading github.com/aalpar/deheap v1.1.2
+go: downloading github.com/prometheus/client_golang v1.23.2
+go: downloading github.com/youmark/pkcs8 v0.0.0-20240726163527-a2c0da244d78
+go: downloading golang.org/x/net v0.60.0
+go: downloading moul.io/http2curl/v2 v2.3.0
+go: downloading golang.org/x/time v0.15.0
+go: downloading github.com/mitchellh/go-homedir v1.1.0
+go: downloading github.com/peterh/liner v1.2.2
+go: downloading github.com/unknwon/goconfig v1.0.0
+go: downloading github.com/lanrat/extsort v1.4.2
+go: downloading github.com/coreos/go-systemd/v22 v22.6.0
+go: downloading gopkg.in/natefinch/lumberjack.v2 v2.2.1
+go: downloading github.com/adrg/xdg v0.5.3
+go: downloading github.com/shirou/gopsutil/v4 v4.26.6
+go: downloading github.com/go-chi/chi/v5 v5.3.1
+go: downloading github.com/skratchdot/open-golang v0.0.0-20200116055534-eef842397966
+go: downloading github.com/mattn/go-colorable v0.1.15
+go: downloading golang.org/x/term v0.46.0
+go: downloading github.com/kr/fs v0.1.0
+go: downloading github.com/go-git/go-billy/v5 v5.9.0
+go: downloading gopkg.in/yaml.v3 v3.0.1
+go: downloading github.com/Max-Sum/base32768 v0.0.0-20230304063302-18e6ce5945fd
+go: downloading github.com/rfjakob/eme v1.2.0
+go: downloading github.com/mattn/go-runewidth v0.0.24
+go: downloading github.com/abbot/go-http-auth v0.4.0
+go: downloading github.com/beorn7/perks v1.0.1
+go: downloading github.com/cespare/xxhash/v2 v2.3.0
+go: downloading github.com/prometheus/client_model v0.6.2
+go: downloading github.com/prometheus/common v0.70.0
+go: downloading github.com/prometheus/procfs v0.21.1
+go: downloading google.golang.org/protobuf v1.36.11
+go: downloading github.com/google/uuid v1.6.0
+go: downloading github.com/klauspost/cpuid/v2 v2.4.0
+go: downloading github.com/clipperhouse/uax29/v2 v2.7.0
+go: downloading github.com/mattn/go-isatty v0.0.23
+go: downloading github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822
+  arm64-v8a rclone: 21638080 bytes, sha256=1db1b5e859edc16ef074e14e980e338b4bbfa8503bce369fc52b5b3f083ef72e
+  x86_64 rclone: 23213376 bytes, sha256=7576dd530ebee374ec12ff315929190485757cb47df70df6ee85420c7efb976d
+  arm64-v8a guardian: 14912 bytes, sha256=2fcc818aa81d0c470ceb632022c924481cee63feef86521d16404856a73f7253
+  x86_64 guardian: 14616 bytes, sha256=b12ecb82d6c7b695a74ef4f9ad131a6d50fa9cd8597c8d8111ce5ec480ce1d28
+all modules verified
+Target license inventory: evidence-collected-review-required
+{"candidateFiles": 76, "missingLicenseEvidence": [], "moduleCount": 52, "targets": [{"abi": "arm64-v8a", "packageCount": 473}, {"abi": "x86_64", "packageCount": 474}]}
+GO_MODULE_EVIDENCE {"candidateCount":1,"candidatesSHA256":"353d12eeeedd927fa10d9ec81d724c4f08699fa66f8af7273c11c73d65a1bdd7","moduleSum":"h1:l+FM/EEMb0U9QZE7mKNEDw5Mu3mFiaa2GKOoTSsNDPw=","path":"github.com/Azure/go-ntlmssp","targets":["arm64-v8a","x86_64"],"version":"v0.1.1"}
+GO_MODULE_EVIDENCE {"candidateCount":1,"candidatesSHA256":"cd33ff269330386dfcf42a990169d40a71a4883f8bf2aab4a68c0149e5fa8305","moduleSum":"h1:nzE1YQBdx1bq9IlZinHa+HVffy+NmVRoKr+wHN8fpLE=","path":"github.com/Max-Sum/base32768","targets":["arm64-v8a","x86_64"],"version":"v0.0.0-20230304063302-18e6ce5945fd"}
+GO_MODULE_EVIDENCE {"candidateCount":1,"candidatesSHA256":"1c526f73b6ea5fecf6151bec9e56303470575554a42a7ea381dcd2e1b1efea5c","moduleSum":"h1:MABHLcnjqsffb8GLkUFDigqpBBxOMz0DoKM9QfELeTw=","path":"github.com/aalpar/deheap","targets":["arm64-v8a","x86_64"],"version":"v1.1.2"}
+GO_MODULE_EVIDENCE {"candidateCount":1,"candidatesSHA256":"bdbda9e744df2c0e8e743398ac8978e4e1fe3e3e63fe4e935d947508237644ec","moduleSum":"h1:QjmvZ5gSC7jm3Zg54DqWE/T5m1t2AfDu6QlXJT0EVT0=","path":"github.com/abbot/go-http-auth","targets":["arm64-v8a","x86_64"],"version":"v0.4.0"}
+GO_MODULE_EVIDENCE {"candidateCount":1,"candidatesSHA256":"6a87d1f54997f0a079debb54d130da4f5e3267d8705ac0a43bdc8e3e6f619dd1","moduleSum":"h1:xRnxJXne7+oWDatRhR1JLnvuccuIeCoBu2rtuLqQB78=","path":"github.com/adrg/xdg","targets":["arm64-v8a","x86_64"],"version":"v0.5.3"}
+GO_MODULE_EVIDENCE {"candidateCount":1,"candidatesSHA256":"4fe6f8056dc6df01846fdf00c762e2e0238a262d6fd3d5b46304b6eea5afb26c","moduleSum":"h1:VlbKKnNfV8bJzeqoa4cOKqO6bYr3WgKZxO8Z16+hsOM=","path":"github.com/beorn7/perks","targets":["arm64-v8a","x86_64"],"version":"v1.0.1"}
+GO_MODULE_EVIDENCE {"candidateCount":1,"candidatesSHA256":"e1cd0c5a757dd118528e055109616272864473c652ea83ee2355e7b88d3a2236","moduleSum":"h1:UL815xU9SqsFlibzuggzjXhog7bL6oX9BbNZnL2UFvs=","path":"github.com/cespare/xxhash/v2","targets":["arm64-v8a","x86_64"],"version":"v2.3.0"}
+GO_MODULE_EVIDENCE {"candidateCount":1,"candidatesSHA256":"65b2ef88c7a1795266acd14c3787809eea5405602c25ed9b44f6b142de149b21","moduleSum":"h1:+gs4oBZ2gPfVrKPthwbMzWZDaAFPGYK72F0NJv2v7Vk=","path":"github.com/clipperhouse/uax29/v2","targets":["arm64-v8a","x86_64"],"version":"v2.7.0"}
+GO_MODULE_EVIDENCE {"candidateCount":2,"candidatesSHA256":"8f8ef11aae1acc13a58b958f15553eabc5242f1570858a473c333dc0a0b7bdaf","moduleSum":"h1:yi21YpKnrx1gt5R+la8n5WgS0kCrsPp33dmEyHReZr4=","path":"github.com/coreos/go-semver","targets":["arm64-v8a","x86_64"],"version":"v0.3.1"}
+GO_MODULE_EVIDENCE {"candidateCount":2,"candidatesSHA256":"09a7d7e0bc5f8ce334c864fd2a11da93c1577f4b5d8787f208a14f56f3f04948","moduleSum":"h1:aGVa/v8B7hpb0TKl0MWoAavPDmHvobFe5R5zn0bCJWo=","path":"github.com/coreos/go-systemd/v22","targets":["arm64-v8a","x86_64"],"version":"v22.6.0"}
+GO_MODULE_EVIDENCE {"candidateCount":1,"candidatesSHA256":"7c696181fa8100365fbd1d24d1e45f6104c656b71925da9d0e11fcc3b7e57ef3","moduleSum":"h1:3j4HZLGZQ3JpMCrPJF/Jl3mYJfWLKBfNJ6quurUGCf8=","path":"github.com/go-chi/chi/v5","targets":["arm64-v8a","x86_64"],"version":"v5.3.1"}
+GO_MODULE_EVIDENCE {"candidateCount":1,"candidatesSHA256":"7f59b32a799c4af79993143cc1bbbcfdecc90c995ca0cb5fe2786da7962215b9","moduleSum":"h1:jItGXszUDRtR/AlferWPTMN4j38BQ88XnXKbilmmBPA=","path":"github.com/go-git/go-billy/v5","targets":["arm64-v8a","x86_64"],"version":"v5.9.0"}
+GO_MODULE_EVIDENCE {"candidateCount":1,"candidatesSHA256":"6e05a0b397378a0ce102ad88d1df8f365cfd0a619a3fea780d3ced0d031e0be1","moduleSum":"h1:NIvaJDMOsjHA8n1jAhLSgzrAzy1Hgr+hNrb57e+94F0=","path":"github.com/google/uuid","targets":["arm64-v8a","x86_64"],"version":"v1.6.0"}
+GO_MODULE_EVIDENCE {"candidateCount":1,"candidatesSHA256":"85e059a2912de7288dfc66fa811e6b46a94a564abca119abe4ace65ca875f149","moduleSum":"h1:G+9t9cEtnC9jFiTxyptEKuNIAbiN5ZCQzX2a74lj3xg=","path":"github.com/jzelinskie/whirlpool","targets":["arm64-v8a","x86_64"],"version":"v0.0.0-20201016144138-0675e54bb004"}
+GO_MODULE_EVIDENCE {"candidateCount":1,"candidatesSHA256":"5a764905ccb76bcc2ef2e6f7e200defb19a81aa61ae6ba743a3317533c199bd6","moduleSum":"h1:S6Hrbc7+ywsr0r+RLapfGBHfyefhCTwEh3A0tV913Dw=","path":"github.com/klauspost/cpuid/v2","targets":["arm64-v8a","x86_64"],"version":"v2.4.0"}
+GO_MODULE_EVIDENCE {"candidateCount":1,"candidatesSHA256":"8ef5c4aeb9748ff9fe6855fc934d04e2d913441603ab8025beccb0689cf4c72f","moduleSum":"h1:Jskdu9ieNAYnjxsi0LbQp1ulIKZV1LAFgK1tWhpZgl8=","path":"github.com/kr/fs","targets":["arm64-v8a","x86_64"],"version":"v0.1.0"}
+GO_MODULE_EVIDENCE {"candidateCount":1,"candidatesSHA256":"859dfe78e96ca6c99cbab329fd85fa62a40cde89b7b6b6db0630f29b249a583f","moduleSum":"h1:akbLIdo4PhNZtvjpaWnbXtGMmLtnGzXplkzfgl+XTTY=","path":"github.com/lanrat/extsort","targets":["arm64-v8a","x86_64"],"version":"v1.4.2"}
+GO_MODULE_EVIDENCE {"candidateCount":1,"candidatesSHA256":"368ebddf17ad700b286371066d10ce45920aa2cc500b22c14581d58ca239cc7e","moduleSum":"h1:+u9SLTRGnXv73cEsnsmoZBom+dMU88B2M0aDcWy0/jY=","path":"github.com/mattn/go-colorable","targets":["arm64-v8a","x86_64"],"version":"v0.1.15"}
+GO_MODULE_EVIDENCE {"candidateCount":1,"candidatesSHA256":"098caebc353951adeab18f2a66c012d38177e9f6db380735d354b74dfc6f042f","moduleSum":"h1:cYwCQTQf3HB6xUC+BtyCLZNr7IzbOmoZbmssVNzSyiQ=","path":"github.com/mattn/go-isatty","targets":["arm64-v8a","x86_64"],"version":"v0.0.23"}
+GO_MODULE_EVIDENCE {"candidateCount":1,"candidatesSHA256":"368ebddf17ad700b286371066d10ce45920aa2cc500b22c14581d58ca239cc7e","moduleSum":"h1:cpokDiIn0MGnhdHwuWnJBITySJ20QyNGnY2kR/ay2DU=","path":"github.com/mattn/go-runewidth","targets":["arm64-v8a","x86_64"],"version":"v0.0.24"}
+GO_MODULE_EVIDENCE {"candidateCount":1,"candidatesSHA256":"4637f6ba167f7c2519b98340dd8dd51a574b94b929e12df4e4a0543f01123ce9","moduleSum":"h1:lukF9ziXFxDFPkA1vsr5zpc1XuPDn/wFntq5mG+4E0Y=","path":"github.com/mitchellh/go-homedir","targets":["arm64-v8a","x86_64"],"version":"v1.1.0"}
+GO_MODULE_EVIDENCE {"candidateCount":1,"candidatesSHA256":"fcb5a1b89cc56342a04d277f941bcd5be7f2c5c424710c7b15d90d7edc368676","moduleSum":"h1:C3w9PqII01/Oq1c1nUAm88MOHcQC9l5mIlSMApZMrHA=","path":"github.com/munnerz/goautoneg","targets":["arm64-v8a","x86_64"],"version":"v0.0.0-20191010083416-a7dc8b61c822"}
+GO_MODULE_EVIDENCE {"candidateCount":1,"candidatesSHA256":"abe71a9eb8469ce7121e2a0f78dfa4471b42f84a7a7279a0a41205dbc4de54ad","moduleSum":"h1:aJ4AOodmL+JxOZZEL2u9iJf8omNRpqHc/EbrK+3mAXw=","path":"github.com/peterh/liner","targets":["arm64-v8a","x86_64"],"version":"v1.2.2"}
+GO_MODULE_EVIDENCE {"candidateCount":1,"candidatesSHA256":"fd99798f0b8ae585c61a99a19f4b1e25adaf36595b71f7408f8496c4c3f194c4","moduleSum":"h1:0N92SLTB8JqASJB14ZLHHzFnBV8mG9zw4K7jghEFWuE=","path":"github.com/pkg/sftp","targets":["arm64-v8a","x86_64"],"version":"v1.13.11"}
+GO_MODULE_EVIDENCE {"candidateCount":1,"candidatesSHA256":"57a2e83484f780eaad3a04afda3be992d4add25eb05bb02cd6b16ce0eccb4810","moduleSum":"h1:rRTkSyFNTRElv6pkA3zpjHpQ90p/OdHQC1GmGh1aTjM=","path":"github.com/pkg/xattr","targets":["arm64-v8a","x86_64"],"version":"v0.4.12"}
+GO_MODULE_EVIDENCE {"candidateCount":3,"candidatesSHA256":"4de39853d683eea281fc3951a0242ca63349336a9f52b07fc0027773539df3f0","moduleSum":"h1:Je96obch5RDVy3FDMndoUsjAhG5Edi49h0RJWRi/o0o=","path":"github.com/prometheus/client_golang","targets":["arm64-v8a","x86_64"],"version":"v1.23.2"}
+GO_MODULE_EVIDENCE {"candidateCount":2,"candidatesSHA256":"bf784278130d6e2dc4f463a0cb0b5a33edfc63a9415fde21821a670ea393dc83","moduleSum":"h1:oBsgwpGs7iVziMvrGhE53c/GrLUsZdHnqNwqPLxwZyk=","path":"github.com/prometheus/client_model","targets":["arm64-v8a","x86_64"],"version":"v0.6.2"}
+GO_MODULE_EVIDENCE {"candidateCount":2,"candidatesSHA256":"f7e02137e9d42f37802dace7a4a6075d93ed3ded683e409f85d12f73f6df4e1e","moduleSum":"h1:bcpru3tWPVnxGnETLgOV5jbp/JRXgYEyv65CuBLAMMI=","path":"github.com/prometheus/common","targets":["arm64-v8a","x86_64"],"version":"v0.70.0"}
+GO_MODULE_EVIDENCE {"candidateCount":2,"candidatesSHA256":"10171795ffe608b371e628ecb5ca5af2dcf506e85dae1e7e7f09eb1e00c6db15","moduleSum":"h1:GljZCt+zSTS+NZq88cyQ1LjZ+RCHp3uVuabBWA5+OJI=","path":"github.com/prometheus/procfs","targets":["arm64-v8a","x86_64"],"version":"v0.21.1"}
+GO_MODULE_EVIDENCE {"candidateCount":6,"candidatesSHA256":"ced6c329a1c8baca10d7b09c3128bf904ed6a0a63322ea7e7518844c927b99e7","moduleSum":"h1:kIxQcoDLj2Gke/gMSHK7OnxhX1Gu1cJBLP1kJZoaFp0=","path":"github.com/rclone/rclone","targets":["arm64-v8a","x86_64"],"version":"v1.75.1"}
+GO_MODULE_EVIDENCE {"candidateCount":1,"candidatesSHA256":"e963a5910cf564e81b12b154f6da2a730df15471ade3022768038812aa6ffe07","moduleSum":"h1:8dAHL+WVAw06+7DkRKnRiFp1JL3QjcJEZFqDnndUaSI=","path":"github.com/rfjakob/eme","targets":["arm64-v8a","x86_64"],"version":"v1.2.0"}
+GO_MODULE_EVIDENCE {"candidateCount":1,"candidatesSHA256":"b5cdcbe7df69d2cdc15aa8d5d23e45d751a6f9cd0c77b7a1411b4be969f0d2bc","moduleSum":"h1:Mzr/npDtQC/xpeEuQKHZt8Zo9CmPvhTj8nkR8w5TLDs=","path":"github.com/shirou/gopsutil/v4","targets":["arm64-v8a","x86_64"],"version":"v4.26.6"}
+GO_MODULE_EVIDENCE {"candidateCount":1,"candidatesSHA256":"ee0b1306e59425b7db5a9fe196053bc2720942ee43e0a4debaf31dd356398569","moduleSum":"h1:JIAuq3EEf9cgbU6AtGPK4CTG3Zf6CKMNqf0MHTggAUA=","path":"github.com/skratchdot/open-golang","targets":["arm64-v8a","x86_64"],"version":"v0.0.0-20200116055534-eef842397966"}
+GO_MODULE_EVIDENCE {"candidateCount":1,"candidatesSHA256":"19bd30cdf41ba8708e3db724981accdc64ae0c2146e8868fa4fcdad107be0fee","moduleSum":"h1:DMTTonx5m65Ic0GOoRY2c16WCbHxOOw6xxezuLaBpcU=","path":"github.com/spf13/cobra","targets":["arm64-v8a","x86_64"],"version":"v1.10.2"}
+GO_MODULE_EVIDENCE {"candidateCount":1,"candidatesSHA256":"c18dac39f602cde75d7a7856919df3e926dfe6ec32b767f0601df47d76638ee2","moduleSum":"h1:4EBh2KAYBwaONj6b2Ye1GiHfwjqyROoF4RwYO+vPwFk=","path":"github.com/spf13/pflag","targets":["arm64-v8a","x86_64"],"version":"v1.0.10"}
+GO_MODULE_EVIDENCE {"candidateCount":1,"candidatesSHA256":"2c02ae68c27d3e83c715bce8ec9edb5a3463696857aabcac9118808c55ef3126","moduleSum":null,"path":"github.com/thekozugroup/Covalent/packaging/rclone","targets":["arm64-v8a","x86_64"],"version":null}
+GO_MODULE_EVIDENCE {"candidateCount":1,"candidatesSHA256":"9f0ad165c30a32c7de62b61e1bcf0da7b6a6d57edec6d8a44adfd4a8acfbd74f","moduleSum":"h1:rS7O+CmUdli1T+oDm7fYj1MwqNWtEJfNj+FqcUHML8U=","path":"github.com/unknwon/goconfig","targets":["arm64-v8a","x86_64"],"version":"v1.0.0"}
+GO_MODULE_EVIDENCE {"candidateCount":1,"candidatesSHA256":"0b7de94524d78104e2bf070dd83b19f6d4254127ded3c6b32163b20327f35b3e","moduleSum":"h1:+/15pJfg/RsTxqYcX6fHqOXZwwMP+2VyYWJeWM2qQFM=","path":"github.com/xanzy/ssh-agent","targets":["arm64-v8a","x86_64"],"version":"v0.3.3"}
+GO_MODULE_EVIDENCE {"candidateCount":1,"candidatesSHA256":"cc6a1209a30a5d81d710fea3183fcc13024691eaef891b94550941f9783bde7a","moduleSum":"h1:ilQV1hzziu+LLM3zUTJ0trRztfwgjqKnBWNtSRkbmwM=","path":"github.com/youmark/pkcs8","targets":["arm64-v8a","x86_64"],"version":"v0.0.0-20240726163527-a2c0da244d78"}
+GO_MODULE_EVIDENCE {"candidateCount":1,"candidatesSHA256":"588ffe943fd21239c382647c0a6df78b6524ef5a0e975f5ac922f62552eca447","moduleSum":"h1:KYQPkhpRtcqh0ssGYcKLG1JYvddkEA8QwCM/yBqhaZI=","path":"github.com/zeebo/blake3","targets":["arm64-v8a","x86_64"],"version":"v0.2.4"}
+GO_MODULE_EVIDENCE {"candidateCount":1,"candidatesSHA256":"e1d54a2a2cbee988c50bde7f767952d7c7b5c9682024ba9043a11c8a52e4e4b1","moduleSum":"h1:s7DLGDK45Dyfg7++yxI0khrfwq9661w9EN78eP/UZVs=","path":"github.com/zeebo/xxh3","targets":["arm64-v8a","x86_64"],"version":"v1.1.0"}
+GO_MODULE_EVIDENCE {"candidateCount":2,"candidatesSHA256":"aac4a83b7bbc3dee52412914a28f05abbb7ae7c2696e9a56464703e9949a9515","moduleSum":"h1:3ZVCjf8Ggz7zneR/EHRVx68Ctf+2pmIMP2UFhh9cC6M=","path":"golang.org/x/crypto","targets":["arm64-v8a","x86_64"],"version":"v0.57.0"}
+GO_MODULE_EVIDENCE {"candidateCount":2,"candidatesSHA256":"aac4a83b7bbc3dee52412914a28f05abbb7ae7c2696e9a56464703e9949a9515","moduleSum":"h1:79p50tfZlm0J9YfoDsSi639qSXNGVwEzOPLCxM2FsYU=","path":"golang.org/x/net","targets":["arm64-v8a","x86_64"],"version":"v0.60.0"}
+GO_MODULE_EVIDENCE {"candidateCount":2,"candidatesSHA256":"aac4a83b7bbc3dee52412914a28f05abbb7ae7c2696e9a56464703e9949a9515","moduleSum":"h1:KameEIfc1IkluZyXWLn39Wd4tURc6GbCiISGiZm2bQk=","path":"golang.org/x/sync","targets":["arm64-v8a","x86_64"],"version":"v0.23.0"}
+GO_MODULE_EVIDENCE {"candidateCount":2,"candidatesSHA256":"aac4a83b7bbc3dee52412914a28f05abbb7ae7c2696e9a56464703e9949a9515","moduleSum":"h1:bbX/i/6MgT9BVLM9RT1thmxL04yeTAhbEz4SyadbXoo=","path":"golang.org/x/sys","targets":["arm64-v8a","x86_64"],"version":"v0.48.0"}
+GO_MODULE_EVIDENCE {"candidateCount":2,"candidatesSHA256":"aac4a83b7bbc3dee52412914a28f05abbb7ae7c2696e9a56464703e9949a9515","moduleSum":"h1:3+OXuTbaKDgwk8jTi3aSLHRlmWqHEUDUtxnbFigO4YE=","path":"golang.org/x/term","targets":["arm64-v8a","x86_64"],"version":"v0.46.0"}
+GO_MODULE_EVIDENCE {"candidateCount":2,"candidatesSHA256":"aac4a83b7bbc3dee52412914a28f05abbb7ae7c2696e9a56464703e9949a9515","moduleSum":"h1:JbOZXgfeCPU9gacVtYliJqOhD+zhrEqK4LfdpmlUZqI=","path":"golang.org/x/text","targets":["arm64-v8a","x86_64"],"version":"v0.42.0"}
+GO_MODULE_EVIDENCE {"candidateCount":2,"candidatesSHA256":"aac4a83b7bbc3dee52412914a28f05abbb7ae7c2696e9a56464703e9949a9515","moduleSum":"h1:bbrp8t3bGUeFOx08pvsMYRTCVSMk89u4tKbNOZbp88U=","path":"golang.org/x/time","targets":["arm64-v8a","x86_64"],"version":"v0.15.0"}
+GO_MODULE_EVIDENCE {"candidateCount":2,"candidatesSHA256":"a13dffaa20efc3996db3166d4fab97856a557aa5c09b76f84e2f589cb7d34990","moduleSum":"h1:fV6ZwhNocDyBLK0dj+fg8ektcVegBBuEolpbTQyBNVE=","path":"google.golang.org/protobuf","targets":["arm64-v8a","x86_64"],"version":"v1.36.11"}
+GO_MODULE_EVIDENCE {"candidateCount":1,"candidatesSHA256":"e112d3bc2228e791ae316951267798ca50d7a32f5ced1ca3daa534959923720c","moduleSum":"h1:bBRl1b0OH9s/DuPhuXpNl+VtCaJXFZ5/uEFST95x9zc=","path":"gopkg.in/natefinch/lumberjack.v2","targets":["arm64-v8a","x86_64"],"version":"v2.2.1"}
+GO_MODULE_EVIDENCE {"candidateCount":2,"candidatesSHA256":"120434942176cc6262153e2fac83492b65d2792f686999a0fbdde2f74b64ce1d","moduleSum":"h1:fxVm/GzAzEWqLHuvctI91KS9hhNmmWOoWu0XTYJS7CA=","path":"gopkg.in/yaml.v3","targets":["arm64-v8a","x86_64"],"version":"v3.0.1"}
+GO_MODULE_EVIDENCE {"candidateCount":4,"candidatesSHA256":"cfb8118a901044eb4c2d1ca52d15ce82ae1ff44d9b0aba6099457a2c11ec42d9","moduleSum":"h1:9r3JfDzWPcbIklMOs2TnIFzDYvfAZvjeavG6EzP7jYs=","path":"moul.io/http2curl/v2","targets":["arm64-v8a","x86_64"],"version":"v2.3.0"}
+GO_INVENTORY_EVIDENCE {"inventoryBytes":51546,"inventorySHA256":"b6c3c3082cd260c9c5c74fc543b12b6fd78a676ae04d3a5b6d6d4910cbee6abd","moduleCount":52,"printedModules":52,"truncated":false}
+{"bytes": 3277158, "correspondingSources": 0, "files": 92, "modules": 52, "status": "texts-collected-review-required"}
+  Android target notices: 1632636 bytes, sha256=fd070d818cee97b982d234ebf8903d6f16d5632dc9a20ff678c34bb0b661e785
+
+> Task :app:preBuild
+> Task :app:preDebugBuild
+> Task :app:generateDebugBuildConfig FROM-CACHE
+> Task :app:generateDebugResources UP-TO-DATE
+> Task :app:packageDebugResources UP-TO-DATE
+> Task :app:processDebugNavigationResources UP-TO-DATE
+> Task :app:parseDebugLocalResources UP-TO-DATE
+> Task :app:generateDebugRFile UP-TO-DATE
+> Task :app:javaPreCompileDebug UP-TO-DATE
+> Task :app:checkDebugAarMetadata UP-TO-DATE
+> Task :app:mapDebugSourceSetPaths UP-TO-DATE
+> Task :app:compileDebugNavigationResources UP-TO-DATE
+> Task :app:mergeDebugResources UP-TO-DATE
+> Task :app:createDebugCompatibleScreenManifests UP-TO-DATE
+> Task :app:extractDeepLinksDebug UP-TO-DATE
+> Task :app:processDebugMainManifest UP-TO-DATE
+> Task :app:processDebugManifest UP-TO-DATE
+> Task :app:processDebugManifestForPackage UP-TO-DATE
+> Task :app:processDebugResources UP-TO-DATE
+> Task :app:preDebugUnitTestBuild
+> Task :app:javaPreCompileDebugUnitTest UP-TO-DATE
+> Task :app:generateDebugAssets UP-TO-DATE
+> Task :app:mergeDebugAssets UP-TO-DATE
+> Task :app:packageDebugUnitTestForUnitTest UP-TO-DATE
+> Task :app:processDebugUnitTestManifest UP-TO-DATE
+> Task :app:generateDebugUnitTestConfig UP-TO-DATE
+> Task :app:preDebugAndroidTestBuild SKIPPED
+> Task :app:extractProguardFiles UP-TO-DATE
+> Task :app:mergeDebugNativeDebugMetadata NO-SOURCE
+> Task :app:compressDebugAssets UP-TO-DATE
+> Task :app:generateDebugGlobalSynthetics UP-TO-DATE
+> Task :app:checkDebugDuplicateClasses UP-TO-DATE
+> Task :app:desugarDebugFileDependencies UP-TO-DATE
+> Task :app:mergeExtDexDebug UP-TO-DATE
+> Task :app:mergeLibDexDebug UP-TO-DATE
+> Task :app:mergeDebugJniLibFolders
+> Task :app:mergeDebugNativeLibs UP-TO-DATE
+> Task :app:stripDebugDebugSymbols UP-TO-DATE
+> Task :app:validateSigningDebug UP-TO-DATE
+> Task :app:writeDebugAppMetadata UP-TO-DATE
+> Task :app:writeDebugSigningConfigVersions UP-TO-DATE
+> Task :app:processDebugAndroidTestManifest UP-TO-DATE
+> Task :app:generateDebugAndroidTestBuildConfig FROM-CACHE
+> Task :app:generateDebugAndroidTestResources UP-TO-DATE
+> Task :app:packageDebugAndroidTestResources UP-TO-DATE
+> Task :app:processDebugAndroidTestNavigationResources UP-TO-DATE
+> Task :app:parseDebugAndroidTestLocalResources UP-TO-DATE
+> Task :app:generateDebugAndroidTestRFile UP-TO-DATE
+> Task :app:javaPreCompileDebugAndroidTest UP-TO-DATE
+> Task :app:generateDebugAndroidTestAssets UP-TO-DATE
+> Task :app:mergeDebugAndroidTestAssets UP-TO-DATE
+> Task :app:compressDebugAndroidTestAssets UP-TO-DATE
+> Task :app:generateDebugAndroidTestGlobalSynthetics UP-TO-DATE
+> Task :app:checkDebugAndroidTestDuplicateClasses UP-TO-DATE
+> Task :app:desugarDebugAndroidTestFileDependencies UP-TO-DATE
+> Task :app:mergeExtDexDebugAndroidTest UP-TO-DATE
+> Task :app:mergeLibDexDebugAndroidTest UP-TO-DATE
+> Task :app:checkDebugAndroidTestAarMetadata UP-TO-DATE
+> Task :app:mapDebugAndroidTestSourceSetPaths UP-TO-DATE
+> Task :app:compileDebugAndroidTestNavigationResources UP-TO-DATE
+> Task :app:mergeDebugAndroidTestResources UP-TO-DATE
+> Task :app:processDebugAndroidTestResources UP-TO-DATE
+> Task :app:mergeDebugAndroidTestJniLibFolders UP-TO-DATE
+> Task :app:mergeDebugAndroidTestNativeLibs NO-SOURCE
+> Task :app:stripDebugAndroidTestDebugSymbols NO-SOURCE
+> Task :app:validateSigningDebugAndroidTest UP-TO-DATE
+> Task :app:writeDebugAndroidTestSigningConfigVersions UP-TO-DATE
+> Task :companion:preBuild
+> Task :companion:preDebugBuild
+> Task :companion:generateDebugBuildConfig UP-TO-DATE
+> Task :companion:generateDebugResources UP-TO-DATE
+> Task :companion:packageDebugResources UP-TO-DATE
+> Task :companion:processDebugNavigationResources UP-TO-DATE
+> Task :companion:parseDebugLocalResources UP-TO-DATE
+> Task :companion:generateDebugRFile UP-TO-DATE
+> Task :companion:compileDebugKotlin UP-TO-DATE
+> Task :companion:javaPreCompileDebug UP-TO-DATE
+> Task :companion:compileDebugJavaWithJavac UP-TO-DATE
+> Task :companion:checkDebugAarMetadata UP-TO-DATE
+> Task :companion:mapDebugSourceSetPaths UP-TO-DATE
+> Task :companion:compileDebugNavigationResources UP-TO-DATE
+> Task :companion:mergeDebugResources UP-TO-DATE
+> Task :companion:createDebugCompatibleScreenManifests UP-TO-DATE
+> Task :companion:extractDeepLinksDebug UP-TO-DATE
+> Task :companion:processDebugMainManifest UP-TO-DATE
+> Task :companion:processDebugManifest UP-TO-DATE
+> Task :companion:processDebugManifestForPackage UP-TO-DATE
+> Task :companion:processDebugResources UP-TO-DATE
+> Task :companion:bundleDebugClassesToCompileJar UP-TO-DATE
+> Task :companion:preDebugAndroidTestBuild SKIPPED
+> Task :companion:generateDebugAndroidTestLintModel UP-TO-DATE
+> Task :companion:extractProguardFiles UP-TO-DATE
+> Task :companion:generateDebugLintReportModel UP-TO-DATE
+> Task :companion:preDebugUnitTestBuild
+> Task :companion:generateDebugUnitTestLintModel UP-TO-DATE
+> Task :companion:lintAnalyzeDebug UP-TO-DATE
+> Task :companion:lintAnalyzeDebugAndroidTest UP-TO-DATE
+> Task :companion:lintAnalyzeDebugUnitTest UP-TO-DATE
+> Task :companion:lintReportDebug UP-TO-DATE
+> Task :companion:lintDebug
+> Task :companion:mergeDebugNativeDebugMetadata NO-SOURCE
+> Task :companion:generateDebugAssets UP-TO-DATE
+> Task :companion:mergeDebugAssets UP-TO-DATE
+> Task :companion:compressDebugAssets UP-TO-DATE
+> Task :companion:generateDebugGlobalSynthetics UP-TO-DATE
+> Task :companion:processDebugJavaRes UP-TO-DATE
+> Task :companion:mergeDebugJavaResource UP-TO-DATE
+> Task :companion:checkDebugDuplicateClasses UP-TO-DATE
+> Task :companion:desugarDebugFileDependencies UP-TO-DATE
+> Task :companion:mergeExtDexDebug UP-TO-DATE
+> Task :companion:mergeLibDexDebug UP-TO-DATE
+> Task :companion:dexBuilderDebug UP-TO-DATE
+> Task :companion:mergeProjectDexDebug UP-TO-DATE
+> Task :companion:mergeDebugJniLibFolders
+> Task :companion:mergeDebugNativeLibs UP-TO-DATE
+> Task :companion:stripDebugDebugSymbols UP-TO-DATE
+> Task :companion:validateSigningDebug UP-TO-DATE
+> Task :companion:writeDebugAppMetadata UP-TO-DATE
+> Task :companion:writeDebugSigningConfigVersions UP-TO-DATE
+> Task :companion:packageDebug UP-TO-DATE
+> Task :companion:createDebugApkListingFileRedirect UP-TO-DATE
+> Task :companion:assembleDebug UP-TO-DATE
+> Task :app:compileDebugKotlin
+> Task :app:compileDebugJavaWithJavac
+> Task :app:bundleDebugClassesToRuntimeJar
+> Task :app:bundleDebugClassesToCompileJar
+> Task :app:processDebugJavaRes UP-TO-DATE
+> Task :app:generateDebugAndroidTestLintModel
+> Task :app:generateDebugLintReportModel
+> Task :app:generateDebugUnitTestLintModel
+> Task :app:compileDebugUnitTestKotlin
+> Task :app:compileDebugUnitTestJavaWithJavac NO-SOURCE
+> Task :app:processDebugUnitTestJavaRes UP-TO-DATE
+> Task :app:testDebugUnitTest
+> Task :app:lintAnalyzeDebugAndroidTest
+> Task :app:lintAnalyzeDebugUnitTest
+> Task :app:mergeDebugJavaResource UP-TO-DATE
+> Task :app:dexBuilderDebug
+> Task :app:mergeProjectDexDebug
+> Task :app:packageDebug
+> Task :app:createDebugApkListingFileRedirect UP-TO-DATE
+> Task :app:assembleDebug
+> Task :app:compileDebugAndroidTestKotlin
+> Task :app:compileDebugAndroidTestJavaWithJavac
+> Task :app:processDebugAndroidTestJavaRes UP-TO-DATE
+> Task :app:mergeDebugAndroidTestJavaResource UP-TO-DATE
+> Task :app:dexBuilderDebugAndroidTest FROM-CACHE
+> Task :app:mergeProjectDexDebugAndroidTest FROM-CACHE
+> Task :app:packageDebugAndroidTest
+> Task :app:createDebugAndroidTestApkListingFileRedirect UP-TO-DATE
+> Task :app:assembleDebugAndroidTest
+> Task :app:lintAnalyzeDebug
+> Task :app:lintReportDebug UP-TO-DATE
+> Task :app:lintDebug
+
+[Incubating] Problems report is available at: file:///Users/michaelwong/Developer/Covalent/apps/android/build/reports/problems/problems-report.html
+
+Deprecated Gradle features were used in this build, making it incompatible with Gradle 10.
+
+You can use '--warning-mode all' to show the individual deprecation warnings and determine if they come from your own scripts or plugins.
+
+For more on this, please refer to https://docs.gradle.org/9.7.1/userguide/command_line_interface.html#sec:command_line_warnings in the Gradle documentation.
+
+BUILD SUCCESSFUL in 1m 14s
+137 actionable tasks: 24 executed, 4 from cache, 109 up-to-date

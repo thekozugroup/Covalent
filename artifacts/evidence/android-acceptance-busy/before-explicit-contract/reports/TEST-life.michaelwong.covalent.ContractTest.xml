@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="life.michaelwong.covalent.ContractTest" tests="8" skipped="0" failures="0" errors="0" timestamp="2026-10-21T15:51:36.090Z" hostname="MacBookPro" time="0.014">
+  <properties/>
+  <testcase name="pairingInvitationUsesLiteralAsciiInput" classname="life.michaelwong.covalent.ContractTest" time="0.0"/>
+  <testcase name="systemBackReturnsEverySecondaryScreenHome" classname="life.michaelwong.covalent.ContractTest" time="0.0"/>
+  <testcase name="api37UsesUserInitiatedJobInsteadOfForegroundWorker" classname="life.michaelwong.covalent.ContractTest" time="0.0"/>
+  <testcase name="primaryToolbarHasOnlyLockedScopeActions" classname="life.michaelwong.covalent.ContractTest" time="0.001"/>
+  <testcase name="tierOneIsReleaseBlockingAndroidPolicy" classname="life.michaelwong.covalent.ContractTest" time="0.0"/>
+  <testcase name="authenticationFailureReturnsToSetupButOfflineFailureDoesNot" classname="life.michaelwong.covalent.ContractTest" time="0.0"/>
+  <testcase name="startupRefreshNeverRunsOnTheUiDispatcher" classname="life.michaelwong.covalent.ContractTest" time="0.008"/>
+  <testcase name="sharedGoldenContractsMatchAndroidEnumsAndProtocol" classname="life.michaelwong.covalent.ContractTest" time="0.003"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

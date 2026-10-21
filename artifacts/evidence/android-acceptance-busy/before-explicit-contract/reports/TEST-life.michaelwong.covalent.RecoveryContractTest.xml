@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="life.michaelwong.covalent.RecoveryContractTest" tests="8" skipped="0" failures="0" errors="0" timestamp="2026-10-21T15:51:36.186Z" hostname="MacBookPro" time="0.082">
+  <properties/>
+  <testcase name="recoveryExportUsesConfirmedEndpointAndClearsOwnedMaterial" classname="life.michaelwong.covalent.RecoveryContractTest" time="0.008"/>
+  <testcase name="recoveryStatusRejectsForeignProvidersAndContradictorySuccess" classname="life.michaelwong.covalent.RecoveryContractTest" time="0.032"/>
+  <testcase name="partialExportRetryKeepsOnlyTheStillNeededEncryptedKit" classname="life.michaelwong.covalent.RecoveryContractTest" time="0.002"/>
+  <testcase name="recoveryCodeFileAcceptsCanonicalCodeAndRejectsPasswords" classname="life.michaelwong.covalent.RecoveryContractTest" time="0.001"/>
+  <testcase name="recoveryStatusIsStrictAndRetryUsesConfirmation" classname="life.michaelwong.covalent.RecoveryContractTest" time="0.015"/>
+  <testcase name="recoveryExportRejectsUnknownFieldsAndMalformedCode" classname="life.michaelwong.covalent.RecoveryContractTest" time="0.021"/>
+  <testcase name="serviceHandoffIsSingleUseAndPendingCancellationClearsSecrets" classname="life.michaelwong.covalent.RecoveryContractTest" time="0.001"/>
+  <testcase name="boundedReadsAndVerifiedWritesFailClosedOnTruncation" classname="life.michaelwong.covalent.RecoveryContractTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

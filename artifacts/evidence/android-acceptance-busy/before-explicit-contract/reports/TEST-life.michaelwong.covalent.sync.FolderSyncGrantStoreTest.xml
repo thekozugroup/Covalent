@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="life.michaelwong.covalent.sync.FolderSyncGrantStoreTest" tests="13" skipped="0" failures="0" errors="0" timestamp="2026-10-21T15:51:36.899Z" hostname="MacBookPro" time="0.006">
+  <properties/>
+  <testcase name="pendingOfferRemovalRequiresAnExactPeerFolderAndLabel" classname="life.michaelwong.covalent.sync.FolderSyncGrantStoreTest" time="0.001"/>
+  <testcase name="acceptanceRetryCannotOverwriteOriginalChoiceOrPendingRepairOrRemoval" classname="life.michaelwong.covalent.sync.FolderSyncGrantStoreTest" time="0.001"/>
+  <testcase name="repairKeepsAcknowledgedRootUntilAckAndExactPendingChoiceSurvivesReopen" classname="life.michaelwong.covalent.sync.FolderSyncGrantStoreTest" time="0.0"/>
+  <testcase name="failedDurablePrepareLeavesThePreviousCapabilityBytesUnchanged" classname="life.michaelwong.covalent.sync.FolderSyncGrantStoreTest" time="0.0"/>
+  <testcase name="absentRowsNeverDropChoicesAndAmbiguousRenewalsNeverWrite" classname="life.michaelwong.covalent.sync.FolderSyncGrantStoreTest" time="0.0"/>
+  <testcase name="oneSourceFolderRetainsASeparateGrantForEachDestination" classname="life.michaelwong.covalent.sync.FolderSyncGrantStoreTest" time="0.001"/>
+  <testcase name="renewedSenderBindingSurvivesReopenAndFailedSaveRetainsExactOriginal" classname="life.michaelwong.covalent.sync.FolderSyncGrantStoreTest" time="0.0"/>
+  <testcase name="unacceptedInvitationRemovalDoesNotRequireOrInventAFolderCapability" classname="life.michaelwong.covalent.sync.FolderSyncGrantStoreTest" time="0.0"/>
+  <testcase name="versionOneChoicesRemainReadableAndUpgradeOnlyOnNextDurableMutation" classname="life.michaelwong.covalent.sync.FolderSyncGrantStoreTest" time="0.0"/>
+  <testcase name="recipientRenewalRetiresOldChoiceAndRequiresExplicitAcceptanceAgain" classname="life.michaelwong.covalent.sync.FolderSyncGrantStoreTest" time="0.001"/>
+  <testcase name="removalAfterMissedRenewalRetiresEitherSideAndRetriesFailedSave" classname="life.michaelwong.covalent.sync.FolderSyncGrantStoreTest" time="0.0"/>
+  <testcase name="removalTombstoneSurvivesReopenAndClearsTheCapabilityOnlyAfterAck" classname="life.michaelwong.covalent.sync.FolderSyncGrantStoreTest" time="0.0"/>
+  <testcase name="pendingOfferNeverRebindsToAnOfferIdAlreadyClaimedByAnotherGrant" classname="life.michaelwong.covalent.sync.FolderSyncGrantStoreTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

@@ -1,0 +1,10 @@
+{
+  "artifactId": 12356638446,
+  "runId": 39622053150,
+  "head": "69ff050eaac0cb2a896e6b281b6b71a095b1ea33",
+  "merge": "874e235442e516f632d93d55d473186bded84aa4",
+  "zipBytes": 3481074,
+  "zipSha256": "df46c89ca30432165ed2428e05ee92123ef4d147984ae82bf7967e96ba61a7f5",
+  "files": 70,
+  "apiDigestMatched": true
+}

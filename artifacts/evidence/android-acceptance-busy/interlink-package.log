@@ -1,0 +1,4 @@
+  package:  67314363 bytes (budget 81305600)
+  arm64-v8a JNI library: 9873976 bytes (floor 4194304, budget 12517376)
+  x86_64 JNI library: 11628856 bytes (floor 4194304, budget 12517376)
+Android native package checks passed for apps/android/companion/build/outputs/apk/debug/companion-debug.apk.

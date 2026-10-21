@@ -22,14 +22,14 @@ class NativeDirectoryTests(unittest.TestCase):
         self.apk = pathlib.Path(self.directory.name) / "app.apk"
         self.create_apk()
 
-    def create_apk(self, tampered=False, manifest_override=None):
+    def create_apk(self, tampered=False, manifest_override=None, tampered_abi=None):
         with zipfile.ZipFile(self.apk, "w") as archive:
             for helper, manifest in module.HELPERS.items():
-                content = ("owned ELF fixture " + helper).encode()
-                digest = hashlib.sha256(content).hexdigest()
-                records = f"arm64-v8a {digest} {len(content)}\nx86_64 {digest} {len(content)}\n"
+                contents = {abi: ("owned ELF fixture " + helper + " " + abi).encode() for abi in module.ABI_DIRECTORIES}
+                records = "".join(f"{abi} {hashlib.sha256(content).hexdigest()} {len(content)}\n" for abi,content in contents.items())
                 archive.writestr("assets/" + manifest, manifest_override or records)
-                archive.writestr("lib/x86_64/" + helper, b"X" * len(content) if tampered else content)
+                for abi,content in contents.items():
+                    archive.writestr("lib/" + abi + "/" + helper, b"X" * len(content) if tampered or tampered_abi==abi else content)
 
     def test_actual_package_layouts_and_crlf_keep_exact_identity(self):
         before = self.apk.read_bytes()
@@ -56,6 +56,25 @@ class NativeDirectoryTests(unittest.TestCase):
         for value in invalid:
             with self.subTest(value=value[:150]), self.assertRaises(ValueError):
                 module.resolve(self.apk, value)
+
+    def test_arm64_selects_its_exact_bytes_and_installer_directory(self):
+        parent = "/data/app/life.michaelwong.covalent-1"
+        directory, hashes = module.resolve(self.apk, ("package:" + parent + "/base.apk\n").encode(), "arm64-v8a")
+        self.assertEqual(directory, parent + "/lib/arm64")
+        for helper,digest in hashes.items():
+            self.assertEqual(digest, hashlib.sha256(("owned ELF fixture " + helper + " arm64-v8a").encode()).hexdigest())
+
+    def test_other_abi_bytes_cannot_substitute_for_tampered_arm64(self):
+        self.create_apk(tampered_abi="arm64-v8a")
+        package=b"package:/data/app/life.michaelwong.covalent-1/base.apk\n"
+        module.resolve(self.apk, package)
+        with self.assertRaisesRegex(ValueError, "bytes differ"):
+            module.resolve(self.apk, package, "arm64-v8a")
+
+    def test_unknown_abi_or_path_fragment_is_refused(self):
+        for abi in ("", "armeabi-v7a", "arm64", "../x86_64", "x86_64/../arm64"):
+            with self.subTest(abi=abi),self.assertRaisesRegex(ValueError, "unsupported fixture ABI"):
+                module.resolve(self.apk, b"package:/data/app/life.michaelwong.covalent-1/base.apk\n", abi)
 
     def test_installed_hash_plan_rejects_tampered_apk_bytes(self):
         self.create_apk(tampered=True)

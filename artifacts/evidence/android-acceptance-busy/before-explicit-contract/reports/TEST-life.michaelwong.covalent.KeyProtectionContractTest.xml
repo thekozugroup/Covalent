@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="life.michaelwong.covalent.KeyProtectionContractTest" tests="13" skipped="0" failures="0" errors="0" timestamp="2026-10-21T15:51:36.151Z" hostname="MacBookPro" time="0.015">
+  <properties/>
+  <testcase name="kekIsCiphertextOnlyFailLockedAndZeroizedAcrossTheBoundary" classname="life.michaelwong.covalent.KeyProtectionContractTest" time="0.002"/>
+  <testcase name="theLocalApiTokenIsDrawnFromOneReusedCsprng" classname="life.michaelwong.covalent.KeyProtectionContractTest" time="0.001"/>
+  <testcase name="theDeprecatedSecureHardwareProbeIsStillTheOnlyOptionBelowApi31" classname="life.michaelwong.covalent.KeyProtectionContractTest" time="0.003"/>
+  <testcase name="productionStartsRetainTheSamePeerListenerAcrossNormalAndRecoveryLaunches" classname="life.michaelwong.covalent.KeyProtectionContractTest" time="0.001"/>
+  <testcase name="theSoftwareFallbackSaysItIsSoftwareAndPromisesNoHardware" classname="life.michaelwong.covalent.KeyProtectionContractTest" time="0.001"/>
+  <testcase name="theNativeRecoveryDescriptorCarriesRawKitAndKeyWithoutProcessArguments" classname="life.michaelwong.covalent.KeyProtectionContractTest" time="0.001"/>
+  <testcase name="everyProtectionLevelGetsItsOwnHonestSentence" classname="life.michaelwong.covalent.KeyProtectionContractTest" time="0.0"/>
+  <testcase name="rustNoLongerHardcodesWhetherProtectionIsAvailable" classname="life.michaelwong.covalent.KeyProtectionContractTest" time="0.0"/>
+  <testcase name="wireValuesArePinnedToTheirContractNumbers" classname="life.michaelwong.covalent.KeyProtectionContractTest" time="0.0"/>
+  <testcase name="legacyMigrationIsAtomicAndNeverTouchesExternalCredentials" classname="life.michaelwong.covalent.KeyProtectionContractTest" time="0.0"/>
+  <testcase name="rustDecodesTheSameWireValuesKotlinSends" classname="life.michaelwong.covalent.KeyProtectionContractTest" time="0.001"/>
+  <testcase name="theNativeStartDescriptorMatchesTheKotlinDeclaration" classname="life.michaelwong.covalent.KeyProtectionContractTest" time="0.002"/>
+  <testcase name="api37ProviderEnableAlwaysRequestsLanAndUsesTheConnectedDeviceServiceContract" classname="life.michaelwong.covalent.KeyProtectionContractTest" time="0.002"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

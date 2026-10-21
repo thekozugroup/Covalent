@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="life.michaelwong.covalent.sync.FolderSyncActionsTest" tests="15" skipped="0" failures="0" errors="0" timestamp="2026-10-21T16:08:05.085Z" hostname="MacBookPro" time="0.012">
+  <properties/>
+  <testcase name="startupCompletesRemovalInterruptedByTheClosingLocalRuntime" classname="life.michaelwong.covalent.sync.FolderSyncActionsTest" time="0.003"/>
+  <testcase name="startupDoesNotReplayAnInteractiveRemovalWhoseAcknowledgementIsInFlight" classname="life.michaelwong.covalent.sync.FolderSyncActionsTest" time="0.002"/>
+  <testcase name="acceptancePersistsDestinationBeforeNodeOrApiAndFailureLeavesItDurable" classname="life.michaelwong.covalent.sync.FolderSyncActionsTest" time="0.0"/>
+  <testcase name="failedRepairRetainsExactSavedRootAndRetryNeverUsesANewCallerValue" classname="life.michaelwong.covalent.sync.FolderSyncActionsTest" time="0.001"/>
+  <testcase name="repairValidatesAndPersistsPendingRootBeforeMutationThenAcknowledgesAndRestarts" classname="life.michaelwong.covalent.sync.FolderSyncActionsTest" time="0.0"/>
+  <testcase name="startupDoesNotReplayAnInteractiveRepairWhoseAcknowledgementIsInFlight" classname="life.michaelwong.covalent.sync.FolderSyncActionsTest" time="0.001"/>
+  <testcase name="removalTombstonePrecedesNodeAndIsClearedOnlyAfterExactAcknowledgement" classname="life.michaelwong.covalent.sync.FolderSyncActionsTest" time="0.0"/>
+  <testcase name="addressRefreshUsesTheExactCapturedRequestAndRequiresANonShareResponse" classname="life.michaelwong.covalent.sync.FolderSyncActionsTest" time="0.0"/>
+  <testcase name="startupReplaysInterruptedRepairUsingTheRegisteredRootAndFreshRuntime" classname="life.michaelwong.covalent.sync.FolderSyncActionsTest" time="0.002"/>
+  <testcase name="removalReplayRetainsTheTombstoneUntilExactAcknowledgementIsDurable" classname="life.michaelwong.covalent.sync.FolderSyncActionsTest" time="0.0"/>
+  <testcase name="persistenceFailurePreventsNodeResolutionAndNetworkMutation" classname="life.michaelwong.covalent.sync.FolderSyncActionsTest" time="0.001"/>
+  <testcase name="replayRetainsTheExactPendingChoiceUntilGrantAndAcknowledgementAreValidAndDurable" classname="life.michaelwong.covalent.sync.FolderSyncActionsTest" time="0.001"/>
+  <testcase name="renewalRequiresSavedSenderChoiceAndAcknowledgedReplacementRelationship" classname="life.michaelwong.covalent.sync.FolderSyncActionsTest" time="0.0"/>
+  <testcase name="addDestinationReusesTheSavedSourceIdentityAndPolicy" classname="life.michaelwong.covalent.sync.FolderSyncActionsTest" time="0.001"/>
+  <testcase name="offerPersistsFolderBeforeResolvingNodeOrCallingApi" classname="life.michaelwong.covalent.sync.FolderSyncActionsTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

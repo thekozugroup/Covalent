@@ -1,0 +1,16 @@
+{
+  "covalent": {
+    "packageExitCode": 0,
+    "signatureExitCode": 0,
+    "sha256": "41d00b5fc927d9fbe60d286336eec5bf8259df811880cc29d79dbda588576661",
+    "seconds": 0.663,
+    "productionSignerAccepted": false
+  },
+  "interlink": {
+    "packageExitCode": 0,
+    "signatureExitCode": 0,
+    "sha256": "c76d5b0e1e7c1386b13d1220addc468cdc24f6eeb01e07fab0291118a24794e9",
+    "seconds": 0.685,
+    "productionSignerAccepted": false
+  }
+}

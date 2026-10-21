@@ -1,0 +1,16 @@
+{
+  "format": 1,
+  "stopped": [
+    {
+      "pid": 76773,
+      "operation": "rg",
+      "cause": "owned read-only lookup blocked on offloaded files"
+    },
+    {
+      "pid": 77260,
+      "operation": "git",
+      "cause": "owned read-only lookup blocked on offloaded files"
+    }
+  ],
+  "deviceMutation": false
+}

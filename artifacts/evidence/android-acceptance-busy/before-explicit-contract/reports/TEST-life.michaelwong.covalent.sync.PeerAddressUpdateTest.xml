@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="life.michaelwong.covalent.sync.PeerAddressUpdateTest" tests="5" skipped="0" failures="0" errors="0" timestamp="2026-10-21T15:51:36.923Z" hostname="MacBookPro" time="0.015">
+  <properties/>
+  <testcase name="numericValidationRejectsHostnamesAmbiguousPortsAndControls" classname="life.michaelwong.covalent.sync.PeerAddressUpdateTest" time="0.0"/>
+  <testcase name="ambiguousFailureRetainsExactRequestWithoutRunningFollowUp" classname="life.michaelwong.covalent.sync.PeerAddressUpdateTest" time="0.002"/>
+  <testcase name="captureRejectsSameAddressAndNeverSilentlyNormalizesInput" classname="life.michaelwong.covalent.sync.PeerAddressUpdateTest" time="0.0"/>
+  <testcase name="awaitedFollowUpClearsStaleStateOnConflictAndSeparatesRefreshFailures" classname="life.michaelwong.covalent.sync.PeerAddressUpdateTest" time="0.013"/>
+  <testcase name="captureRetainsTheExactRequestAcrossRetryAndEditingInvalidatesIt" classname="life.michaelwong.covalent.sync.PeerAddressUpdateTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

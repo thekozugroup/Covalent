@@ -1,0 +1,28 @@
+{
+  "format": 1,
+  "serial": "emulator-5606",
+  "avd": "Interlink_Acceptance_API37",
+  "createdFresh": true,
+  "syntheticOnly": true,
+  "systemImage": "system-images;android-37.0;google_apis_playstore;arm64-v8a",
+  "launched": true,
+  "physicalDeviceTouched": false,
+  "launchIntent": true,
+  "command": [
+    "/Users/michaelwong/Library/Android/sdk/emulator/emulator",
+    "-avd",
+    "Interlink_Acceptance_API37",
+    "-port",
+    "5606",
+    "-no-snapshot",
+    "-no-boot-anim",
+    "-no-audio",
+    "-gpu",
+    "software",
+    "-memory",
+    "2048",
+    "-cores",
+    "2"
+  ],
+  "launcherPidInformational": 51640
+}

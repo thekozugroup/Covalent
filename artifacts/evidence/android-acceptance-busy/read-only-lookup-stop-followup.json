@@ -1,0 +1,8 @@
+{
+  "format": 1,
+  "stoppedPids": [
+    77259
+  ],
+  "operation": "Remaining owned read-only Git lookup on offloaded objects",
+  "deviceMutation": false
+}

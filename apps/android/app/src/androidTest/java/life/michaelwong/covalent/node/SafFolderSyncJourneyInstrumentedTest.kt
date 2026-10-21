@@ -1007,10 +1007,17 @@ class SafFolderSyncJourneyInstrumentedTest {
 
     private fun clickFolderChooser() {
         val target = compose.onNodeWithTag("folder-sync-choose-folder")
-        compose.onNodeWithTag("folder-sync-list").performScrollToNode(hasTestTag("folder-sync-choose-folder"))
-        target.performScrollTo()
         compose.waitUntil(timeoutMillis = DEFAULT_TIMEOUT_MILLIS) {
-            runCatching { target.assertIsEnabled(); true }.getOrDefault(false)
+            // Node readiness precedes the asynchronous status projection. Observe
+            // the real chooser before the one click; never replay picker input.
+            runCatching {
+                compose.onNodeWithTag("folder-sync-list")
+                    .performScrollToNode(hasTestTag("folder-sync-choose-folder"))
+                target.performScrollTo()
+                target.assertIsDisplayed()
+                target.assertIsEnabled()
+                true
+            }.getOrDefault(false)
         }
         target.performClick()
     }

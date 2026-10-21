@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="life.michaelwong.covalent.sync.SafStrictQueryTest" tests="9" skipped="0" failures="0" errors="0" timestamp="2026-10-21T15:51:36.939Z" hostname="MacBookPro" time="0.008">
+  <properties/>
+  <testcase name="cyclesAndRepeatedOpaqueIdsAreVisibleFailures" classname="life.michaelwong.covalent.sync.SafStrictQueryTest" time="0.002"/>
+  <testcase name="providerFailureAfterRowsDoesNotReturnAPartialInventory" classname="life.michaelwong.covalent.sync.SafStrictQueryTest" time="0.0"/>
+  <testcase name="stableMetadataKeepsOpaqueIdsAndDoesNotClaimContentProof" classname="life.michaelwong.covalent.sync.SafStrictQueryTest" time="0.001"/>
+  <testcase name="cancellationIsCheckedBeforeAndDuringEveryEntry" classname="life.michaelwong.covalent.sync.SafStrictQueryTest" time="0.001"/>
+  <testcase name="preliminaryPortableChecksAreConservativeAndVisible" classname="life.michaelwong.covalent.sync.SafStrictQueryTest" time="0.001"/>
+  <testcase name="partialAndVirtualDocumentsFailClosed" classname="life.michaelwong.covalent.sync.SafStrictQueryTest" time="0.0"/>
+  <testcase name="everyTraversalResourceLimitIsEnforcedBeforeAResult" classname="life.michaelwong.covalent.sync.SafStrictQueryTest" time="0.001"/>
+  <testcase name="nestedPendingSiblingsCannotEscapeTheGlobalEntryReservation" classname="life.michaelwong.covalent.sync.SafStrictQueryTest" time="0.001"/>
+  <testcase name="mutationBetweenFullScansRejectsTheWholeObservation" classname="life.michaelwong.covalent.sync.SafStrictQueryTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

@@ -1,0 +1,32 @@
+{
+  "format": 1,
+  "serial": "emulator-5606",
+  "avd": "Interlink_Acceptance_API37",
+  "syntheticOnly": true,
+  "passed": false,
+  "phase": "failed-state-retained",
+  "sourceHashes": {
+    "apps/android/app/src/main/java/life/michaelwong/covalent/data/CovalentNodeClient.kt": "900aa4d7272e6489c573b366830d39dd74575d4427b4373aafa3684f122a4ee4",
+    "apps/android/app/src/main/java/life/michaelwong/covalent/data/FolderAcceptanceRetry.kt": "0f31932a8268eb6927a8ae8a66255c5b241a7602f58b5a242e621a78d8ce2bbb",
+    "apps/android/app/src/androidTest/java/life/michaelwong/covalent/node/SafFolderSyncJourneyInstrumentedTest.kt": "5796746c50efff1b798e7fa88b1824f50b0a88163fe65eb2628a989b019a57b3",
+    "apps/android/app/build.gradle.kts": "761975ca9f0aecf88c537f4077ace39a153d6c5e197b3b045f27a865e5573213",
+    "apps/android/companion/build.gradle.kts": "e0604e718b026458fb958162d480d8a00ed424b580f3fbed562142417cf3eb41",
+    "crates/covalent-node/src/sync_api.rs": "91e0b2fb83241a7e2b7e2c1ab45f0fb5459f7dcda9f9d6ac41f70f9006c38f1b",
+    "crates/covalent-node/src/sync_engine/service.rs": "e8bf341aca7341aaae16a83e37b6390b4bd6ab37b95ce5b3381a494d9303edae",
+    "crates/covalent-node/src/sync_engine/sharing.rs": "a6ee38fea66e471eaefe2b9f7520aafcbdd97384a8bcdccb900495b0c3226653"
+  },
+  "apkSha256": "4ad3f7b4ab4e41b3821f1af9d995a82907e835eb9258c3f10b50c62dae737b02",
+  "testApkSha256": "e23f445500940da2d2dc4c580e2e17fc51cd4d0ec499af3b71bbd7e1877caa53",
+  "before": {
+    "bootId": "66fd84d3-9775-4979-ae20-45caf4415799",
+    "framework": {
+      "system_server": "602:457",
+      "surfaceflinger": "474:299"
+    }
+  },
+  "physicalDeviceAccepted": false,
+  "releaseReady": false,
+  "nativeLibraryDirectory": "/data/app/~~mRdh0-JXjbJ_wbzCo96Q5A==/life.michaelwong.covalent-gjdwea8px8FDENI75sEK8A==/lib/x86_64",
+  "nativeHelpers": {},
+  "failureClass": "CalledProcessError"
+}

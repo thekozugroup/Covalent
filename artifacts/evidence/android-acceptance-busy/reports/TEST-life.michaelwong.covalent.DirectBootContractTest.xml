@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="life.michaelwong.covalent.DirectBootContractTest" tests="4" skipped="0" failures="0" errors="0" timestamp="2026-10-21T16:08:04.934Z" hostname="MacBookPro" time="0.031">
+  <properties/>
+  <testcase name="aScheduledTransferDefersWhileCredentialStorageIsSealed" classname="life.michaelwong.covalent.DirectBootContractTest" time="0.0"/>
+  <testcase name="applicationStartupReadsNoCredentialEncryptedStorage" classname="life.michaelwong.covalent.DirectBootContractTest" time="0.001"/>
+  <testcase name="noCovalentStateIsMovedToDeviceProtectedStorage" classname="life.michaelwong.covalent.DirectBootContractTest" time="0.029"/>
+  <testcase name="theEmbeddedNodeOpensCredentialStorageOnlyThroughTheDirectBootGate" classname="life.michaelwong.covalent.DirectBootContractTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

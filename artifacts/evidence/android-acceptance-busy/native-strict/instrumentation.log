@@ -1,0 +1,71 @@
+INSTRUMENTATION_STATUS: class=life.michaelwong.covalent.node.SafFolderSyncJourneyInstrumentedTest
+INSTRUMENTATION_STATUS: current=1
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=1
+INSTRUMENTATION_STATUS: stream=
+life.michaelwong.covalent.node.SafFolderSyncJourneyInstrumentedTest:
+INSTRUMENTATION_STATUS: test=nativeManualSafRunRegistersAcrossRestartAndIsolatesLostGrant
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=life.michaelwong.covalent.node.SafFolderSyncJourneyInstrumentedTest
+INSTRUMENTATION_STATUS: current=1
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=1
+INSTRUMENTATION_STATUS: stack=java.lang.AssertionError: No node found that matches TestTag = 'folder-pair.address' in scrollable container
+Semantics of the node:
+Node #3 at (l=0.0, t=0.0, r=1080.0, b=2400.0)px, Tag: 'folder-sync-list'
+CollectionInfo = 'CollectionInfo(rowCount=10, columnCount=1)'
+IsTraversalGroup = 'true'
+Shape = 'androidx.compose.foundation.VerticalScrollableClipShape@50e75b2'
+VerticalScrollAxisRange = 'ScrollAxisRange(value=130.0, maxValue=130.0, reverseScrolling=false)'
+Actions = [GetScrollViewportLength, IndexForKey, ScrollBy, ScrollByOffset, ScrollToIndex]
+Has 12 children
+Selector used: (TestTag = 'folder-sync-list')
+
+	at androidx.compose.ui.test.ActionsKt.performScrollToNode(Actions.kt:256)
+	at life.michaelwong.covalent.node.SafFolderSyncJourneyInstrumentedTest.pairUsingPhoneUi(SafFolderSyncJourneyInstrumentedTest.kt:1310)
+	at life.michaelwong.covalent.node.SafFolderSyncJourneyInstrumentedTest.nativeManualSafRunRegistersAcrossRestartAndIsolatesLostGrant(SafFolderSyncJourneyInstrumentedTest.kt:141)
+
+INSTRUMENTATION_STATUS: stream=
+Error in nativeManualSafRunRegistersAcrossRestartAndIsolatesLostGrant(life.michaelwong.covalent.node.SafFolderSyncJourneyInstrumentedTest):
+java.lang.AssertionError: No node found that matches TestTag = 'folder-pair.address' in scrollable container
+Semantics of the node:
+Node #3 at (l=0.0, t=0.0, r=1080.0, b=2400.0)px, Tag: 'folder-sync-list'
+CollectionInfo = 'CollectionInfo(rowCount=10, columnCount=1)'
+IsTraversalGroup = 'true'
+Shape = 'androidx.compose.foundation.VerticalScrollableClipShape@50e75b2'
+VerticalScrollAxisRange = 'ScrollAxisRange(value=130.0, maxValue=130.0, reverseScrolling=false)'
+Actions = [GetScrollViewportLength, IndexForKey, ScrollBy, ScrollByOffset, ScrollToIndex]
+Has 12 children
+Selector used: (TestTag = 'folder-sync-list')
+
+	at androidx.compose.ui.test.ActionsKt.performScrollToNode(Actions.kt:256)
+	at life.michaelwong.covalent.node.SafFolderSyncJourneyInstrumentedTest.pairUsingPhoneUi(SafFolderSyncJourneyInstrumentedTest.kt:1310)
+	at life.michaelwong.covalent.node.SafFolderSyncJourneyInstrumentedTest.nativeManualSafRunRegistersAcrossRestartAndIsolatesLostGrant(SafFolderSyncJourneyInstrumentedTest.kt:141)
+
+INSTRUMENTATION_STATUS: test=nativeManualSafRunRegistersAcrossRestartAndIsolatesLostGrant
+INSTRUMENTATION_STATUS_CODE: -2
+INSTRUMENTATION_RESULT: stream=
+
+Time: 14.865
+There was 1 failure:
+1) nativeManualSafRunRegistersAcrossRestartAndIsolatesLostGrant(life.michaelwong.covalent.node.SafFolderSyncJourneyInstrumentedTest)
+java.lang.AssertionError: No node found that matches TestTag = 'folder-pair.address' in scrollable container
+Semantics of the node:
+Node #3 at (l=0.0, t=0.0, r=1080.0, b=2400.0)px, Tag: 'folder-sync-list'
+CollectionInfo = 'CollectionInfo(rowCount=10, columnCount=1)'
+IsTraversalGroup = 'true'
+Shape = 'androidx.compose.foundation.VerticalScrollableClipShape@50e75b2'
+VerticalScrollAxisRange = 'ScrollAxisRange(value=130.0, maxValue=130.0, reverseScrolling=false)'
+Actions = [GetScrollViewportLength, IndexForKey, ScrollBy, ScrollByOffset, ScrollToIndex]
+Has 12 children
+Selector used: (TestTag = 'folder-sync-list')
+
+	at androidx.compose.ui.test.ActionsKt.performScrollToNode(Actions.kt:256)
+	at life.michaelwong.covalent.node.SafFolderSyncJourneyInstrumentedTest.pairUsingPhoneUi(SafFolderSyncJourneyInstrumentedTest.kt:1310)
+	at life.michaelwong.covalent.node.SafFolderSyncJourneyInstrumentedTest.nativeManualSafRunRegistersAcrossRestartAndIsolatesLostGrant(SafFolderSyncJourneyInstrumentedTest.kt:141)
+
+FAILURES!!!
+Tests run: 1,  Failures: 1
+
+
+INSTRUMENTATION_CODE: -1
