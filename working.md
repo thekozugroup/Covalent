@@ -10,7 +10,13 @@ missing endpoint/certificate refusals, authentication, reuse of the same valid
 invitation after endpoint restoration and unchanged identity/trust settings.
 All 303 node library tests and 10 actual network-pairing tests pass. API route
 inventory, OpenAPI lint and Rust formatting pass. No APK/device update or
-release is published by these tests. The 07f1295 hosted run remains active; no passing device result is claimed.
+release is published by these tests. The 07f1295 hosted run 39549469177 is terminal: seven non-device lanes pass,
+but one of 86 baseline tests fails at Espresso pressBack because its root window
+has no focus (CovalentAppTest.kt:96). The SAF and permission journeys are not
+reached. No cause is established and no product regression is inferred.
+Artifact 12323623061 is retained with verified SHA-256
+a9543799a00d849f4f640a1ab8f9a89bbe1523d6a350432f91ce82afd6616090.
+The complete release gate remains closed.
 
 Software work continues first at the user's request. Hosted 97bf199 run
 39541339765 is terminal: seven non-device lanes and all 86 baseline device
@@ -43,7 +49,9 @@ unit tests pass, and the native idle/manual-batch contract test passes. Test APK
 SHA-256: 82f8813947c6d99c030886cdbb8efe1de5f4e6feaab1ca2c6b9e22bb1b6b8885.
 This is a test-observation correction, not an app-runtime change or a full SAF,
 permission-journey, physical-device or release pass. The retained 07f1295 hosted
-run continues undisturbed before this follow-up is pushed.
+run was allowed to finish before this follow-up advances PR51. The corrected
+idle-manual observation was also pushed separately as codex/idle-manual-repair;
+it does not change app runtime or claim to repair the unrelated focus failure.
 
 Earlier hosted source d9eb263, run 39526795075, is terminal: seven non-device lanes and all 87
 baseline/SAF tests pass, but the permission tap reports exit20/missing-service.
