@@ -164,3 +164,58 @@ Original reports and source-bound outcome are retained under
 `artifacts/evidence/api37-d57deda/`. Permission recovery and the release gate
 remain failed; no deadline extension, input replay, app fix or readiness claim
 is inferred from the passing baseline/SAF checks.
+
+## Independent native-report fallback
+
+Hosted bf25758 run39601425204 also passes all seven non-device jobs, the
+86 baseline tests and SAF journey, then fails permission recovery. The live
+stream records system_server1775 signal6, 2.236 host seconds after Open settings
+returns0 and 1.616 seconds before the Permissions tap returns20. The stream
+stays live through its five-second drain without a recognized native dump.
+All three synthetic identity digests remain unchanged. The verified artifact
+12347813609 has ZIP SHA-256
+`df2f80f7ac8de66682e248228689288c037861a0c261b94b48b81809522dbceb`.
+Timing alone establishes neither cause nor trigger; the release gate remains
+failed. Evidence: `artifacts/evidence/android-unlock-startup-hosted-terminal.json`.
+
+On a failed owned-emulator journey with an observed native framework signal,
+the harness now reads Android's existing DropBox reports after stopping the live
+stream. It makes one read per fixed tag, `system_server_native_crash` and
+`SYSTEM_TOMBSTONE`. Each client has an eight-second deadline, a one-MiB limit
+and an 8192-byte line limit. Only those clients are stopped; input, app state,
+permissions, framework processes and guest boot are not retried or repaired.
+
+The boot ID must match before and after the reads. A native timestamp must fall
+between the device clock observed before capture and before report reading.
+PID, crashed TID, approved process name and signal must match the live failure.
+Only then are the shared decoder's approved library names, relative offsets,
+fixed symbols and redacted abort-family/hash/length retained. Timestamp/PID
+correlation identifies a matching report, not the cause or responsible app.
+The fixed emulator mapper library name is now recognized; arbitrary paths,
+symbols, registers, thread names, messages and raw reports remain discarded.
+There are at most 96 retained events per tag and 32 unique frames per report.
+
+Service-header/search markers distinguish an empty readable service from an
+unavailable or changed output format. Nonzero exit, byte/deadline limits,
+internal report-read errors, source drift or a changed boot cannot produce a
+matched result. Partial redacted observations retain their incomplete status.
+An unavailable fallback cannot mask the original failure; even a matched report
+cannot turn failed permission recovery into a pass. No guest root access is used.
+
+Android's [DropBox implementation](https://android.googlesource.com/platform/frameworks/base/+/refs/heads/android16-release/services/core/java/com/android/server/DropBoxManagerService.java)
+defines this read-only report command. Raw reports are decoded incrementally in
+memory and never written to artifacts. This change adds diagnostic coverage;
+it does not establish or repair the hosted framework abort.
+
+All 65 focused checks pass on macOS and Linux: 32 permission-harness,
+27 report-reader/parser and six forward-cleanup tests. They include actual
+owned subprocess EOF/loss/deadline/byte-limit cases, stale or mismatched reports,
+missing service/denied access despite zero exit, malformed headers, source drift,
+privacy and failure preservation. Final-source read-only API37 smoke reads both
+real empty report tags and cleanly stops its original live log stream. Boot,
+framework PIDs/start ticks and three app identity hashes remain unchanged.
+The smoke explicitly seeds an impossible synthetic victim to exercise only the
+no-match reader path; it reproduces no native fault. Its receipt is
+`artifacts/evidence/native-report-fallback/android-final-1792589582619746000/receipt.json`.
+The source/evidence manifest is beside it at `../manifest.json`. Hosted failure
+diagnostics and permission acceptance remain unverified for this follow-up.

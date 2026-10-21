@@ -34,7 +34,7 @@ NATIVE_LIBRARIES=frozenset(("libc.so","libc++.so","libbase.so","liblog.so","libu
     "libbinder.so","libhwbinder.so","libgui.so","libui.so","libsurfaceflinger.so","libEGL.so","libGLESv2.so",
     "libGLESv1_CM.so","libvulkan.so","libhwui.so","libnetd_client.so","libunwindstack.so","libopenjdk.so",
     "libjavacore.so","libgfxstream_backend.so","libOpenglRender.so","libEGL_emulation.so",
-    "libGLESv2_emulation.so","libvulkan_ranchu.so","gralloc.ranchu.so"))
+    "libGLESv2_emulation.so","libvulkan_ranchu.so","gralloc.ranchu.so","mapper.ranchu.so"))
 NATIVE_SYMBOLS=frozenset(("abort","__assert2","__fortify_fatal","__stack_chk_fail","tgkill","pthread_kill",
     "raise","__android_log_assert","android::base::DefaultAborter(char const*)",
     "android::base::LogMessage::~LogMessage()","art::Runtime::Abort(char const*)"))
@@ -43,32 +43,10 @@ NATIVE_PATH=re.compile(r"/(?:system|system_ext|vendor|product)/(?:lib|lib64)/(?:
 SOURCE_SHA256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 
 
-class FrameworkTrace:
-    """One read-only adb log stream, owned by its already-validated QA caller."""
-    def __init__(self,adb,serial,framework):
-        if not re.fullmatch(r"emulator-[0-9]+",serial):raise ValueError("Emulator transport required")
-        self.command=[adb,"-s",serial,"logcat","-b","crash","-b","events","-b","system","-b","main","-v","threadtime","-T","1"]
-        self.pids={int(framework[p]):p for p in ("system_server","surfaceflinger")}
-        self.fatal_pids=set()
-        self.native_faults={};self.native_dumps={};self.native_frames_omitted=0;self.native_drain_ms=0
-        self.events=deque(maxlen=256);self.lock=threading.Lock();self.lines=0;self.dropped=0;self.error=None
-        self.proc=None;self.thread=None;self.started=time.monotonic();self.terminal=None;self.attempted=False
-        self.ready=threading.Event()
-
-    def _remember(self,pid,process):
-        self.pids[pid]=process
-        if len(self.pids)>256:self.pids.pop(next(iter(self.pids)))
-
-    def _append(self,event):
-        with self.lock:
-            if len(self.events)==self.events.maxlen:self.dropped+=1
-            self.events.append({"hostElapsedMs":round((time.monotonic()-self.started)*1000),**event})
-
-    def mark(self,phase,exit_code=None):
-        if phase not in PHASES:raise ValueError("Unknown trace phase")
-        event={"kind":"phase","name":phase}
-        if exit_code is not None:event["exitCode"]=int(exit_code)
-        self._append(event)
+class NativeDumpDecoder:
+    """Pure redacting decoder shared by the live stream and read-only reports."""
+    def __init__(self):
+        self.native_faults={};self.native_dumps={};self.native_frames_omitted=0
 
     def _native_dump(self,logger,payload,event):
         # crash_dump's logging PID differs from the crashed process. Attribute
@@ -113,6 +91,34 @@ class FrameworkTrace:
             if symbol and symbol[1] in NATIVE_SYMBOLS:event["knownSymbol"]=symbol[1]
             return event
         return None
+
+
+class FrameworkTrace(NativeDumpDecoder):
+    """One read-only adb log stream, owned by its already-validated QA caller."""
+    def __init__(self,adb,serial,framework):
+        if not re.fullmatch(r"emulator-[0-9]+",serial):raise ValueError("Emulator transport required")
+        self.command=[adb,"-s",serial,"logcat","-b","crash","-b","events","-b","system","-b","main","-v","threadtime","-T","1"]
+        self.pids={int(framework[p]):p for p in ("system_server","surfaceflinger")}
+        self.fatal_pids=set()
+        super().__init__();self.native_drain_ms=0
+        self.events=deque(maxlen=256);self.lock=threading.Lock();self.lines=0;self.dropped=0;self.error=None
+        self.proc=None;self.thread=None;self.started=time.monotonic();self.terminal=None;self.attempted=False
+        self.ready=threading.Event()
+
+    def _remember(self,pid,process):
+        self.pids[pid]=process
+        if len(self.pids)>256:self.pids.pop(next(iter(self.pids)))
+
+    def _append(self,event):
+        with self.lock:
+            if len(self.events)==self.events.maxlen:self.dropped+=1
+            self.events.append({"hostElapsedMs":round((time.monotonic()-self.started)*1000),**event})
+
+    def mark(self,phase,exit_code=None):
+        if phase not in PHASES:raise ValueError("Unknown trace phase")
+        event={"kind":"phase","name":phase}
+        if exit_code is not None:event["exitCode"]=int(exit_code)
+        self._append(event)
 
     def consume(self,line):
         """Accept only fixed classes, known processes and integer process metadata."""

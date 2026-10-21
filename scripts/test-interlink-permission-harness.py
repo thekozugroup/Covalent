@@ -311,7 +311,8 @@ class DiagnosticsTests(unittest.TestCase):
 
 
 class FailedInputJourneyTests(unittest.TestCase):
-    def exercise(self, delivered, missing_failure_ui=False, cleanup_fails=False, framework_missing=False, trace_lost=False):
+    def exercise(self, delivered, missing_failure_ui=False, cleanup_fails=False, framework_missing=False, trace_lost=False,
+                 report_result=None, report_error=False):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             apk = root / "apps/android/companion/build/outputs/apk/debug/companion-debug.apk"
@@ -341,6 +342,8 @@ class FailedInputJourneyTests(unittest.TestCase):
                     output = digest + "  synthetic/base.apk"
                 elif args[:2] == ("shell", "getconf"):
                     output = "4096"
+                elif args == ("shell", "date", "+%s"):
+                    output = "1792580000"
                 elif args[:2] == ("shell", "uiautomator"):
                     if not (missing_failure_ui and state["failed"]):
                         output = "UI hierchary dumped to: " + args[3]
@@ -375,11 +378,14 @@ class FailedInputJourneyTests(unittest.TestCase):
             with patch.object(qa, "ROOT", root), patch.dict(os.environ, {"ANDROID_HOME": str(root / "sdk")}), \
                     patch.object(qa.sys, "argv", argv), patch.object(qa.subprocess, "run", adb), \
                     patch.object(qa,"FrameworkTrace",LostTrace if trace_lost else FakeTrace), \
+                    patch.object(qa,"collect_native_reports",side_effect=RuntimeError(SECRET) if report_error else None,
+                        return_value=report_result or {"result":"not-needed"}) as collect_reports, \
                     contextlib.redirect_stdout(output):
                 with self.assertRaisesRegex(RuntimeError, r"shell input tap \(exit 20\)"):
                     qa.main()
             receipt = json.loads((root / "evidence/permission-recovery.json").read_text())
             self.assertEqual(receipt["result"], "failed")
+            collect_reports.assert_called_once()
             if framework_missing:self.assertEqual(receipt["frameworkAtFailure"],{"observationFailureClass":"RuntimeError"})
             else:self.assertEqual(receipt["frameworkBefore"], receipt["frameworkAtFailure"])
             self.assertEqual(receipt["identitySha256Before"], receipt["identitySha256AtFailure"])
@@ -419,6 +425,15 @@ class FailedInputJourneyTests(unittest.TestCase):
         receipt = self.exercise(delivered=False, cleanup_fails=True)
         self.assertEqual(receipt["cleanupFailures"], [{"action": "restore QA permission", "failureClass": "RuntimeError"}])
         self.assertEqual(receipt["commandFailures"][1]["exceptionClasses"], ["android.os.DeadObjectException"])
+
+    def test_matched_native_report_never_relabels_failed_permission_recovery(self):
+        receipt = self.exercise(delivered=False, report_result={"result":"matched","rawReportsRetained":False})
+        self.assertEqual(receipt["nativeReports"]["result"], "matched")
+        self.assertEqual(receipt["result"], "failed")
+
+    def test_report_observation_error_keeps_primary_failure_without_private_message(self):
+        receipt = self.exercise(delivered=False, report_error=True)
+        self.assertEqual(receipt["nativeReports"], {"result":"unavailable","failureClass":"RuntimeError"})
 
     def test_foreign_serial_refused_before_any_adb_command(self):
         argv = ["qa", "--avd", "Interlink_QA_API37", "--serial", "emulator-5590", "--evidence-dir", "/unused"]

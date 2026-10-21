@@ -1,5 +1,32 @@
 # Interlink companion and appliance robustness — 2026-10-21
 
+Hosted bf25758 run39601425204 is terminal: seven non-device jobs, 86 baseline
+tests and SAF pass, while permission recovery and the release gate fail.
+The live recorder sees system_server1775 signal6 after Open settings returns0
+and before the failed Permissions tap. Its live five-second drain yields no
+recognized native dump; no cause is established. The three synthetic identity
+digests remain unchanged. Artifact12347813609 has verified ZIP SHA-256
+df2f80f7ac8de66682e248228689288c037861a0c261b94b48b81809522dbceb.
+
+The diagnostic follow-up adds independent bounded reads of the existing Android
+DropBox native reports on a failed owned-emulator journey. Matching requires the
+same boot, capture-window native timestamp, observed PID/TID/process/signal and
+complete recognized service output. Raw reports stay in memory. Shared decoding
+keeps only approved metadata; private paths, symbols and messages stay discarded.
+Byte/deadline/read failures and source/boot drift cannot produce a match or
+relabel failed permission recovery. No APK runtime, renderer flags, acceptance
+criteria or device data are changed. See docs/interlink-permission-qa.md.
+
+All 65 focused tests pass independently on macOS and Linux: 32 permission
+harness, 27 report-reader/parser and six forward-cleanup checks. The report
+checks include actual owned child processes for EOF, nonzero exit, byte limits,
+silent hangs and overlong-line suffix rejection. Final-source read-only API37
+smoke reads both real empty report tags, preserves the boot, framework PIDs/start
+ticks and all three app identity hashes, and stops the live log client cleanly.
+Its impossible synthetic victim only exercises no-match classification; it is
+not a real native crash or proof that hosted crash details are available.
+Source/evidence manifest: artifacts/evidence/native-report-fallback/manifest.json.
+
 The shared Android unlock gate now closes a missed-unlock registration gap and
 prevents repeated/concurrent notifications from starting the same action twice.
 Credentials and existing opt-in/ownership checks stay intact. Seven deterministic
