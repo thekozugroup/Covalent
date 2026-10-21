@@ -144,3 +144,22 @@ boot ID plus both framework PIDs/start ticks. It validates stream operation;
 it has no native dump and does not prove the API37 failure cause or permission
 recovery. Evidence: `artifacts/interlink-qa/native-framework-smoke-1792566867768376000.json`.
 The earlier native crash and all failed journey artifacts remain retained.
+
+The d57deda hosted run39562643351 is now terminal. All seven non-device jobs,
+86 baseline tests and the complete SAF journey pass (437.290 seconds). The
+permission journey still fails. Its continuous recorder observes the known
+system_server1751 native signal6, 1.472 host seconds after Open settings returns0
+and before the failed Permissions tap. Android starts another system_server;
+the harness does not restart it. The three synthetic identity digests remain
+unchanged. Permission restoration fails with missing framework services.
+
+The five-second native-detail drain completes on the original live stream, but
+the retained output has no recognized native dump header, frame, signal-detail
+or abort-summary event. This does not distinguish unavailable logs from an
+unrecognized dump and does not establish the cause or trigger. Artifact
+12329751390 has verified ZIP SHA-256
+`7d767dcce5f8f3b790a41f190721e843f9f8973152f7146bacb09300ef713927`.
+Original reports and source-bound outcome are retained under
+`artifacts/evidence/api37-d57deda/`. Permission recovery and the release gate
+remain failed; no deadline extension, input replay, app fix or readiness claim
+is inferred from the passing baseline/SAF checks.

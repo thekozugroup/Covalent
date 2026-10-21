@@ -1,5 +1,20 @@
 # Interlink companion and appliance robustness — 2026-10-21
 
+Hosted d57deda run39562643351 is terminal. Seven non-device jobs, all 86
+baseline tests and the SAF journey pass (437.290 seconds); permission recovery
+and the combined release gate fail. The new recorder sees system_server1751
+receive native signal6, 1.472 host seconds after Open settings returns0 and
+before the failed Permissions tap. Android restarts the framework itself.
+All three synthetic identity digests remain unchanged. Five seconds of continued
+capture produce no recognized native dump/header/frame/abort-summary events.
+That absence does not establish why the native abort happened or why details
+were unavailable. Permission restoration also fails while services are missing.
+Artifact12329751390 is retained with verified SHA-256
+7d767dcce5f8f3b790a41f190721e843f9f8973152f7146bacb09300ef713927;
+artifacts/evidence/api37-d57deda/result.json binds this exact source and separate
+gates. The original recorder/source receipt and preceding failures remain intact.
+No app/runtime change, input replay, guest restart or release acceptance occurs.
+
 The native framework recorder now retains bounded approved dump metadata after
 an observed fatal signal in a known process. It correlates the separate logger
 and victim PIDs, refuses unknown/mismatched/malformed headers, and emits only
@@ -33,8 +48,8 @@ separately. Artifact12327728727 has verified ZIP SHA-256
 artifacts/evidence/api37-1e54976/result.json binds the source and distinct gates.
 The recorder follow-up was pushed separately as codex/native-framework-details
 while this exact run remained active, avoiding concurrency cancellation. It
-can now advance the review branch for a new exact-source hosted check. That
-future check, permission recovery and the release gate remain unaccepted.
+then advanced the review branch for the d57deda check recorded above.
+Permission recovery and the release gate remain unaccepted.
 
 Hosted e0dfc1c run 39552976561 is terminal. All seven non-device lanes,
 all 86 baseline instrumentation tests and the complete SAF folder journey pass
