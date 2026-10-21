@@ -34,7 +34,7 @@ test "$(shasum -a 256 "$guardian_source" | awk '{print $1}')" = \
 for contract in \
   v1.75.1 \
   687d264b689b8c49a67e2e52a8a5e0caa01c04ce \
-  d606a368fe4b83b81080aa9913d9f24b382c601e995d25f63ab80a49e2c8dee9 \
+  07cb75e9292c3c3a08322f4e34a6b1e6f91599b43ae917ae64f6d13bfb864922 \
   c50b5cf10a287c4c061b7891978fd2681b5c96910eb2c69c922beae349140579 \
   rclone-LICENSE.txt \
   covalent-rclone \

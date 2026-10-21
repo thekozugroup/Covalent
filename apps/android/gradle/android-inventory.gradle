@@ -1,0 +1,141 @@
+import groovy.json.JsonOutput
+import java.security.MessageDigest
+import java.util.zip.ZipFile
+
+// Applied after each application's Android configuration. Keep the established
+// Covalent schema and paths; Interlink resolves its own runtime classpath.
+def inventoryName = project.property('androidInventoryName')
+def inventoryDirectory = project.property('androidInventoryDirectory')
+def applicationVersion = project.extensions.getByName('android').defaultConfig.versionName
+def runtime = providers.provider { configurations.getByName('releaseRuntimeClasspath') }
+def reportRoot = layout.buildDirectory.dir("reports/${inventoryDirectory}")
+def digestFile = { File file ->
+    def digest = MessageDigest.getInstance('SHA-256')
+    file.withInputStream { input ->
+        byte[] buffer = new byte[64 * 1024]
+        int count
+        while ((count = input.read(buffer)) >= 0) digest.update(buffer, 0, count)
+    }
+    digest.digest().encodeHex().toString()
+}
+def reviewedLicense = { String group, String name, String version ->
+    def path = "${group.replace('.', '/')}/${name}/${version}/${name}-${version}.pom"
+    def pom = group.startsWith('androidx.') ?
+        "https://dl.google.com/dl/android/maven2/${path}" : "https://repo1.maven.org/maven2/${path}"
+    def evidence = group == 'com.google.guava' && name == 'listenablefuture' ?
+        'https://repo1.maven.org/maven2/com/google/guava/guava-parent/26.0-android/guava-parent-26.0-android.pom' : pom
+    if (!(group.startsWith('androidx.') ||
+        group == 'com.google.guava' && name == 'listenablefuture' ||
+        group == 'org.jetbrains' && name == 'annotations' ||
+        group.startsWith('org.jetbrains.kotlin') || group == 'org.jspecify' && name == 'jspecify')) {
+        throw new GradleException("Unreviewed Android runtime dependency license: ${group}:${name}:${version}. " +
+            'Add an explicit reviewed mapping before producing a release candidate.')
+    }
+    [spdxId: 'Apache-2.0', name: 'Apache License 2.0',
+     textUrl: 'https://www.apache.org/licenses/LICENSE-2.0.txt', evidenceUrl: evidence.toString()]
+}
+def nativeObjects = { File file ->
+    if (!file.name.endsWith('.aar')) return []
+    new ZipFile(file).withCloseable { archive ->
+        def rows = []
+        def names = new HashSet<String>()
+        archive.entries().each { entry ->
+            if (entry.directory || !(entry.name ==~ /jni\/[^\/]+\/[^\/]+\.so/)) return
+            if (!names.add(entry.name) || entry.size < 1 || entry.size > 64L * 1024 * 1024) {
+                throw new GradleException("Runtime dependency has malformed native entries: ${file.name}")
+            }
+            def digest = MessageDigest.getInstance('SHA-256')
+            long bytes = 0
+            archive.getInputStream(entry).withCloseable { input ->
+                byte[] buffer = new byte[64 * 1024]
+                int count
+                while ((count = input.read(buffer)) >= 0) {
+                    bytes += count
+                    if (bytes > entry.size) throw new GradleException('Native entry exceeded its declared size')
+                    digest.update(buffer, 0, count)
+                }
+            }
+            if (bytes != entry.size) throw new GradleException('Native entry has a truncated body')
+            rows.add([path: entry.name, bytes: bytes, sha256: digest.digest().encodeHex().toString()])
+        }
+        rows.sort { it.path }
+    }
+}
+def sbom = tasks.register('generateAndroidSbom') {
+    group = 'reporting'
+    description = 'Generates deterministic, fail-closed Android dependency, license, and hash inventories.'
+    inputs.files(runtime)
+    inputs.property('applicationName', inventoryName)
+    inputs.property('applicationVersion', applicationVersion)
+    // Coordinate changes also invalidate the report when two modules publish
+    // identical artifact bytes under different identities.
+    inputs.property('coordinates', providers.provider {
+        runtime.get().resolvedConfiguration.resolvedArtifacts.collect {
+            "${it.moduleVersion.id}:${it.file.name}".toString()
+        }.sort()
+    })
+    outputs.files(reportRoot.map { it.file('android-sbom.cdx.json') },
+        reportRoot.map { it.file('android-license-inventory.json') })
+    doLast {
+        def artifacts = runtime.get().resolvedConfiguration.resolvedArtifacts
+            .unique { it.file.canonicalPath }
+            .sort { a, b -> (a.moduleVersion.id.toString() <=> b.moduleVersion.id.toString()) ?: (a.file.name <=> b.file.name) }
+        def inventory = artifacts.collect { artifact ->
+            def id = artifact.moduleVersion.id
+            def license = reviewedLicense(id.group, artifact.name, id.version)
+            [coordinate: "${id.group}:${artifact.name}:${id.version}".toString(), artifact: artifact.file.name,
+             sha256: digestFile(artifact.file), spdxId: license.spdxId, licenseName: license.name,
+             licenseText: license.textUrl, reviewEvidence: license.evidenceUrl, nativeObjects: nativeObjects(artifact.file)]
+        }
+        def components = artifacts.withIndex().collect { artifact, index ->
+            def id = artifact.moduleVersion.id
+            def row = inventory[index]
+            def type = artifact.file.name.tokenize('.').last()
+            [type: 'library', group: id.group, name: artifact.name, version: id.version,
+             'bom-ref': "pkg:maven/${id.group}/${artifact.name}@${id.version}?type=${type}".toString(),
+             hashes: [[alg: 'SHA-256', content: row.sha256]],
+             licenses: [[license: [id: row.spdxId, url: row.licenseText]]],
+             externalReferences: [[type: 'other', url: row.reviewEvidence]],
+             properties: [[name: 'covalent:artifact-file', value: row.artifact],
+                          [name: 'covalent:license-review', value: 'explicit-fail-closed']] + row.nativeObjects.collect {
+                 [name: "covalent:native-object:${it.path}".toString(), value: "${it.bytes} ${it.sha256}".toString()]
+             }]
+        }
+        def document = [bomFormat: 'CycloneDX', specVersion: '1.5', version: 1,
+            metadata: [component: [type: 'application', group: 'life.michaelwong', name: inventoryName, version: applicationVersion],
+                properties: [[name: 'covalent:license-metadata-preserved', value: 'true'],
+                             [name: 'covalent:license-policy', value: 'fail-closed-explicit-review']]],
+            components: components]
+        def licenses = [schemaVersion: 1,
+            policy: 'Every release runtime artifact requires an explicit reviewed SPDX license mapping.',
+            preservedPackageMetadata: ['META-INF/AL2.0', 'META-INF/LGPL2.1'], components: inventory]
+        def root = reportRoot.get().asFile
+        root.mkdirs()
+        new File(root, 'android-sbom.cdx.json').text = JsonOutput.prettyPrint(JsonOutput.toJson(document)) + '\n'
+        new File(root, 'android-license-inventory.json').text = JsonOutput.prettyPrint(JsonOutput.toJson(licenses)) + '\n'
+    }
+}
+
+tasks.register('generateReleaseChecksums') {
+    group = 'distribution'
+    description = 'Writes SHA-256 checksums for exact Android release-candidate artifacts.'
+    dependsOn('assembleRelease', 'bundleRelease', sbom)
+    def output = reportRoot.map { it.file('SHA256SUMS') }
+    def roots = ['outputs/apk/release', 'outputs/bundle/release', 'outputs/mapping/release', "reports/${inventoryDirectory}"]
+        .collect { layout.buildDirectory.dir(it) }
+    def files = providers.provider {
+        roots.collectMany { root -> fileTree(root.get()).matching { exclude('SHA256SUMS') }.files }
+            .unique { it.canonicalPath }
+            .sort { it.toPath().toString() }
+    }
+    inputs.files(files)
+    outputs.file(output)
+    doLast {
+        def buildRoot = layout.buildDirectory.get().asFile.toPath()
+        def lines = files.get().collect { file ->
+            "${digestFile(file)}  ${buildRoot.relativize(file.toPath()).toString().replace(File.separator, '/')}"
+        }
+        if (lines.isEmpty()) throw new GradleException('Release checksum inventory is empty')
+        output.get().asFile.text = lines.join('\n') + '\n'
+    }
+}

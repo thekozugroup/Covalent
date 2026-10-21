@@ -109,6 +109,9 @@ class Fixture:
         header[:6] = b"\x7fELF\x02\x01"
         header[18:20] = machine.to_bytes(2, "little")
         self.binary.write_bytes(header)
+        if hasattr(self, 'apk_installed'):
+            self.apk_installed.write_text(self.apk_installed.read_text().replace(
+                'A:x86_64', 'A:noarch' if architecture == 'arm64' else 'A:x86_64'))
 
     def module(self, name: str, license_text: bytes) -> pathlib.Path:
         root = self.modules / name
@@ -290,6 +293,14 @@ class CaddyDistributionEvidenceTests(unittest.TestCase):
             self.fixture.collect(
                 "wrong-owner", [self.fixture.target("linux-amd64", report)]
             )
+
+    def test_ca_bundle_requires_reviewed_target_package_record(self) -> None:
+        report = self.fixture.report("amd64", [])
+        self.fixture.apk_installed.write_text(
+            self.fixture.apk_installed.read_text().replace("A:x86_64", "A:noarch")
+        )
+        with self.assertRaisesRegex(evidence.EvidenceError, "CA bundle package architecture"):
+            self.fixture.collect("wrong-ca-arch", [self.fixture.target("linux-amd64", report)])
 
 
 if __name__ == "__main__":

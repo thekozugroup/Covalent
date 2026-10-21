@@ -60,11 +60,11 @@ verify_notice() {
   fi
 }
 verify_notice "$license" 9266eae9c6a441de0f6847f19ac8f09b280d55612b079eca03b3d49b822c1a71
-verify_notice "$provenance" ce9886f37cd7bc7b62e755375f0d5f23d5f97f60670f6f857dac632b33f5e0ef
-verify_notice "$source_build" 4adca055de0df90833b81c674354ffb5e5d45e57fdc20b5dbfff54117edbc70d
-verify_notice "$notice_index" 59ab37c92bac32b1b3533ce8be192c282c9b7d25a81f03b2f63b7651faa4ab51
-verify_notice "$target_notice_manifest" 9a624a53020218aea6927c2baa254daa7ce9099c83eeddcfed371001e889bd6d
-verify_notice "$combined_notices" 9374aa12dc9da1416da235f6a664b6b5817081adf00b94a13d2c58d4a8ca68d4
+verify_notice "$provenance" e22474484d6fe7a68be02b7685961ecf0c689c357dc540e782f67fe16058df2e
+verify_notice "$source_build" f0217883095af8950ae68f1a95f9d3210faa7d566736c85fc410b401124f4618
+verify_notice "$notice_index" 5868a5e73b0ea3be7c54229348a973eafe2f81d8db5f755db5f97cc697a4f75c
+verify_notice "$target_notice_manifest" 5a6294b67083cf9e394b11702a9ec943a9efb2e965a7551999d7a78d25ba4fc8
+verify_notice "$combined_notices" 3af0afba1e2feb48c93b2ee6b3204262784b19604133bb518bdcfc904722a223
 
 sign_one() {
   identifier=$1
@@ -113,19 +113,19 @@ value = {
         "version": "v1.75.1",
         "commit": "687d264b689b8c49a67e2e52a8a5e0caa01c04ce",
         "sourceState": "upstream-unmodified",
-        "goVersion": "go1.26.7",
-        "unsignedExecutableSha256": "d606a368fe4b83b81080aa9913d9f24b382c601e995d25f63ab80a49e2c8dee9",
+        "goVersion": "go1.26.10",
+        "unsignedExecutableSha256": "07cb75e9292c3c3a08322f4e34a6b1e6f91599b43ae917ae64f6d13bfb864922",
     },
     "guardian": {
         "sourceSha256": "c50b5cf10a287c4c061b7891978fd2681b5c96910eb2c69c922beae349140579",
     },
     "notices": {
-        "PROVENANCE.txt": "ce9886f37cd7bc7b62e755375f0d5f23d5f97f60670f6f857dac632b33f5e0ef",
+        "PROVENANCE.txt": "e22474484d6fe7a68be02b7685961ecf0c689c357dc540e782f67fe16058df2e",
         "rclone-LICENSE.txt": "9266eae9c6a441de0f6847f19ac8f09b280d55612b079eca03b3d49b822c1a71",
-        "source-build.json": "4adca055de0df90833b81c674354ffb5e5d45e57fdc20b5dbfff54117edbc70d",
-        "notices-index.txt": "59ab37c92bac32b1b3533ce8be192c282c9b7d25a81f03b2f63b7651faa4ab51",
-        "notices/manifest.json": "9a624a53020218aea6927c2baa254daa7ce9099c83eeddcfed371001e889bd6d",
-        "notices/THIRD-PARTY-NOTICES.txt": "9374aa12dc9da1416da235f6a664b6b5817081adf00b94a13d2c58d4a8ca68d4",
+        "source-build.json": "f0217883095af8950ae68f1a95f9d3210faa7d566736c85fc410b401124f4618",
+        "notices-index.txt": "5868a5e73b0ea3be7c54229348a973eafe2f81d8db5f755db5f97cc697a4f75c",
+        "notices/manifest.json": "5a6294b67083cf9e394b11702a9ec943a9efb2e965a7551999d7a78d25ba4fc8",
+        "notices/THIRD-PARTY-NOTICES.txt": "3af0afba1e2feb48c93b2ee6b3204262784b19604133bb518bdcfc904722a223",
     },
     "executables": {
         "covalent-engine-guardian": {

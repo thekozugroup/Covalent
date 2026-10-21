@@ -1,5 +1,15 @@
 # Alpine runtime source and notices
 
+Current October 20 follow-up: both runtime and Go builder explicitly install the
+checksum-pinned, official signed CA 20261020-r0 bundle; the old build-stage
+certificate generator is removed. The full recipe and original GitLab archive
+are hash-bound together. `architectureByTarget` is allowed only for this CA
+package and its measured apk 3.0.8 metadata (`amd64: x86_64`, `arm64: noarch`).
+All other architecture overrides retain their existing strict rules. The
+packaged-evidence lock holds regenerated review pins, not a claim that either
+complete runtime image passed. Full native image checks remain mandatory.
+
+
 Covalent's Docker image includes Alpine packages in addition to the separately
 built Rust node, Caddy and rclone worker. The image's MIT label describes
 Covalent; it does not relicense those dependencies.

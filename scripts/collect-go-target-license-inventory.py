@@ -22,8 +22,8 @@ from typing import Any, Iterable
 
 PINNED_COMMIT = "687d264b689b8c49a67e2e52a8a5e0caa01c04ce"
 PINNED_VERSION = "v1.75.1"
-GO_MOD_SHA256 = "1708132fb012d15c89e7863a79abea50c66895e78d8b85037275db213c1d103f"
-GO_SUM_SHA256 = "801fcfc81dd2f84417d5410c04aa4fd5936387246372eaf8920c2b0492ffa89b"
+GO_MOD_SHA256 = "eaa7a6edf41ca097fc52097c9ff7abf71a3b1e28d8b553372d54999711bf6f6d"
+GO_SUM_SHA256 = "57f578898529d6604fcb0484cffa6f09d74e082151cd146e841b630f55d03637"
 MAIN_MODULE = "github.com/thekozugroup/Covalent/packaging/rclone"
 ROOT_PACKAGE = MAIN_MODULE
 SAFE_TARGET = re.compile(r"[A-Za-z0-9_.+-]{1,64}")
@@ -452,7 +452,7 @@ def build_inventory(
 
     unresolved = [
         {
-            "component": "Go 1.26.7 toolchain and standard library",
+            "component": "Go 1.26.10 toolchain and standard library",
             "status": "release-review-required",
             "reason": "The target graph includes standard-library packages, but the supply-chain output does not retain the pinned Go distribution license and notice files.",
         },

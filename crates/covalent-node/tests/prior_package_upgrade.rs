@@ -108,7 +108,7 @@ fn extract_frozen_state(destination: &Path) {
         let mut entry = archive.by_index(index).expect("frozen state entry");
         let relative = entry
             .enclosed_name()
-            .unwrap_or_else(|| panic!("unsafe fixture entry {}", entry.name()))
+            .unwrap_or_else(|| panic!("unsafe fixture entry {:?}", entry.name_raw()))
             .to_path_buf();
         assert!(!relative.as_os_str().is_empty());
         #[cfg(unix)]

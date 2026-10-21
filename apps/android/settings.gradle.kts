@@ -16,3 +16,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "CovalentAndroid"
 include(":app")
+include(":companion")

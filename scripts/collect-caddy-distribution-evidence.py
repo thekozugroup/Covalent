@@ -27,21 +27,21 @@ CADDY_VERSION = "v2.11.5-0.20260711231708-b2693fb63a30"
 CADDY_COMMIT = "b2693fb63a30e6d7be0972c3645e9a2c0a500e93"
 MAIN_MODULE = "covalent.local/caddy"
 ROOT_PACKAGE = MAIN_MODULE
-GO_VERSION = "go1.26.7"
-GO_MOD_SHA256 = "a5191a03243552503f0604e196b4292b412807142dbfbb351fb09fca5c42105c"
-GO_SUM_SHA256 = "4e5f62a6782d38008bd14336a038a7d1002eeb66ae6644e096b3d214cdc9445c"
+GO_VERSION = "go1.26.10"
+GO_MOD_SHA256 = "dac3499522e3935fa50aa2728a7a48a35271c281d7c859e060d0749103329c5d"
+GO_SUM_SHA256 = "92bddd67b77cdc73c2835cdea8a8ba3df6e7964fe3c9ae9f3044dd3374a2ddb3"
 MAIN_GO_SHA256 = "427a8c81a8341f6d60eed09afa2248052701ca1a2c7b6e41cf15b402bff2dd78"
 COVALENT_LICENSE_SHA256 = "ff9bc316792502655bcae384b8e5a4604da93385fda00552b77d85c334b94acd"
 GO_LICENSE_SHA256 = "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"
 GO_PATENTS_SHA256 = "96f408bfae65bf137fc2525d3ecb030271c50c1e90799f87abf8846d8dd505cc"
 GO_BORING_LICENSE_SHA256 = "56210f826b8f0fbac3160dfe55c97f4019eb6cdda3963b5a0eab8a8bdb62360e"
 CA_PACKAGE = "ca-certificates-bundle"
-CA_VERSION = "20260611-r0"
+CA_VERSION = "20261020-r0"
 CA_ORIGIN = "ca-certificates"
 CA_LICENSE = "MPL-2.0 AND MIT"
-CA_APORTS_COMMIT = "6e30aafe4fa807ba70797509731f1e7d644dc8f3"
-CA_BUNDLE_BYTES = 179_359
-CA_BUNDLE_SHA256 = "b8d837841b88bfaa1a0fa827cbca8e2576418dd47c9fc4bb7f1f9d89c83111b9"
+CA_APORTS_COMMIT = "ac857c298f6fd212498ce76bb87836d940cdba2d"
+CA_BUNDLE_BYTES = 178_791
+CA_BUNDLE_SHA256 = "5961c0a3c65459931c023e0075c09733f09aea4ca439cb85bc4a08bb4f3f568b"
 SAFE_TARGET = re.compile(r"[A-Za-z0-9_.+-]{1,64}")
 SAFE_MODULE = re.compile(r"[A-Za-z0-9._~+/-]{1,512}")
 SAFE_VERSION = re.compile(r"v[0-9A-Za-z.+~-]{1,255}")
@@ -401,7 +401,7 @@ def _escape_module(value: str) -> str:
     return "".join(output)
 
 
-def _ca_provenance(installed: pathlib.Path, bundle: pathlib.Path) -> dict[str, Any]:
+def _ca_provenance(installed: pathlib.Path, bundle: pathlib.Path, goarch: str) -> dict[str, Any]:
     database = _read_regular(installed, 4 * 1024 * 1024).decode("utf-8", "strict")
     matches = []
     for stanza in database.split("\n\n"):
@@ -437,10 +437,12 @@ def _ca_provenance(installed: pathlib.Path, bundle: pathlib.Path) -> dict[str, A
     if len(data) != CA_BUNDLE_BYTES:
         raise EvidenceError("CA bundle size differs")
     architecture = fields.get("A")
-    if architecture not in {"x86_64", "aarch64"}:
+    # apk 3.0.8 records the same signed noarch input as x86_64 on amd64.
+    # Bind its observed installed metadata to the target, never accept either.
+    if architecture != {"amd64": "x86_64", "arm64": "noarch"}[goarch]:
         raise EvidenceError("CA bundle package architecture differs")
     return {
-        "sourceStage": "golang:1.26.7-alpine3.23",
+        "sourceStage": "golang:1.26.10-alpine3.23",
         "package": CA_PACKAGE,
         "version": CA_VERSION,
         "architecture": architecture,
@@ -587,7 +589,7 @@ def collect(
     binary_data = _read_regular(binary, 256 * 1024 * 1024)
     if _elf_architecture(binary_data) != targets[0].goarch:
         raise EvidenceError("Caddy binary and target architecture differ")
-    ca_provenance = _ca_provenance(apk_installed, ca_bundle)
+    ca_provenance = _ca_provenance(apk_installed, ca_bundle, targets[0].goarch)
 
     modules: dict[tuple[str, str | None], dict[str, Any]] = {}
     standard: dict[str, list[str]] = {}

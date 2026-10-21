@@ -36,13 +36,13 @@ class Fixture:
             REPOSITORY / "packaging/rclone/LICENSE.rclone",
             self.source / "LICENSE.rclone",
         )
-        (self.go / "VERSION").write_text("go1.26.7\ntime fixture\n", encoding="utf-8")
+        (self.go / "VERSION").write_text("go1.26.10\ntime fixture\n", encoding="utf-8")
         self._copy(
-            REPOSITORY / "docs/licenses/sync-engine/Go-1.26.7-LICENSE.txt",
+            REPOSITORY / "docs/licenses/sync-engine/Go-1.26.10-LICENSE.txt",
             self.go / "LICENSE",
         )
         self._copy(
-            REPOSITORY / "docs/licenses/sync-engine/Go-1.26.7-PATENTS.txt",
+            REPOSITORY / "docs/licenses/sync-engine/Go-1.26.10-PATENTS.txt",
             self.go / "PATENTS",
         )
         module_relative = pathlib.Path("example.org/!mixed@v1.2.3")
@@ -175,7 +175,7 @@ class NoticeBundleTests(unittest.TestCase):
         combined = (self.fixture.output / "THIRD-PARTY-NOTICES.txt").read_bytes()
         self.assertEqual(hashlib.sha256(combined).hexdigest(), manifest["combinedNotice"]["sha256"])
         self.assertIn(self.fixture.module_license, combined)
-        self.assertIn(b"Go go1.26.7 / LICENSE", combined)
+        self.assertIn(b"Go go1.26.10 / LICENSE", combined)
         self.assertNotIn(b"MPL-2.0 corresponding source", combined)
         self.assertIn(b"LICENSE.rclone", combined)
 

@@ -68,6 +68,7 @@ import life.michaelwong.covalent.model.FolderLinkRunResult
 import life.michaelwong.covalent.model.FolderLinkSettings
 import life.michaelwong.covalent.model.FolderLinkSettingsState
 import life.michaelwong.covalent.model.FolderSyncAvailability
+import life.michaelwong.covalent.model.FolderSyncLifecycle
 import life.michaelwong.covalent.model.NetworkPairingDirection
 import life.michaelwong.covalent.model.NetworkPairingState
 import life.michaelwong.covalent.model.NodeConnection
@@ -398,14 +399,31 @@ class SafFolderSyncJourneyInstrumentedTest {
             val repairedShare = sourceShare(repairedA)
             val repairedGeneration = checkNotNull(repairedShare.linkRun).generation
             val recoveryRequestId = UUID.randomUUID().toString()
-            val recoveryMutation = client.runFolderLinkNow(
-                repairedA.baseUrl,
-                repairedA.token,
-                folderId.toString(),
-                recoveryRequestId,
-                expectedGeneration = repairedGeneration,
-                settingsRevision = checkNotNull(repairedShare.linkSettings).revision,
-            )
+            val recoveryMutation = try {
+                client.runFolderLinkNow(
+                    repairedA.baseUrl,
+                    repairedA.token,
+                    folderId.toString(),
+                    recoveryRequestId,
+                    expectedGeneration = repairedGeneration,
+                    settingsRevision = checkNotNull(repairedShare.linkSettings).revision,
+                )
+            } catch (failure: Exception) {
+                // Observe the current API; never replay the rejected mutation.
+                val current = manager.liveConnection()
+                val status = current?.let { connection ->
+                    runCatching { client.folderSyncStatus(connection.baseUrl, connection.token) }.getOrNull()
+                }
+                throw AssertionError(
+                    "Manual run after grant repair was rejected: " +
+                        "errorClass=${failure.javaClass.name} " +
+                        "httpStatus=${(failure as? NodeApiException)?.statusCode} " +
+                        "sameConnection=${current?.baseUrl == repairedA.baseUrl} " +
+                        "currentAvailability=${status?.availability} " +
+                        "currentLifecycle=${status?.lifecycle} currentIssue=${status?.issue}",
+                    failure,
+                )
+            }
             println(
                     "COVALENT_RECOVERY_ACK priorBaseUrl=${lostGrantConnection.baseUrl} " +
                     "repairedBaseUrl=${repairedA.baseUrl} offerId=${recoveryMutation.offerId} " +
@@ -874,7 +892,10 @@ class SafFolderSyncJourneyInstrumentedTest {
                     lastSharePhase = share?.phase?.toString() ?: "none"
                     lastFolderState = folder?.state ?: "none"
                     lastAccessUnavailable = folder?.accessUnavailable?.toString() ?: "none"
-                    accepts(status)
+                    status.availability == FolderSyncAvailability.AVAILABLE &&
+                        status.lifecycle == FolderSyncLifecycle.RUNNING &&
+                        status.issue == null &&
+                        accepts(status)
                 } catch (error: Throwable) {
                     lastErrorClass = error.javaClass.name
                     lastHttpStatus = (error as? NodeApiException)?.statusCode?.toString() ?: "none"

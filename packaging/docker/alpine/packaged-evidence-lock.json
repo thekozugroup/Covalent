@@ -1,29 +1,29 @@
 {
   "schema": 1,
-  "sourceLockSHA256": "20591f042cf01ec684358efe00c4d68204ff9b67ae3826413a1a2d77e764c3a1",
+  "sourceLockSHA256": "681aedb313d202c7d01c4d471f2efa524e55736c21bedc214ae562efb1c35324",
   "targets": {
     "amd64": {
       "noticeBundle": {
         "path": "THIRD-PARTY-NOTICES.txt",
-        "bytes": 130550,
-        "sha256": "03520a298be5a1ef3f5c6bf6573d1d7e139918254dd7fe8db2b1d812738cc36f"
+        "bytes": 130945,
+        "sha256": "b7f3059d358a70f3d65873c9ffad78accc1f38568b5eda05a443e5c09416f29f"
       },
       "sourceReadmeSHA256": "ce088c422e53653cc1f2c77feeb01e740629194499d745b4464f5f949b4a5686",
-      "sourceManifestSHA256": "a799a11283be38c47819ba0716d3592b9e60af7be1e9076000fec2bbe7bd961e",
+      "sourceManifestSHA256": "9a5bdc948d950db0a695993732d4a653638fcae2601efa1d6a93d3d0e888c92b",
       "sourceFiles": 155,
-      "builderInstalledDatabaseSHA256": "ee901a1bd0ac592eb270ad6ff62f09ef9205bbc076ae8c2302e3ae0fb20bd664"
+      "builderInstalledDatabaseSHA256": "42cfd3516bf53219c041785cc5319b4951484c3d1562d0e18838e81f5e1c60bd"
     },
     "arm64": {
       "noticeBundle": {
         "path": "THIRD-PARTY-NOTICES.txt",
-        "bytes": 130562,
-        "sha256": "97e185233d494e28e537c48192b4d4d690d6eba03e30d6e75d83928a00612aef"
+        "bytes": 130956,
+        "sha256": "88ce80f43ef0d622d6681e8ae1af42286d2598844b3655ea5e6916c1f728fc35"
       },
       "sourceReadmeSHA256": "ce088c422e53653cc1f2c77feeb01e740629194499d745b4464f5f949b4a5686",
-      "sourceManifestSHA256": "a799a11283be38c47819ba0716d3592b9e60af7be1e9076000fec2bbe7bd961e",
+      "sourceManifestSHA256": "9a5bdc948d950db0a695993732d4a653638fcae2601efa1d6a93d3d0e888c92b",
       "sourceFiles": 155,
-      "builderInstalledDatabaseSHA256": "4eca637e7036de8f5e9d90689853e2bf8b9bbc7d3a5f810a7a902c6d4f9505b2"
+      "builderInstalledDatabaseSHA256": "e5a0daace4fae865d4c7525f7f6d36f0c29d48f397ad3c37ae4eeb0c1dc36f85"
     }
   },
-  "scope": "Reviewed OpenSSL 3.5.9 source/recipe checksums and unchanged license texts. Notice hashes regenerated from the previously verified bundle with exact version, recipe and notice-path changes. Corresponding-source and builder identities are unchanged; final cold images require separate runtime contract validation."
+  "scope": "Expected notices and corresponding-source bytes regenerated from complete hash-verified CA 20261020 source and recipes, using locked package declarations. Builder APK database identities come from signature-checked CA upgrades and removal of the unused old generator on digest-verified Go 1.26.10 base layers. These are review pins, not final runtime acceptance: both complete images must pass independent installed-database, source, notice, payload, functional and vulnerability checks."
 }

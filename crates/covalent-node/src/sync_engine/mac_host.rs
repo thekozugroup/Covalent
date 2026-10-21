@@ -26,7 +26,7 @@ const ENGINE_VERSION: &str = "v1.75.1";
 const ENGINE_COMMIT: &str = "687d264b689b8c49a67e2e52a8a5e0caa01c04ce";
 const SOURCE_STATE: &str = "upstream-unmodified";
 const UNSIGNED_ENGINE_SHA256: &str =
-    "d606a368fe4b83b81080aa9913d9f24b382c601e995d25f63ab80a49e2c8dee9";
+    "07cb75e9292c3c3a08322f4e34a6b1e6f91599b43ae917ae64f6d13bfb864922";
 const GUARDIAN_SOURCE_SHA256: &str =
     "c50b5cf10a287c4c061b7891978fd2681b5c96910eb2c69c922beae349140579";
 
@@ -234,23 +234,23 @@ fn validate_manifest(manifest: &PackageManifest) -> Result<(), MacHostError> {
         || manifest.engine.version != ENGINE_VERSION
         || manifest.engine.commit != ENGINE_COMMIT
         || manifest.engine.source_state != SOURCE_STATE
-        || manifest.engine.go_version != "go1.26.7"
+        || manifest.engine.go_version != "go1.26.10"
         || manifest.engine.unsigned_executable_sha256 != UNSIGNED_ENGINE_SHA256
         || manifest.guardian.source_sha256 != GUARDIAN_SOURCE_SHA256
         || manifest.executables.covalent_engine_guardian.architecture != "arm64"
         || manifest.executables.covalent_rclone.architecture != "arm64"
         || manifest.notices.provenance
-            != "ce9886f37cd7bc7b62e755375f0d5f23d5f97f60670f6f857dac632b33f5e0ef"
+            != "e22474484d6fe7a68be02b7685961ecf0c689c357dc540e782f67fe16058df2e"
         || manifest.notices.license
             != "9266eae9c6a441de0f6847f19ac8f09b280d55612b079eca03b3d49b822c1a71"
         || manifest.notices.source_build
-            != "4adca055de0df90833b81c674354ffb5e5d45e57fdc20b5dbfff54117edbc70d"
+            != "f0217883095af8950ae68f1a95f9d3210faa7d566736c85fc410b401124f4618"
         || manifest.notices.index
-            != "59ab37c92bac32b1b3533ce8be192c282c9b7d25a81f03b2f63b7651faa4ab51"
+            != "5868a5e73b0ea3be7c54229348a973eafe2f81d8db5f755db5f97cc697a4f75c"
         || manifest.notices.target_manifest
-            != "9a624a53020218aea6927c2baa254daa7ce9099c83eeddcfed371001e889bd6d"
+            != "5a6294b67083cf9e394b11702a9ec943a9efb2e965a7551999d7a78d25ba4fc8"
         || manifest.notices.combined
-            != "9374aa12dc9da1416da235f6a664b6b5817081adf00b94a13d2c58d4a8ca68d4"
+            != "3af0afba1e2feb48c93b2ee6b3204262784b19604133bb518bdcfc904722a223"
     {
         return Err(MacHostError::InvalidPackage);
     }
@@ -365,17 +365,17 @@ mod tests {
                 "version": ENGINE_VERSION,
                 "commit": ENGINE_COMMIT,
                 "sourceState": SOURCE_STATE,
-                "goVersion": "go1.26.7",
+                "goVersion": "go1.26.10",
                 "unsignedExecutableSha256": UNSIGNED_ENGINE_SHA256,
             },
             "guardian": { "sourceSha256": GUARDIAN_SOURCE_SHA256 },
             "notices": {
-                "PROVENANCE.txt": "ce9886f37cd7bc7b62e755375f0d5f23d5f97f60670f6f857dac632b33f5e0ef",
+                "PROVENANCE.txt": "e22474484d6fe7a68be02b7685961ecf0c689c357dc540e782f67fe16058df2e",
                 "rclone-LICENSE.txt": "9266eae9c6a441de0f6847f19ac8f09b280d55612b079eca03b3d49b822c1a71",
-                "source-build.json": "4adca055de0df90833b81c674354ffb5e5d45e57fdc20b5dbfff54117edbc70d",
-                "notices-index.txt": "59ab37c92bac32b1b3533ce8be192c282c9b7d25a81f03b2f63b7651faa4ab51",
-                "notices/manifest.json": "9a624a53020218aea6927c2baa254daa7ce9099c83eeddcfed371001e889bd6d",
-                "notices/THIRD-PARTY-NOTICES.txt": "9374aa12dc9da1416da235f6a664b6b5817081adf00b94a13d2c58d4a8ca68d4",
+                "source-build.json": "f0217883095af8950ae68f1a95f9d3210faa7d566736c85fc410b401124f4618",
+                "notices-index.txt": "5868a5e73b0ea3be7c54229348a973eafe2f81d8db5f755db5f97cc697a4f75c",
+                "notices/manifest.json": "5a6294b67083cf9e394b11702a9ec943a9efb2e965a7551999d7a78d25ba4fc8",
+                "notices/THIRD-PARTY-NOTICES.txt": "3af0afba1e2feb48c93b2ee6b3204262784b19604133bb518bdcfc904722a223",
             },
             "executables": {
                 GUARDIAN_NAME: { "architecture": "arm64", "signedSha256": signed },

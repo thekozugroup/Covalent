@@ -3,6 +3,17 @@
     <string name="folder_sync_renew_detail">The other device must choose its folder and accept again.</string>
     <string name="folder_sync_renew_incoming_detail">Ask the other device to send a new invitation, then choose your folder again.</string>
     <string name="app_name">Covalent</string>
+    <string name="interlink_subtitle">Send photos to your Pi. Keep originals on this phone.</string>
+    <string name="interlink_setup_title">Set up photo sync</string>
+    <string name="interlink_setup_body">First, pair with your Pi. Then choose a source folder.</string>
+    <string name="interlink_pair_next">Pair your Pi to continue</string>
+    <string name="interlink_folder_next">Choose a source folder</string>
+    <string name="folder_sync_network_access_title">Nearby devices access is off</string>
+    <string name="folder_sync_network_access_body">Allow Nearby devices access to pair and sync. Saved links and files are kept.</string>
+    <string name="interlink_network_access_body">Allow Nearby devices access to pair and sync with your Pi. Your originals stay on this phone.</string>
+    <string name="folder_sync_network_allow">Allow access</string>
+    <string name="folder_sync_network_settings">Open settings</string>
+    <string name="folder_sync_network_settings_unavailable">App settings could not open. Open this app’s permissions in Android Settings and allow Nearby devices.</string>
 
     <string name="action_accept_invitation">Accept invitation</string>
     <string name="action_back">Back</string>
@@ -55,7 +66,6 @@
     <string name="folder_sync_access_title">Enable shared folders</string>
     <string name="folder_sync_enable">Start folder sync on this phone</string>
     <string name="folder_sync_host_unavailable">Android could not durably enable folder sync.</string>
-    <string name="folder_sync_local_network_declined">Local network access is off. Folder sync stayed stopped; backup and recovery are unchanged.</string>
     <string name="folder_sync_starting">Starting the private folder service…</string>
     <string name="folder_sync_checking_folders">Checking selected folders before connecting…</string>
     <string name="folder_sync_choose_folder">Choose an existing folder</string>

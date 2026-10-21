@@ -14,6 +14,7 @@ import re
 import stat
 import sys
 import tarfile
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -25,6 +26,7 @@ MAX_SOURCE = 12 * 1024 * 1024
 MAX_ARCHIVE_EXPANDED = 256 * 1024 * 1024
 MAX_INVENTORY = 4 * 1024 * 1024
 OPENSSL_RELEASE_URL = 'https://github.com/openssl/openssl/releases/download/openssl-3.5.9/openssl-3.5.9.tar.gz'
+CA_RELEASE_URL = 'https://gitlab.alpinelinux.org/alpine/ca-certificates/-/archive/20261020/ca-certificates-20261020.tar.bz2'
 LOCK_LIMITS = {'fileBytes': MAX_FILE, 'totalSourceBytes': MAX_INPUTS,
                'sourceBundleBytes': MAX_SOURCE, 'inventoryBytes': MAX_INVENTORY,
                'noticeBytes': MAX_NOTICE}
@@ -179,7 +181,8 @@ def expected_packages(lock: dict, arch: str) -> list[dict]:
         result.append({
             'name': row['name'], 'version': row['version'], 'origin': row['origin'],
             'license': row['license'],
-            'architecture': row.get('architecture', lock['architectures'][arch]),
+            'architecture': row.get('architectureByTarget', {}).get(
+                arch, row.get('architecture', lock['architectures'][arch])),
             'packageCommit': row.get('installedDatabaseCommit', row['aportsCommit']),
         })
     return sorted(result, key=lambda r: r['name'])
@@ -316,11 +319,16 @@ def load_lock(path: Path) -> tuple[dict, bytes]:
     origins = {}
     for row in packages:
         required = {'name', 'version', 'origin', 'license', 'aportsCommit'}
-        optional = {'installedDatabaseCommit', 'architecture'} if lock['schema'] == 2 else set()
+        optional = {'installedDatabaseCommit', 'architecture', 'architectureByTarget'} if lock['schema'] == 2 else set()
         if not required <= row.keys() or not row.keys() <= required | optional:
             raise EvidenceError('unexpected locked package fields')
         if 'architecture' in row and (row['name'] != 'busybox-binsh' or 'installedDatabaseCommit' not in row):
             raise EvidenceError('architecture override is not a declared local shell package')
+        if 'architectureByTarget' in row and not (
+                row['name'] == 'ca-certificates-bundle' and row['origin'] == 'ca-certificates'
+                and row['architectureByTarget'] == {'amd64': 'x86_64', 'arm64': 'noarch'}
+                and not {'installedDatabaseCommit', 'architecture'} & row.keys()):
+            raise EvidenceError('architecture override is not the reviewed upstream CA target mapping')
         for key in ('name', 'origin', 'version'):
             plain_name(row[key])
         if row['name'] in names or not re.fullmatch('[0-9a-f]{40}', row['aportsCommit']):
@@ -358,7 +366,8 @@ def load_lock(path: Path) -> tuple[dict, bytes]:
         if (url.scheme != 'https' or url.query or url.fragment or url.username or url.password
                 or url.port or not ((url.netloc == 'raw.githubusercontent.com' and url.path == expected_recipe)
                 or (url.netloc == 'distfiles.alpinelinux.org' and url.path == expected_archive)
-                or (key == ('openssl', 'openssl-3.5.9.tar.gz') and row['url'] == OPENSSL_RELEASE_URL))):
+                or (key == ('openssl', 'openssl-3.5.9.tar.gz') and row['url'] == OPENSSL_RELEASE_URL)
+                or (key == ('ca-certificates', 'ca-certificates-20261020.tar.bz2') and row['url'] == CA_RELEASE_URL))):
             raise EvidenceError('source URL is not a reviewed upstream location')
     check_recipe_trees(lock, origins)
     if lock['schema'] == 2:
@@ -419,8 +428,15 @@ def collect_inputs(lock: dict, cache: Path, download: bool) -> dict[tuple[str, s
                 except FileNotFoundError:
                     if not download:
                         raise EvidenceError('locked source is missing from offline cache')
-                    with opener.open(row['url'], timeout=40) as response:
-                        data = response.read(row['bytes'] + 1)
+                    # Keep public source identity and HTTP status actionable;
+                    # never echo exception URLs, response bodies or local paths.
+                    try:
+                        with opener.open(row['url'], timeout=40) as response:
+                            data = response.read(row['bytes'] + 1)
+                    except urllib.error.HTTPError as error:
+                        raise EvidenceError(f'locked source download failed (HTTP {error.code}): {key[0]}/{key[1]}') from error
+                    except (urllib.error.URLError, OSError) as error:
+                        raise EvidenceError(f'locked source download unavailable: {key[0]}/{key[1]}') from error
                     check_bytes(data, row)
                     fd = os.open(key[1], os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
                                  0o600, dir_fd=origin_fd)
@@ -694,6 +710,35 @@ def publish_output(output: Path, files: dict[str, bytes]) -> None:
         os.close(parent)
 
 
+def render_notices(lock: dict, packages: list[dict], notices: dict[str, bytes]) -> bytes:
+    lines = ['Covalent Alpine runtime notices', '',
+             'This inventory covers installed Alpine packages and the CA file copied from the',
+             'pinned Go builder. Separate Caddy and rclone notices cover those binaries.',
+             'Package license expressions come from the exact Alpine installed database.',
+             'Full corresponding source for every GPL/MPL origin is in runtime-source.tar.gz.',
+             'The archive also includes small permissive components. OpenSSL source remains',
+             'available at its hash-locked upstream URL in inventory.json. OpenSSL AUTHORS',
+             'and Apache license text are included below. No source recipe was executed.',
+             'CA source includes build scripts; their curl/MIT notices are retained even though',
+             'those scripts are not runtime executables. Copyright remains with each author.', '']
+    for row in packages:
+        origin = row['origin']
+        base = next(r['aportsCommit'] for r in lock['packages'] if r['name'] == row['name'])
+        provenance = (f"aports: {row['packageCommit']}" if row['packageCommit'] is not None else
+                      f"package commit: absent; base recipe: Alpine aports {base} (Covalent-local modification)")
+        lines += [f"{row['name']} {row['version']} ({row['architecture']})",
+                  f"License: {row['license']}; origin: {origin}; {provenance}",
+                  'Notices: ' + ', '.join(lock['originNoticeReferences'][origin]),
+                  'Source: ' + (f'runtime-source.tar.gz/{origin}/' if origin in lock['sourceBundleOrigins']
+                                else 'hash-locked upstream source in inventory.json'), '']
+    for name, data in sorted(notices.items()):
+        lines += ['=' * 72, name, '=' * 72, data.decode('utf-8'), '']
+    notice_data = '\n'.join(lines).encode()
+    if len(notice_data) > MAX_NOTICE:
+        raise EvidenceError('readable notice bundle exceeds bound')
+    return notice_data
+
+
 def collect(args) -> dict:
     lock, lock_data = load_lock(args.lock)
     installed_data = regular(args.installed, 4 * 1024 * 1024)
@@ -716,31 +761,7 @@ def collect(args) -> dict:
     local = collect_local_inputs(lock, inputs, getattr(args, 'local_sources', None))
     notices = read_notices(lock, inputs, args.licenses)
     archive, packaged = source_bundle(lock, inputs, local)
-    lines = ['Covalent Alpine runtime notices', '',
-             'This inventory covers installed Alpine packages and the CA file copied from the',
-             'pinned Go builder. Separate Caddy and rclone notices cover those binaries.',
-             'Package license expressions come from the exact Alpine installed database.',
-             'Full corresponding source for every GPL/MPL origin is in runtime-source.tar.gz.',
-             'The archive also includes small permissive components. OpenSSL source remains',
-             'available at its hash-locked upstream URL in inventory.json. OpenSSL AUTHORS',
-             'and Apache license text are included below. No source recipe was executed.',
-             'CA source includes build scripts; their curl/MIT notices are retained even though',
-             'those scripts are not runtime executables. Copyright remains with each author.', '']
-    for row in actual:
-        origin = row['origin']
-        base = next(r['aportsCommit'] for r in lock['packages'] if r['name'] == row['name'])
-        provenance = (f"aports: {row['packageCommit']}" if row['packageCommit'] is not None else
-                      f"package commit: absent; base recipe: Alpine aports {base} (Covalent-local modification)")
-        lines += [f"{row['name']} {row['version']} ({row['architecture']})",
-                  f"License: {row['license']}; origin: {origin}; {provenance}",
-                  'Notices: ' + ', '.join(lock['originNoticeReferences'][origin]),
-                  'Source: ' + (f'runtime-source.tar.gz/{origin}/' if origin in lock['sourceBundleOrigins']
-                                else 'hash-locked upstream source in inventory.json'), '']
-    for name, data in sorted(notices.items()):
-        lines += ['=' * 72, name, '=' * 72, data.decode('utf-8'), '']
-    notice_data = '\n'.join(lines).encode()
-    if len(notice_data) > MAX_NOTICE:
-        raise EvidenceError('readable notice bundle exceeds bound')
+    notice_data = render_notices(lock, actual, notices)
     inventory = {
         'schema': lock['schema'], 'target': 'linux-' + args.arch, 'lockSHA256': sha(lock_data),
         'declaredSourceImages': {'baseIndexDigest': lock['baseIndexDigest'],

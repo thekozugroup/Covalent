@@ -53,7 +53,7 @@ for contract in \
   'scripts/install-xcodegen.sh' \
   'scripts/setup-doctor.sh' \
   'COVALENT_GO_ARCHIVE' \
-  '020a1e8224811be75163e920bc77e0926a1390a6aeea19bdcf23f74b9d749f6d' \
+  '0b5183492292ada170f9b561a834863808dd02edba599e4ad0e89899330020b3' \
   'scripts/release-version.sh' \
   'scripts/docker-source-fingerprint.sh' \
   'xcodegen generate --quiet' \

@@ -4,6 +4,29 @@ This is an engineering inventory, not legal advice or release approval. It
 records the exact texts observed in the pinned Caddy consumer's compiled Linux
 graphs and identifies separately retained source material.
 
+## Current October 20 collection
+
+The security refresh uses exact Go 1.26.10 and the same Caddy source snapshot,
+with x/net v0.60.0 and OpenTelemetry v1.45.0/log modules v0.21.0. An isolated
+Linux arm64 container built the arm64 binary natively and cross-compiled amd64.
+Both target inventories contain 148 modules and 203 candidate license/notice
+files, with zero unclassified files. Package counts are 949 for arm64 and 951
+for amd64. The MPL corresponding-source member manifest is unchanged.
+
+The new readable notice SHA-256 is
+`300d0eb6042939a5d8f82f0df3c38f49abab8cfc5fe73b0e982500ac107a01fa`.
+The strict verifier retains independent target counts and inventory/binary
+digests in `scripts/verify-caddy-distribution-evidence.py`. The CA source is
+the signed 20261020-r0 noarch package explicitly installed on the digest-pinned
+Go builder after removing its old certificate generator. The Alpine source lock
+retains the full matching recipe and corresponding source. Actual installed
+metadata is bound separately for each target, including apk's x86 normalization.
+
+The family counts are Apache-2.0 61, BSD-2-Clause 4, BSD-3-Clause 56, CC0-1.0
+1, MIT 56 and MPL-2.0 1. Counts overlap. Final native-runner image validation
+and scans remain required; local cross-compilation is not that acceptance.
+The earlier collection below is retained as historical evidence.
+
 ## Exact build binding
 
 The shipped Caddy binary is built from the consumer in

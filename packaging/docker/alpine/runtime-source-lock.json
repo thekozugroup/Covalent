@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "baseIndexDigest": "sha256:fd791d74b68913cbb027c6546007b3f0d3bc45125f797758156952bc2d6daf40",
-  "golangIndexDigest": "sha256:b17af760035fc2f338eed92d448a6c67f2d45438844fc6c60678fa5f99e44b57",
+  "golangIndexDigest": "sha256:a07f231c19b03e6106cf442f02a5bcf262147e744d15b7b5e4b6d81d420c70a0",
   "architectures": {
     "amd64": "x86_64",
     "arm64": "aarch64"
@@ -54,10 +54,14 @@
     },
     {
       "name": "ca-certificates-bundle",
-      "version": "20260611-r0",
+      "version": "20261020-r0",
       "origin": "ca-certificates",
       "license": "MPL-2.0 AND MIT",
-      "aportsCommit": "6e30aafe4fa807ba70797509731f1e7d644dc8f3"
+      "aportsCommit": "ac857c298f6fd212498ce76bb87836d940cdba2d",
+      "architectureByTarget": {
+        "amd64": "x86_64",
+        "arm64": "noarch"
+      }
     },
     {
       "name": "libcrypto3",
@@ -114,12 +118,12 @@
   ],
   "copiedCABundle": {
     "package": "ca-certificates-bundle",
-    "version": "20260611-r0",
+    "version": "20261020-r0",
     "origin": "ca-certificates",
     "license": "MPL-2.0 AND MIT",
-    "aportsCommit": "6e30aafe4fa807ba70797509731f1e7d644dc8f3",
-    "bytes": 179359,
-    "sha256": "b8d837841b88bfaa1a0fa827cbca8e2576418dd47c9fc4bb7f1f9d89c83111b9"
+    "aportsCommit": "ac857c298f6fd212498ce76bb87836d940cdba2d",
+    "bytes": 178791,
+    "sha256": "5961c0a3c65459931c023e0075c09733f09aea4ca439cb85bc4a08bb4f3f568b"
   },
   "files": [
     {
@@ -1189,23 +1193,23 @@
     {
       "origin": "ca-certificates",
       "name": "APKBUILD",
-      "url": "https://raw.githubusercontent.com/alpinelinux/aports/6e30aafe4fa807ba70797509731f1e7d644dc8f3/main/ca-certificates/APKBUILD",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/ac857c298f6fd212498ce76bb87836d940cdba2d/main/ca-certificates/APKBUILD",
       "bytes": 2520,
-      "sha256": "a1429622d05b27e016c1266312be8a9a7e4610da01d7d40826b1681677c53843",
-      "gitBlob": "3d7cba6056b58a3fbce01f7c81e20fa6c085684c"
+      "sha256": "7b35fb8e11790105578f47d57a3b22831227b0d8ad7d064e575bad146023f3da",
+      "gitBlob": "c76805bafbc2a5867c1fe67aa0437573022a36fd"
     },
     {
       "origin": "ca-certificates",
-      "name": "ca-certificates-20260611.tar.bz2",
-      "url": "https://distfiles.alpinelinux.org/distfiles/v3.23/ca-certificates-20260611.tar.bz2",
-      "bytes": 226096,
-      "sha256": "32ca73f2e81e2b88dc614f12e1ee04a82b1ec5a8e29d9f359ddf8905a0afcbb0",
-      "apkbuildSHA512": "f473a1111eb508ef5d1096489479dba07db6b0d76ef2b900b3473933d57419429061d83e9c1e881ab61c4b0f17c64859ec74d670da6fc1d83d9b0fa73e1b7d8d"
+      "name": "ca-certificates-20261020.tar.bz2",
+      "url": "https://gitlab.alpinelinux.org/alpine/ca-certificates/-/archive/20261020/ca-certificates-20261020.tar.bz2",
+      "bytes": 230531,
+      "sha256": "1048bc7f50fa42a6621bc2f8816173f89a0c0098f26dff072bc8fe40af714400",
+      "apkbuildSHA512": "d28eb01751b1a914ffb5d8cb99e662f0a35a95148c21dcf98de1ab3108b54db9714a99472d07715023867f4f76a21f2a79a2bc1c7e9876ce5167fdd865ad2dd7"
     },
     {
       "origin": "ca-certificates",
       "name": "ca-certificates.post-deinstall",
-      "url": "https://raw.githubusercontent.com/alpinelinux/aports/6e30aafe4fa807ba70797509731f1e7d644dc8f3/main/ca-certificates/ca-certificates.post-deinstall",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/ac857c298f6fd212498ce76bb87836d940cdba2d/main/ca-certificates/ca-certificates.post-deinstall",
       "bytes": 137,
       "sha256": "9523860edc396093bd41270c6e33a569a30657e2ffd729829514ee6b6d54d652",
       "gitBlob": "10d219f03f526641af8a366db975b010b3c260e1"
@@ -1213,7 +1217,7 @@
     {
       "origin": "ca-certificates",
       "name": "ca-certificates.trigger",
-      "url": "https://raw.githubusercontent.com/alpinelinux/aports/6e30aafe4fa807ba70797509731f1e7d644dc8f3/main/ca-certificates/ca-certificates.trigger",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/ac857c298f6fd212498ce76bb87836d940cdba2d/main/ca-certificates/ca-certificates.trigger",
       "bytes": 67,
       "sha256": "1bf77c8eae3220b1bd7dd86561d0899315f51d72257c1aeb4066072ed4304fe5",
       "gitBlob": "0ed2ac4980c97739fb6addfbf41a5700c6d286a1"
@@ -1545,17 +1549,17 @@
     },
     {
       "origin": "ca-certificates",
-      "archive": "ca-certificates-20260611.tar.bz2",
-      "member": "ca-certificates-20260611/c_rehash.c",
+      "archive": "ca-certificates-20261020.tar.bz2",
+      "member": "ca-certificates-20261020/c_rehash.c",
       "bytes": 9533,
       "sha256": "a68fedc0edd976b9f35ecfdcb252d80dc12084b1bc4e945be7dc42c437d8b540"
     },
     {
       "origin": "ca-certificates",
-      "archive": "ca-certificates-20260611.tar.bz2",
-      "member": "ca-certificates-20260611/mk-ca-bundle.pl",
-      "bytes": 24507,
-      "sha256": "0c66ca4c5418e2137d20e65bd10df0b193bf9578f7e7a947e5413e198652b4bd"
+      "archive": "ca-certificates-20261020.tar.bz2",
+      "member": "ca-certificates-20261020/mk-ca-bundle.pl",
+      "bytes": 24902,
+      "sha256": "8e278f4982210b37e4f9a048bd6ed23df41e4a054085bd73f8242628f03d09ca"
     },
     {
       "origin": "musl",
@@ -1604,8 +1608,8 @@
       "MPL-2.0.txt",
       "MIT-terms.txt",
       "curl.txt",
-      "ca-certificates-20260611/c_rehash.c",
-      "ca-certificates-20260611/mk-ca-bundle.pl"
+      "ca-certificates-20261020/c_rehash.c",
+      "ca-certificates-20261020/mk-ca-bundle.pl"
     ],
     "musl": [
       "musl-1.2.5/COPYRIGHT",
@@ -2235,13 +2239,13 @@
     },
     {
       "origin": "ca-certificates",
-      "aportsCommit": "6e30aafe4fa807ba70797509731f1e7d644dc8f3",
-      "treeSHA1": "fced8a110cb00ff453951328192429e930d5af66",
+      "aportsCommit": "ac857c298f6fd212498ce76bb87836d940cdba2d",
+      "treeSHA1": "cf049142e972ade53e9a4d9afbdaeb6b0a2cf277",
       "entries": [
         {
           "name": "APKBUILD",
           "mode": "100644",
-          "gitBlob": "3d7cba6056b58a3fbce01f7c81e20fa6c085684c"
+          "gitBlob": "c76805bafbc2a5867c1fe67aa0437573022a36fd"
         },
         {
           "name": "ca-certificates.post-deinstall",

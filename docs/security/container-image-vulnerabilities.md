@@ -6,6 +6,84 @@ sees in `packaging/docker/Dockerfile`, and what is left to decide.
 Current CI scans the immutable local image ID separately on native amd64 and
 arm64 runners. Historical measurements below retain their original scope.
 
+## 2026-10-20 remediation in progress
+
+The October database refresh rejects the previous Go 1.26.7 workers and
+`golang.org/x/net` v0.58.0 in Caddy. The maintained source now selects exact
+Go 1.26.10, x/net v0.60.0, x/crypto v0.57.0 and OpenTelemetry v1.45.0, with
+the log SDK and all log exporters aligned at v0.21.0. The trace exporters
+also select v1.45.0. These address the current standard-library/HTTP2 findings,
+[log SDK advisory](https://github.com/open-telemetry/opentelemetry-go/security/advisories/GHSA-hjf4-fphr-2h65)
+and [exporter logging advisory](https://github.com/open-telemetry/opentelemetry-go/security/advisories/GHSA-8wmf-6v46-5gfg).
+[Go's release history](https://go.dev/doc/devel/release#go1.26.10) records the
+October 19 certificate-verification fix included in 1.26.10.
+
+The Go builder is pinned to the verified official multi-platform index
+`sha256:a07f231c19b03e6106cf442f02a5bcf262147e744d15b7b5e4b6d81d420c70a0`.
+The build now explicitly installs the same official signed, noarch
+`ca-certificates-bundle=20261020-r0` APK on both targets. Its 107,116 bytes are
+pinned to SHA-256 `a4c5de1bf37652cd98cbe71aec209512ae0508a964961957a6c9650f795e46c4`.
+The resulting 178,791-byte bundle hashes to
+`5961c0a3c65459931c023e0075c09733f09aea4ca439cb85bc4a08bb4f3f568b`.
+The architecture-independent package reached the x86 mirror while ARM's index
+still offered the previous version. The checksum-pinned build-only input
+avoids that mirror race. Signature checking uses `/usr/share/apk/keys` per
+command, including the official x86 signer; the global trust store is unchanged.
+No untrusted-package bypass is used.
+
+The Go builder's old full `ca-certificates` generator is removed first because
+its old source certificates could overwrite the new bundle on a later apk
+trigger. The signed bundle alone supplies Caddy's required trust file. Real
+upgrades on both digest-verified Go base layers pass; exact bundle bytes and
+installed records were measured. Apk 3.0.8 records the signed noarch input as
+`x86_64` on amd64 and `noarch` on arm64; target-specific checks bind those
+observed values instead of accepting either. Complete recipe tree
+`ac857c298f6fd212498ce76bb87836d940cdba2d` and the exact GitLab source archive
+were freshly downloaded and verified against Git blobs and APKBUILD SHA-512.
+All 155 source inputs validate. Notice/source review pins were regenerated
+without creating a synthetic installed-runtime receipt. Full native CI image
+checks and vulnerability scans remain required.
+
+The final locally rebuilt Caddy ELF pair passes its strict distribution
+verifier. Explicit file SBOM scans with Grype 0.117.0, database v6.1.10 built
+2026-10-20T06:29:49Z, inventory 149 packages per ELF and each report one
+unknown-severity `GO-2026-5932` module finding, with no critical/high findings.
+These scans supersede the earlier directory-based zero result; a scan must
+demonstrate that it inventoried the intended binaries before being accepted.
+The [Go advisory](https://vuln.go.dev/ID/GO-2026-5932.json) affects the deprecated
+`golang.org/x/crypto/openpgp` packages. Neither exact Caddy target graph imports
+those packages (949/951 packages inspected). No finding is filtered or ignored.
+Arm64 was compiled natively in Linux; amd64 was cross-compiled. This source-graph
+assessment excludes Alpine and other runtime executables and is not a complete
+image clearance. Explicit Mac/Android rclone scans retain the same unknown row;
+their target graphs also contain no OpenPGP imports.
+
+Hosted run 39485175979 exposed the old CA pin failure. The source now contains
+the coordinated builder/runtime/recipe/source/notice fix above. Strict byte,
+package and vulnerability gates remain intact; a pushed fix is not image
+acceptance until the new native jobs pass.
+
+Hosted run 39490316340 confirms the signed CA upgrade, exact trust bytes and
+Caddy collection on both native runners, then stops in source retrieval with a
+generic diagnostic. A clean local Linux container fetches/verifies all 155
+inputs. The collector now reports sanitized per-input HTTP/network failures,
+without exception URLs or bodies. The exact, unchanged 230,531-byte CA source
+archive is retained in the repository and seeds the build-only cache; size,
+SHA256 and original APKBUILD SHA512 checks remain mandatory. This removes the
+GitLab download dependency, without assuming an unrecorded HTTP cause or
+claiming final image acceptance.
+
+The same refresh also exposed RUSTSEC-2026-0382 and RUSTSEC-2026-0383 in the
+shared TLS verifier/root bundle. The lockfile now selects rustls-webpki
+0.103.16 and webpki-root-certs 1.0.10; current cargo-deny advisory, ban, license
+and source checks pass without exceptions.
+
+CI run 39481535802 separately exposed an amd64 timeout in optional source
+deletion propagation after its first eight folder checks passed. Its arm64
+folder journey passed. Keep that failure open for investigation; deletion
+remains disabled for appliance links. The historical BusyBox scanner rows
+below remain visible. No scan ignore or release approval is added here.
+
 ## Where it stands
 
 | | high/critical |
