@@ -1,3 +1,31 @@
+# Sandboxed packaged-worker gate — 2026-10-21
+
+The exact fresh Mac archive's packaged workers now complete the real transfer
+test inside an actual inherited sandbox. Three acknowledged generations, both
+endpoint moves, reopen/replays, pairing identities, originals and receiver
+deletions pass in136.43s test /137.552s native-parent execution. The archive,
+copied workers and original Cargo test executable remain unchanged. A kernel
+outside-file denial and private-temp write are observed; a deliberately
+unrestricted owned parent is rejected before launching any worker.
+
+The first valid-parent run is retained: all transfers pass, but an immediate
+completed-request replay receives the intentional retryable mutation-lock busy
+response. Only the test helper changes, reusing the original request bytes and
+existing60s/240s limits. The passing run observes one busy address replay and
+no busy completed-run replay. Production locking and signatures stay intact.
+
+The archive builds in258.406s. Nine offline selection/negative fixtures, final
+foundation(46.846s), Clippy(1.433s), format and whitespace checks pass. CI uses
+the test-only native parent and retains receipt/log evidence on either outcome.
+See docs/security/sandboxed-worker-gate.md and artifacts/evidence/sandboxed-worker-gate/.
+
+Hosted9437714 Mac CI still has the old first-batch failure(75.39s), now retained
+with its source/log binding. Revised hosted acceptance remains open. Android
+recovery, physical devices and final image/release gates remain separate.
+No production runtime, APK, Pi image, account or original media is changed.
+
+---
+
 # Runtime security and build recovery — 2026-10-21
 
 The actual Alpine evidence exports pass on arm64 (145.365s) and amd64

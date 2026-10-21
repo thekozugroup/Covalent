@@ -1,0 +1,93 @@
+{
+  "archivedAppInventorySha256": "b17de062c0da8a6f1626a7a296ae63ca8ed64229a25e304b4f7cd7d8f2fc4de5",
+  "archivedExecutables": {
+    "covalent-engine-guardian": "af57eee286e0f5145bd2434f61bb1e6a87395da673a0a3a3e172c69f658a4238",
+    "covalent-rclone": "bee3bd75502463ac334ae43941ace81996a6527fdcf20540db184400a426d2e5"
+  },
+  "commands": [
+    {
+      "exitCode": 0,
+      "label": "archive-before",
+      "seconds": 0.598,
+      "stderrSha256": "897ac30281a46152e3ea5bfa13e2744aa876c980cf79bee8d3f6d822b0b5222d",
+      "stdoutSha256": "662c995623526420a76561d7470bc84763d508ba40094bfed5a80342d18eab06",
+      "timedOut": false
+    },
+    {
+      "exitCode": 0,
+      "label": "cargo-build",
+      "seconds": 0.753,
+      "stderrSha256": "aa033d1575aea4c7b55c9f50755801ba4550ad5328b50d704662eb554ee9f59e",
+      "stdoutSha256": "e2daeba52af2890ee182e8a825fc356236616c21a23095d572c773282b512fab",
+      "timedOut": false
+    },
+    {
+      "exitCode": 0,
+      "label": "compile-parent",
+      "seconds": 0.422,
+      "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "timedOut": false
+    },
+    {
+      "exitCode": 0,
+      "label": "sign-test-copy",
+      "seconds": 0.141,
+      "stderrSha256": "63adb510009870907fc147f624662165ba99345ecd12daa32be588573f74a309",
+      "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "timedOut": false
+    },
+    {
+      "exitCode": 0,
+      "label": "sign-qa-parent",
+      "seconds": 0.025,
+      "stderrSha256": "c96f6c4f7e3d1efc328e4cabc03e46216e9a512026428fad637c1dc39f778eb7",
+      "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "timedOut": false
+    },
+    {
+      "exitCode": 0,
+      "label": "verify-qa-app",
+      "seconds": 0.088,
+      "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "timedOut": false
+    },
+    {
+      "exitCode": 0,
+      "label": "read-parent-entitlements",
+      "seconds": 0.013,
+      "stderrSha256": "8944531eee7aa81d0d8ce65e514e1eea23b6d7f2efcffb2028b01eddd2888784",
+      "stdoutSha256": "11ba5b2c4198d11974fd881ae7351be9f38f3b6e5bc0307e933b0a7f9c414c36",
+      "timedOut": false
+    },
+    {
+      "exitCode": 0,
+      "label": "read-test-entitlements",
+      "seconds": 0.012,
+      "stderrSha256": "27ceaabbeb7c33d928532ff35272c86598bee68765512a6be3f55071a3c36fbf",
+      "stdoutSha256": "367fd06da553732455876f7e31bd0abc7862848d7f1464f41eeadb6121efb568",
+      "timedOut": false
+    },
+    {
+      "exitCode": 101,
+      "label": "address-handoff",
+      "seconds": 136.841,
+      "stderrSha256": "afd407277e6860c55cc1adf1ab5bf15916cb23c82b778c996377e2f8bd51d96a",
+      "stdoutSha256": "4018ad6035f83bcec0c7e223cc636bfc4c55c8b7553873e13f89f66310d344b3",
+      "timedOut": false
+    }
+  ],
+  "failure": "address-handoff failed; retained output: address-handoff.stdout.log, address-handoff.stderr.log",
+  "productionAppModified": false,
+  "result": "failed",
+  "schemaVersion": 1,
+  "sourceInputs": {
+    "apps/apple/Config/CovalentNode.entitlements": "c33d1b2d8735b9f1483ec3312c462540f1f5335d5b7a474823b40e2990f3ea28",
+    "crates/covalent-node/tests/one_way_links.rs": "506efbea2c70fe479054096fea11f1ead927241b859110b1c4086c2333cf8ec5",
+    "packaging/macos-qa/Parent.entitlements": "947ca934d695b9f0965e992f2c6485deb4a6f316a07aec141dc50a914419d742",
+    "packaging/macos-qa/sandboxed-worker-parent.m": "5a4773723a77ed015a23a4d193b8679432ed35f5d630c157e6815ff143576330",
+    "scripts/test-macos-sandboxed-address-handoff.py": "ae5bd9b3fdc26428696079d0302520b51d01ba7afc9726bd7bb1be21d0519221"
+  },
+  "test": "manual_link_survives_both_endpoint_moves_and_retains_pairing"
+}

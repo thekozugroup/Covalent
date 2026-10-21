@@ -1,0 +1,18 @@
+{
+  "command": [
+    "cargo",
+    "clippy",
+    "--locked",
+    "-p",
+    "covalent-node",
+    "--test",
+    "one_way_links",
+    "--",
+    "-D",
+    "warnings"
+  ],
+  "exitCode": 0,
+  "seconds": 1.433,
+  "logSha256": "425ce2703fcbfa45915e7031c4375e1c56a23a3a746c03f34652edcdaae6ecf5",
+  "testSourceSha256": "0de6b7647f6b00fa31df6aa001d9df596acf0fe3c6d08dc9f88483ccf146fff5"
+}

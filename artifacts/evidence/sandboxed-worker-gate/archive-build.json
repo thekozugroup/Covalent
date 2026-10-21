@@ -1,0 +1,1099 @@
+{
+  "sourceCommit": "9437714ab534bd843432a93702340d5f6efd7d27",
+  "inputs": [
+    {
+      "path": "Cargo.lock",
+      "sha256": "590c07f6ba8a47f8fbadd7ca500f9c02f9582bbf0ed361d5f0d5577539124421"
+    },
+    {
+      "path": "Cargo.toml",
+      "sha256": "a40eac6a0e640a4b62cebd04e0540cd7e69a95f54ab938ca322d6eec340acb00"
+    },
+    {
+      "path": "apps/apple/Config/CovalentMac.entitlements",
+      "sha256": "4a8626b251e5e8bb343067db67f74d6fec93ddf1b0ec48e0914e8532b3aeb914"
+    },
+    {
+      "path": "apps/apple/Config/CovalentNode.entitlements",
+      "sha256": "c33d1b2d8735b9f1483ec3312c462540f1f5335d5b7a474823b40e2990f3ea28"
+    },
+    {
+      "path": "apps/apple/Package.resolved",
+      "sha256": "daaa834282290a7dafb1c9d9dbd44282c637372b86836523ee4b8e03a02a6701"
+    },
+    {
+      "path": "apps/apple/Package.swift",
+      "sha256": "22cb20f4c4c51036380bc1446e3cbe0f375e8869fefe1ae1b0f502db56d77763"
+    },
+    {
+      "path": "apps/apple/Project.yml",
+      "sha256": "0648fcbb160f847d3569eef4ed453f90f416cdb3369b25cce67874e99327510b"
+    },
+    {
+      "path": "apps/apple/README.md",
+      "sha256": "233fe0698f54884e83dcb2c20838f1060cb221b89b80838b62ca3a6e68b346c5"
+    },
+    {
+      "path": "apps/apple/Scripts/build-node-helper.sh",
+      "sha256": "7183151d350f26d49d4fa73f02c31a6ed4be107419783dad03f5ca5a66ecbb52"
+    },
+    {
+      "path": "apps/apple/Scripts/copy-owner-only-token.py",
+      "sha256": "848dad681ce292fe4362bcb1bdf3ef9cbc6249e8a5b4b3969523a202164ab8ab"
+    },
+    {
+      "path": "apps/apple/Scripts/integration-test.sh",
+      "sha256": "6b56cb457789190417725336966f14f875294a929478db1bce0b823d8c3b18db"
+    },
+    {
+      "path": "apps/apple/Scripts/macos-ui-test.sh",
+      "sha256": "002bd1cddad0ec9e638b1e24bb4bb9db77c14153114275edc6419fd6ace50f22"
+    },
+    {
+      "path": "apps/apple/Scripts/package-sync-engine.sh",
+      "sha256": "73dc914bdd8e893a9168ef5edbc52676e9c726ddc31614fe2d6246e1b9ef8b9b"
+    },
+    {
+      "path": "apps/apple/Scripts/sign-sync-engine-bundle.sh",
+      "sha256": "8931b5a2bac45f29f465b72443e4880f02855bd2300e910f77a53775814b864f"
+    },
+    {
+      "path": "apps/apple/Sources/CovalentMac/CovalentMacApp.swift",
+      "sha256": "01de21663e0ae1d7abfa5f6d9c32f75f53e222334efa7ecbf92a77a67338ec74"
+    },
+    {
+      "path": "apps/apple/Sources/CovalentMac/LocalNodeManager.swift",
+      "sha256": "c9ff5185a011dfbce7da1c66c9a1c3a37a1f22cf471b68fffba0720b06560a95"
+    },
+    {
+      "path": "apps/apple/Sources/CovalentMac/MacBackupsView.swift",
+      "sha256": "c66bd400c0afef9fb60a3092613284180ad408911d99b1d1d8dbf0e10b3799ee"
+    },
+    {
+      "path": "apps/apple/Sources/CovalentMac/MacDevicesView.swift",
+      "sha256": "bbfdd16aab890fd53607b83ee31e7d6d08d4bbeb31bc7519babcf593788470ee"
+    },
+    {
+      "path": "apps/apple/Sources/CovalentMac/MacFirstLaunchRecoveryView.swift",
+      "sha256": "db29ed5309d76f6e44f235ea1f2e15f154aac49c9535a337c13fd36ed1d86ed9"
+    },
+    {
+      "path": "apps/apple/Sources/CovalentMac/MacFoldersView.swift",
+      "sha256": "9be4ca50db407bc56078e177b23c80e7212d37dbab993305509114eba7c5d11f"
+    },
+    {
+      "path": "apps/apple/Sources/CovalentMac/MacOpenSourceNotices.swift",
+      "sha256": "f85e296e6c50601209fac64909c50bb2b2dc000999daede6a6dd3b9aedc5463d"
+    },
+    {
+      "path": "apps/apple/Sources/CovalentMac/MacOverviewView.swift",
+      "sha256": "73bffa19ba4d6d7cf3fcca3395257323809d4b9d4b0fda8bf2d3b7610a17700f"
+    },
+    {
+      "path": "apps/apple/Sources/CovalentMac/MacPeerAddressEditor.swift",
+      "sha256": "e8440b7094f62ebe1e889d4030f547a07fa5921dba36d5207d0db60a3e578463"
+    },
+    {
+      "path": "apps/apple/Sources/CovalentMac/MacRootView.swift",
+      "sha256": "9d642074690c39894a90d30e0455062517b155eb7d88d6585ba052665b677034"
+    },
+    {
+      "path": "apps/apple/Sources/CovalentMac/MacSettingsView.swift",
+      "sha256": "8b08d900167fd468dc43d32f307394be039edd0b5e01030635bd54b655c27767"
+    },
+    {
+      "path": "apps/apple/Sources/CovalentMac/MacSetupViews.swift",
+      "sha256": "6ca4c2f5abea8cf61c3709ff54ee24aec964adc1b5fdc1695d276f9a231e3775"
+    },
+    {
+      "path": "apps/apple/Sources/CovalentMac/MacTextStyles.swift",
+      "sha256": "e59d61b13fc71728b3d402e166c81fd704c41a822f15a1941a16795cfe05f342"
+    },
+    {
+      "path": "apps/apple/Sources/CovalentShared/AppPersistence.swift",
+      "sha256": "f4bde65af3300489a4f7d563dc43dca4056f838d972b045566916f312f0ed8be"
+    },
+    {
+      "path": "apps/apple/Sources/CovalentShared/AppleArchiveTransfer.swift",
+      "sha256": "08af1cf9b77f99c66e0a006346f087da3f2d1330d96faac4235fb294895bb34d"
+    },
+    {
+      "path": "apps/apple/Sources/CovalentShared/CovalentAppModel.swift",
+      "sha256": "2f3a2f673155f984f550259c02c6416a60f511842e98220906f2912684287521"
+    },
+    {
+      "path": "apps/apple/Sources/CovalentShared/FolderSyncGrantReconciliation.swift",
+      "sha256": "4c8fa2664240d210a4f19aa5e97bd17a8b9a7bdc23f870ae7ff99099796d0b33"
+    },
+    {
+      "path": "apps/apple/Sources/CovalentShared/ManagedNodeKeyStore.swift",
+      "sha256": "d205160146d501371dfab56c534450a7fe57f5919157cbd688550d10dae83808"
+    },
+    {
+      "path": "apps/apple/Sources/CovalentShared/Models.swift",
+      "sha256": "d3f0f1ff4b062e0893c2ce4f5d4a2a54dacc84a59508dd2577631f062b7b3fc9"
+    },
+    {
+      "path": "apps/apple/Sources/CovalentShared/NodeClient.swift",
+      "sha256": "08c5ec1887b9b8cfb6b746fe2c4ee0c70e4506eff7607683c8407aa660a419eb"
+    },
+    {
+      "path": "apps/apple/Sources/CovalentShared/NodeErrorCopy.swift",
+      "sha256": "e1e31ea4100c128a342eff368b7eeaca94cbad079c3858ff7a033fe7ba11595b"
+    },
+    {
+      "path": "apps/apple/Sources/CovalentShared/RecoveryFilePair.swift",
+      "sha256": "c3b53cb076cf7b24c0d8aed6f0c62870febcd6dbcf00b51f1ac0d73c77589c2e"
+    },
+    {
+      "path": "apps/apple/Sources/CovalentShared/ScaledSymbol.swift",
+      "sha256": "ebc0ac9d1c6b8201ca90ac766d4eb380c6b02402c615289e39681d19dd5e1b2b"
+    },
+    {
+      "path": "apps/apple/Sources/CovalentShared/SelectedDirectoryAccess.swift",
+      "sha256": "736a33913bcf3f368a0c9a253109dcf30ffdf7d99afdef2b2fabf2e859706067"
+    },
+    {
+      "path": "apps/apple/SyncEngine/PROVENANCE.txt",
+      "sha256": "e22474484d6fe7a68be02b7685961ecf0c689c357dc540e782f67fe16058df2e"
+    },
+    {
+      "path": "apps/apple/Tests/CovalentMacUITests/CovalentMacUITests.swift",
+      "sha256": "6df25a744791012025f89a48e1156901589491abbd712f7f426b343a0a04062a"
+    },
+    {
+      "path": "apps/apple/Tests/CovalentMacUITests/RealFolderLinkUITests.swift",
+      "sha256": "e1d087364617ec7e026655bba956ac7ade5cd05fe396765c625cd36693764e90"
+    },
+    {
+      "path": "apps/apple/Tests/CovalentSharedTests/AlertRecoveryTests.swift",
+      "sha256": "1deb94e55a4378869e9e0031d1ea8b11995ccaed4d87b6e92e66f1a44754cd5a"
+    },
+    {
+      "path": "apps/apple/Tests/CovalentSharedTests/ContractTests.swift",
+      "sha256": "4c2eb993140677fde3b6b77ee1de91308f06eb306d7181eea543dd24a9d04526"
+    },
+    {
+      "path": "apps/apple/Tests/CovalentSharedTests/DynamicTypeContractTests.swift",
+      "sha256": "416c342d1a6a1f7a95c7f6fb56c2bd165c667fa819759693684883206f568297"
+    },
+    {
+      "path": "apps/apple/Tests/CovalentSharedTests/ErrorCopyContractTests.swift",
+      "sha256": "49debedbe897a2067014354ce54f1e6dd03d7bf80275a734b9b9059a42154f24"
+    },
+    {
+      "path": "apps/apple/Tests/CovalentSharedTests/FirstLaunchGateTests.swift",
+      "sha256": "5b4d768552c449d6d1c4ae83b3ad537e34f16b10af2bc93f16a37052e1910cdc"
+    },
+    {
+      "path": "apps/apple/Tests/CovalentSharedTests/FolderSyncGrantReconciliationTests.swift",
+      "sha256": "9b1fb64f062f95dec4799f5f329fcfa8c17d107776ed97c4021f6dd12debb901"
+    },
+    {
+      "path": "apps/apple/Tests/CovalentSharedTests/FolderSyncModelTests.swift",
+      "sha256": "e1a1c41bd18275084508d8f2d6ff7672b0198f1cc067c2e573a2c7a2f6d75811"
+    },
+    {
+      "path": "apps/apple/Tests/CovalentSharedTests/LoopbackHTTPServer.swift",
+      "sha256": "d6ee64605f5a70a55ea281ec7081781289c00dad33e441c34d624ca60da72cfa"
+    },
+    {
+      "path": "apps/apple/Tests/CovalentSharedTests/ManagedNodeKeyStoreTests.swift",
+      "sha256": "51634acb8c9d86f5fa18510e2a52a6ddd4e0589dc97e9a6f8152594f49418ce1"
+    },
+    {
+      "path": "apps/apple/Tests/CovalentSharedTests/NodeClientTests.swift",
+      "sha256": "df6fb6f27ee73879bfa3215dcfc1b516f9ccec0b86cabe34e06e21447e24490b"
+    },
+    {
+      "path": "apps/apple/Tests/CovalentSharedTests/PinnedTrustTests.swift",
+      "sha256": "b6a350ba04335d72f80ed2a106971c1b5efd093f03654c1457b2cbb3fa1bc43c"
+    },
+    {
+      "path": "apps/apple/Tests/CovalentSharedTests/RealTransportTests.swift",
+      "sha256": "3282491355cfcf684b99c8916e116e452ea6ddf21d0ab9a1c9affbc169ee7fdd"
+    },
+    {
+      "path": "apps/apple/Tests/CovalentSharedTests/RecoveryFilePairTests.swift",
+      "sha256": "1cf7e9e9a208faf6740034de2987dea43dd6ec034a566f87094c3270d518fc51"
+    },
+    {
+      "path": "apps/apple/Tests/CovalentSharedTests/SelectedDirectoryAccessTests.swift",
+      "sha256": "00068030aa2f08540bd7cda2cd8adb95de41b5cde04562128ccffc8d71776c33"
+    },
+    {
+      "path": "apps/apple/Tests/CovalentSharedTests/UserFacingCopyTests.swift",
+      "sha256": "e37493cd7e2d62232d48f029a4e0261beb2d1f9566ce03ce6805809e4fc677c4"
+    },
+    {
+      "path": "crates/covalent-android-jni/Cargo.toml",
+      "sha256": "981db2fe883f2a2e9413caaee7b055bfaa39818515bcfaedd84648b634c1667a"
+    },
+    {
+      "path": "crates/covalent-android-jni/exports.map",
+      "sha256": "d5701bb81da5fdee546805f5ab6aa6082e514cf412154d4e62e045e9410ac560"
+    },
+    {
+      "path": "crates/covalent-android-jni/src/lib.rs",
+      "sha256": "68a9e3605c7e4d401b1e1b81ad1956ae1a23852d4fe6f068b717d09e4e2b33ba"
+    },
+    {
+      "path": "crates/covalent-cli/Cargo.toml",
+      "sha256": "ef2cb64907b520b590ecc4ac47e8e4ffd7aeb96bd578a53d1414d20ea88d2e61"
+    },
+    {
+      "path": "crates/covalent-cli/src/main.rs",
+      "sha256": "77c17f59fbf7a60111ff82acee44435585034af466ccb504e76f6df5044c5167"
+    },
+    {
+      "path": "crates/covalent-core/Cargo.toml",
+      "sha256": "d20216d6781a17f91525883809410177e8637b4da29706b2ee701b24c84341ea"
+    },
+    {
+      "path": "crates/covalent-core/benches/engine_smoke.rs",
+      "sha256": "926cd129ddbc973eb6e95ed2c4d211f62fa8a0f3c75dd3023d967cb7c7e4bfb0"
+    },
+    {
+      "path": "crates/covalent-core/src/atomic.rs",
+      "sha256": "5a816b197d4f9fb59893c4078064422f345e49555401ac5d2c07a53033e22834"
+    },
+    {
+      "path": "crates/covalent-core/src/backup.rs",
+      "sha256": "5c1a2b7f25a3c1acfc03c35cceb9d7c479db2445857157b3e03cf04bb813575e"
+    },
+    {
+      "path": "crates/covalent-core/src/chunker.rs",
+      "sha256": "b7915265a43440fef2f8115ffbfef3fb8a558b73650484984d17e8ebeac72588"
+    },
+    {
+      "path": "crates/covalent-core/src/crypto.rs",
+      "sha256": "5b9aca7265eb440c8f26d3b2b0e5d78cadc6d264b16dd2a745500c58d3ec8507"
+    },
+    {
+      "path": "crates/covalent-core/src/engine.rs",
+      "sha256": "bbd84c48c917bd3d66eecb2e9f6817b0bbd973062dc3a433d6b99af5dd6e8ede"
+    },
+    {
+      "path": "crates/covalent-core/src/engine/recovery_import.rs",
+      "sha256": "2a688459e449d38386b9bd8bb72cdbffb381c66923aaf9eca75f5a21099713cf"
+    },
+    {
+      "path": "crates/covalent-core/src/engine/transport_update.rs",
+      "sha256": "80b266def005d66ec37c5a642312c37d8bb4485b6e15394ed8aaf53b9fb212d8"
+    },
+    {
+      "path": "crates/covalent-core/src/folder_sharing.rs",
+      "sha256": "642fec7628443c4fe40cf84e0b51631f9f065384ea29beeae0b73c694e213fc4"
+    },
+    {
+      "path": "crates/covalent-core/src/folder_sharing_tests.rs",
+      "sha256": "c78cc771dbd600db786dcdc1eb8f23483b13f98eadd003cbe8b03b24553cb567"
+    },
+    {
+      "path": "crates/covalent-core/src/identity.rs",
+      "sha256": "5a63342bc084470ff514f55d40de5bfb87012712c172ac50f0d494e2a358fd72"
+    },
+    {
+      "path": "crates/covalent-core/src/key_envelope.rs",
+      "sha256": "b1b73487abf10e57a38c4f304c55459b5b1a12cb8884d91fdfb84454d62395d1"
+    },
+    {
+      "path": "crates/covalent-core/src/lib.rs",
+      "sha256": "d0fcd7e41f08ce354fd68042e15c527769f25ede4398c3694e2c760bb4611e2c"
+    },
+    {
+      "path": "crates/covalent-core/src/manifest.rs",
+      "sha256": "beeafbd8ff3d111fa20c340eb070ef1a9d36253c55db81f82699ab2c03e68761"
+    },
+    {
+      "path": "crates/covalent-core/src/pairing.rs",
+      "sha256": "05af10b7969949e52ce8d5d8e7a0e50347d7a8adf52d787c927fae6d6dddc387"
+    },
+    {
+      "path": "crates/covalent-core/src/recovery.rs",
+      "sha256": "48946078892a31e3eb81565caab02f8271ffe8cb65ec1c87d8ad8c58a0ee8810"
+    },
+    {
+      "path": "crates/covalent-core/src/replication.rs",
+      "sha256": "070f725e648ee792f4e7f1d338a68398da9b5723667352d6ef8a435a109ae5e5"
+    },
+    {
+      "path": "crates/covalent-core/src/restore.rs",
+      "sha256": "e19109cebebbad39b6c71cafbbe02db6b1f682900fa8bbe96b51cc464cb89abc"
+    },
+    {
+      "path": "crates/covalent-core/src/storage.rs",
+      "sha256": "7c948680b94d796c35112e8dae33b6cd27e3b87a02b82c3f10b6ae487ff5c953"
+    },
+    {
+      "path": "crates/covalent-core/src/sync.rs",
+      "sha256": "90f7da6fd643a0837ceaa820cab293a090524bd4178cb0180f3b8b97519a0d8a"
+    },
+    {
+      "path": "crates/covalent-core/src/sync/state_dir.rs",
+      "sha256": "7777dc8c241864a4c94c164ec81b9d5ae849ba80966b83be12a7cc4322c09de1"
+    },
+    {
+      "path": "crates/covalent-core/tests/fixtures/folder-share-v1-checkpoint46.json",
+      "sha256": "83ce68aa8a56816a18a53e1a421adf3ce666ea7ff7a170788bd71f2c33b3b10a"
+    },
+    {
+      "path": "crates/covalent-core/tests/key_protection.rs",
+      "sha256": "a66c84ab6242546d4426a2629b5e1064ceacba9008d1bec3f81f15474002de32"
+    },
+    {
+      "path": "crates/covalent-core/tests/owner_loss_recovery.rs",
+      "sha256": "f1f2d5b1f44779202ec3753585048f04ae2f3d4b114fc3d4be485df18a8b0b97"
+    },
+    {
+      "path": "crates/covalent-core/tests/production_scenarios.rs",
+      "sha256": "dea77bd33c55b192b900058a637c298ccb536c57229320268cbf3068b0e6ecf7"
+    },
+    {
+      "path": "crates/covalent-core/tests/provider_lease_enforcement.rs",
+      "sha256": "bdebdedf5f0c286fb886ac276795f25b10dafc423016ecd1ad375922524c1952"
+    },
+    {
+      "path": "crates/covalent-node/Cargo.toml",
+      "sha256": "e13b82220a8bfb6de134bd4ca87c7170cf67fb623dee32334e05ce9ccf0a91b9"
+    },
+    {
+      "path": "crates/covalent-node/src/advertised_address.rs",
+      "sha256": "613ccfe7b7a0b8bfdf62658af882b0ada3a49ed9d5c201e0f593a4fa3b2e95c1"
+    },
+    {
+      "path": "crates/covalent-node/src/discovery.rs",
+      "sha256": "9a353d64a7b026b7504e512b8811cc1d1e36f4331f54d9df85df6ada9de2ac2e"
+    },
+    {
+      "path": "crates/covalent-node/src/display_names.rs",
+      "sha256": "d0518d0fab815e88244d5bb3d5bd918bd17303094ccca1c4f433848abfb94c38"
+    },
+    {
+      "path": "crates/covalent-node/src/first_run_claim.rs",
+      "sha256": "0b5980d836c47c665556ebfc17062006bd68f86962ad844558ae7e49883b0ffd"
+    },
+    {
+      "path": "crates/covalent-node/src/lib.rs",
+      "sha256": "265061dad58bfef5c6760359d098edb895c9c486574f6adda3126a5d4a8d0f3a"
+    },
+    {
+      "path": "crates/covalent-node/src/main.rs",
+      "sha256": "ec27c0971c7eda320d8ff0107898b8303ea926e3edd1d8d6f6d17a8103f8c7b3"
+    },
+    {
+      "path": "crates/covalent-node/src/network_pairing.rs",
+      "sha256": "30330b2c0db6ae53981ab411243ee31081fa53c4ed0221b95038fea44e7265e1"
+    },
+    {
+      "path": "crates/covalent-node/src/pairing_transport.rs",
+      "sha256": "d0908fe8c2cdac8c5d5dabdb0769b1c1aa07dc0e7ee1c73e4ebcb51b9b2723e0"
+    },
+    {
+      "path": "crates/covalent-node/src/recovery_bootstrap.rs",
+      "sha256": "bd859cc258d4fb39177ae852d083a9127b7a596bcbd8df5951c497d9d3b1ad92"
+    },
+    {
+      "path": "crates/covalent-node/src/recovery_state.rs",
+      "sha256": "73dbea10bd899d7064461c704fa4e813ea51da09f51a4adfbb34d45f850c6f3d"
+    },
+    {
+      "path": "crates/covalent-node/src/runtime.rs",
+      "sha256": "23de3f16fde833113ea2946cd2831c8114cccc65874adc2ccbebc4b044f84277"
+    },
+    {
+      "path": "crates/covalent-node/src/sync_api.rs",
+      "sha256": "91e0b2fb83241a7e2b7e2c1ab45f0fb5459f7dcda9f9d6ac41f70f9006c38f1b"
+    },
+    {
+      "path": "crates/covalent-node/src/sync_control.rs",
+      "sha256": "940299c50f333c33e94133c3faa1cc89fd824c79c0d1103b4994df761da5d234"
+    },
+    {
+      "path": "crates/covalent-node/src/sync_control_tests.rs",
+      "sha256": "9c8a7b0f4e2ace7be56780280f0e594ab2c8fd5e9fd93c63a1c0e2c64bf2d307"
+    },
+    {
+      "path": "crates/covalent-node/src/sync_delivery.rs",
+      "sha256": "e0b55107807da76a29d3be5a27ca359072def27d8de9f2075476f2871ac19149"
+    },
+    {
+      "path": "crates/covalent-node/src/sync_engine.rs",
+      "sha256": "88a020062d364a7a483f3075f40137fc4d033b63a12a64968b7b85dee9d157fd"
+    },
+    {
+      "path": "crates/covalent-node/src/sync_engine/access_recovery.rs",
+      "sha256": "e12909dcb04a6efb7294e0a9a531ba63afcf7ee432abc74dfab879d2a3dd15c5"
+    },
+    {
+      "path": "crates/covalent-node/src/sync_engine/android_saf.rs",
+      "sha256": "cb69bb78ba0cb797f8f1d4f45acf534fb231bac018111091a77556e01f5393ca"
+    },
+    {
+      "path": "crates/covalent-node/src/sync_engine/config.rs",
+      "sha256": "1e9463633ffc939a6f29b4b7f762add7056900120262ab1447663f137cf5b6f6"
+    },
+    {
+      "path": "crates/covalent-node/src/sync_engine/connection.rs",
+      "sha256": "e843d32d6672516ebbe1b5cb031c0440498100fb98ba0ae3fac0e976d38de041"
+    },
+    {
+      "path": "crates/covalent-node/src/sync_engine/connection_tests.rs",
+      "sha256": "a34a94bd1e6c0f3a73c5108ad2e69d7e54130c587df39428b6a2042443ffaca6"
+    },
+    {
+      "path": "crates/covalent-node/src/sync_engine/controller.rs",
+      "sha256": "1d588bab776bda2e072e44cc01c8ffe3a3f8c1d5ab84548e9facdd3c722a5459"
+    },
+    {
+      "path": "crates/covalent-node/src/sync_engine/health.rs",
+      "sha256": "fa65d75131a09cfb5325fb940a2b2f2241db581857daf0af7aecd18fb61afe3b"
+    },
+    {
+      "path": "crates/covalent-node/src/sync_engine/host.rs",
+      "sha256": "b3eb32793dc8f976f79be13ec224210e1f600f7e7ed8ca915bc43b4550f92153"
+    },
+    {
+      "path": "crates/covalent-node/src/sync_engine/identity.rs",
+      "sha256": "fe93ef40f61c30261659f6cbe502a79d47c99b01b671a3b16bb4455dfbb4c0fb"
+    },
+    {
+      "path": "crates/covalent-node/src/sync_engine/installation.rs",
+      "sha256": "de0f709edc1ce1829f5e9cf19ba7ef7436f46c721179332a0567b21b556e269c"
+    },
+    {
+      "path": "crates/covalent-node/src/sync_engine/installation_tests.rs",
+      "sha256": "67fcf97541a55d9278ac5bcdb8c036884a1fc39dc86c590ad185323713db6b4e"
+    },
+    {
+      "path": "crates/covalent-node/src/sync_engine/linux_host.rs",
+      "sha256": "726fa3bf9b477ab660e86fba547db83e465648d1aa86e5885319f94b470bc65a"
+    },
+    {
+      "path": "crates/covalent-node/src/sync_engine/mac_host.rs",
+      "sha256": "7ed8054d787447e6e56c512827862b29b005e948d286c64d689108912b440b37"
+    },
+    {
+      "path": "crates/covalent-node/src/sync_engine/rclone.rs",
+      "sha256": "64dce236cb87bce0c10093bfbf2ddeae4e42fa61db8a176a45c1350b8048c588"
+    },
+    {
+      "path": "crates/covalent-node/src/sync_engine/run_observation.rs",
+      "sha256": "4ae8fb14f6453193f24c682ba745637e290bf4dbd69747c102a6f10cd27bbb12"
+    },
+    {
+      "path": "crates/covalent-node/src/sync_engine/service.rs",
+      "sha256": "e8bf341aca7341aaae16a83e37b6390b4bd6ab37b95ce5b3381a494d9303edae"
+    },
+    {
+      "path": "crates/covalent-node/src/sync_engine/service_tests.rs",
+      "sha256": "a93bd2a957fc06ebcf773204c0cc0b6f87914fcbfd853e102e46f07ca21a801f"
+    },
+    {
+      "path": "crates/covalent-node/src/sync_engine/sharing.rs",
+      "sha256": "a6ee38fea66e471eaefe2b9f7520aafcbdd97384a8bcdccb900495b0c3226653"
+    },
+    {
+      "path": "crates/covalent-node/src/sync_engine/sharing/endpoint_roster.rs",
+      "sha256": "24da4486728233c8938212ab0159509fd6be35a7b272569764a07943b1f1bb59"
+    },
+    {
+      "path": "crates/covalent-node/src/sync_engine/sharing/link_runs.rs",
+      "sha256": "ee7afcde7e8f33e76067a1d29fb8fe931d86f65b13ba8c47c02d4f0c303ce51a"
+    },
+    {
+      "path": "crates/covalent-node/src/sync_engine/sharing/link_settings.rs",
+      "sha256": "75f7e0d097dffa0dd080505fcf1595efa4c9a136da0bbc27908ef20727b8b15b"
+    },
+    {
+      "path": "crates/covalent-node/src/sync_engine/sharing_tests.rs",
+      "sha256": "12228c2a797a08aca50d287540bb949bc323975a154371f3983f79376fd8b2f4"
+    },
+    {
+      "path": "crates/covalent-node/src/sync_engine/state.rs",
+      "sha256": "a603549c715652ec774ac5b4caca6275a5403d03bb1526c5a804fade39ebe0ed"
+    },
+    {
+      "path": "crates/covalent-node/src/sync_engine/state_tests.rs",
+      "sha256": "265193f71512c20a443757f0f141d97e6d586168dc824b2c045727f9a1c80e30"
+    },
+    {
+      "path": "crates/covalent-node/src/sync_engine/supervisor.rs",
+      "sha256": "5de86dca94950db0ce8c95427e172f01e33c7650832a89e11cbe6438efc7c98d"
+    },
+    {
+      "path": "crates/covalent-node/src/sync_engine/supervisor_tests.rs",
+      "sha256": "b00e1c3772868dbdc473c64744798c52d14df86c78f45214d18d0662d6254b45"
+    },
+    {
+      "path": "crates/covalent-node/src/transport.rs",
+      "sha256": "a931a3af83806de32d99e1ace4878d4a294ebb81d8e5fd211666c1762548fdc3"
+    },
+    {
+      "path": "crates/covalent-node/tests/first_run_claim_flow.rs",
+      "sha256": "3c95329f9da76a2f3d77bc0df923cfa124ea05c995ab5fbe2f675e41d1d44cfc"
+    },
+    {
+      "path": "crates/covalent-node/tests/fixtures/prior-package-9ac1f7e-state.zip.b64",
+      "sha256": "c0197e0889c364b5ab378db0fbb4692d70ca993c6780ec44161700589c97e325"
+    },
+    {
+      "path": "crates/covalent-node/tests/network_pairing_flow.rs",
+      "sha256": "114a87f7c9c5b295e0f830438b43c28c7bfc6abc060db787fe50d0ab47906230"
+    },
+    {
+      "path": "crates/covalent-node/tests/one_way_links.rs",
+      "sha256": "506efbea2c70fe479054096fea11f1ead927241b859110b1c4086c2333cf8ec5"
+    },
+    {
+      "path": "crates/covalent-node/tests/owner_loss_runtime.rs",
+      "sha256": "02a05d52606eedf45b0f5cc0bc41b0c0de019f27dadacae730827f7f51a397dc"
+    },
+    {
+      "path": "crates/covalent-node/tests/prior_package_upgrade.rs",
+      "sha256": "5a37b4a963cdd51441b2162824365ff58d7ee78feb2561119fe3b0c6d799fda9"
+    },
+    {
+      "path": "crates/covalent-node/tests/quic_vertical_slice.rs",
+      "sha256": "8a8b208f95c599df438a43069883650fd8874a0d364d5b4bd7ec4f569dd5f351"
+    },
+    {
+      "path": "crates/covalent-node/tests/recovery_shutdown.rs",
+      "sha256": "954b266eeefbaf698fe7fbd17ec94afcae198f1a3d38730dac20cd29072041b6"
+    },
+    {
+      "path": "crates/covalent-protocol/Cargo.toml",
+      "sha256": "8ccb0496e0276abb0d002ff259f13ba24d3429eac6bd9637c3d6acba9f14352d"
+    },
+    {
+      "path": "crates/covalent-protocol/src/lib.rs",
+      "sha256": "9cfc1f832210a1506696454a7c024732ef36de460e0696fea5b45a10ca349aed"
+    },
+    {
+      "path": "crates/covalent-protocol/tests/contract_fixtures.rs",
+      "sha256": "6c530fb1d354ddb9a8f341bacc95ae8d560cd52dd115f0a90260a0e00f9b94e6"
+    },
+    {
+      "path": "packaging/rclone/LICENSE.rclone",
+      "sha256": "9266eae9c6a441de0f6847f19ac8f09b280d55612b079eca03b3d49b822c1a71"
+    },
+    {
+      "path": "packaging/rclone/README.md",
+      "sha256": "62ab5548394ade7b3c67afe90bf8b4ea698ee1d4bc6c6913158d19ffcf75aba1"
+    },
+    {
+      "path": "packaging/rclone/auth_proxy.go",
+      "sha256": "18c9c1910c5ecd653788adfaf274096a9e6ac10cacb04839d6a9879b98e0dafd"
+    },
+    {
+      "path": "packaging/rclone/auth_proxy_test.go",
+      "sha256": "2f433d2819008ccec7aa08b539ac0feb3598d92afbe986372a27714a601ed5ea"
+    },
+    {
+      "path": "packaging/rclone/go.mod",
+      "sha256": "eaa7a6edf41ca097fc52097c9ff7abf71a3b1e28d8b553372d54999711bf6f6d"
+    },
+    {
+      "path": "packaging/rclone/go.sum",
+      "sha256": "57f578898529d6604fcb0484cffa6f09d74e082151cd146e841b630f55d03637"
+    },
+    {
+      "path": "packaging/rclone/main.go",
+      "sha256": "394ace7bfe17a005398625577a311c96fd7a6f5f63533f6ccebecdda08337143"
+    },
+    {
+      "path": "packaging/sync-engine/engine-guardian.c",
+      "sha256": "c50b5cf10a287c4c061b7891978fd2681b5c96910eb2c69c922beae349140579"
+    },
+    {
+      "path": "scripts/android-api37-device-test.sh",
+      "sha256": "698d6ec348f97f303cb8460941c54314a180f654eda0325a7355593cb93e2167"
+    },
+    {
+      "path": "scripts/android-go-link-wrapper.sh",
+      "sha256": "1b4c78c738a027a924e7807be75cf49b3792833a958d98af2773c799bab5be37"
+    },
+    {
+      "path": "scripts/android-instrumentation-result.sh",
+      "sha256": "9e6b68c870aea2327c1e8e1c5017febfdf73a408f3c981181db995ecac37bd13"
+    },
+    {
+      "path": "scripts/android-native-budgets.sh",
+      "sha256": "77113f7fd98b4687f7967e06893eb84b5df99ba614ed0ad596867970f20653ba"
+    },
+    {
+      "path": "scripts/android-native-library-directory.py",
+      "sha256": "944c818d9b204d76cfd42d84bb79328ef2144b915ff7fee50c04ffe55923de1f"
+    },
+    {
+      "path": "scripts/android-source-fingerprint.sh",
+      "sha256": "3b703b82104ee6586473940849af55b1ece2884d14fd11967e4da11862f715b7"
+    },
+    {
+      "path": "scripts/apple-dependency-inventory.sh",
+      "sha256": "db1190a39157ed440330765baebfbc61b960b66d96dcec91a40a5df5e91ad7e1"
+    },
+    {
+      "path": "scripts/apple-package-tls-e2e.sh",
+      "sha256": "bbed444ef225c18672d5cf263c3edb563c08554cb9075683b181918562694c7f"
+    },
+    {
+      "path": "scripts/atlas-preflight-remote.sh",
+      "sha256": "acd0683d44b64aec236ccb30c2d11fb32f08bc813671ade2197bc9d2b8023e64"
+    },
+    {
+      "path": "scripts/atlas-preflight.sh",
+      "sha256": "3272d9f54fe4e7551d38c1d1fd4e03a368dc4de1667a4a30217d7fb3d5bde35b"
+    },
+    {
+      "path": "scripts/bootstrap.sh",
+      "sha256": "0433672ecc86d6a150402e43ad38f129d1e7ae9da467e1c6d893f44bcda642b6"
+    },
+    {
+      "path": "scripts/build-android-jni.sh",
+      "sha256": "075b0243cca101a437f0cf26e3f5f981fa6908e65bd1e57804094cda1520db63"
+    },
+    {
+      "path": "scripts/build-android-sync-engine.sh",
+      "sha256": "93d7018ace77588e3640b9a6453da899c7beff2d98d1008b8d229c287b5657c1"
+    },
+    {
+      "path": "scripts/build-linux-sync-engine.sh",
+      "sha256": "970f82f2a2bcbf8c0a264f1721505d4b6acdcae229a87923f994804ed31ab5d2"
+    },
+    {
+      "path": "scripts/build-macos-sync-engine.sh",
+      "sha256": "2a3a5abc5db67d4e6f42eea034680ca2f390e6615a6e2d236e74581cdfe62965"
+    },
+    {
+      "path": "scripts/build-personal-android-apk.sh",
+      "sha256": "65e57a551bc5e7182b591e44be205616f7bbe3dd2cede0859c6419a2982b4c98"
+    },
+    {
+      "path": "scripts/build-personal-macos-app.sh",
+      "sha256": "f3b8e9127dd71af0d2608582e962eb0b39c53f0b8acccbbab238cfe547f03606"
+    },
+    {
+      "path": "scripts/check-android-jni-contract.sh",
+      "sha256": "1cfc6a37d485c5727302c58bfc8c7b111d1709690550c273f4b982ced3b759f3"
+    },
+    {
+      "path": "scripts/check-android-native-package.sh",
+      "sha256": "7992dd0c7cf52edf1a632e22fd7c2e2aba20243c008140a3b6d465567fc07be0"
+    },
+    {
+      "path": "scripts/check-android.sh",
+      "sha256": "8196dd913992a73aeaa24cfde54c7f2a407a0b6c5a1fc2212bbf439639ee5f7e"
+    },
+    {
+      "path": "scripts/check-artifact-budgets.sh",
+      "sha256": "0d312600964aad9382a21e31a4bda1c1ce72adc9ae2d7994e34a5055dccc4ecb"
+    },
+    {
+      "path": "scripts/check-container-claim.sh",
+      "sha256": "ea13985976f9d1701ef3289fd4ba0a75de17f06693f9166dfb69a7f72e95ba5f"
+    },
+    {
+      "path": "scripts/check-container-contract.sh",
+      "sha256": "68482225096db242a15c0502a4c638734af27c47b685a65399c61fa0508864cb"
+    },
+    {
+      "path": "scripts/check-container-runtime.sh",
+      "sha256": "ee549ca382586be725012a590f90f5497f4f57af34fe1e8089c39f205654bca3"
+    },
+    {
+      "path": "scripts/check-container-update-source.sh",
+      "sha256": "c0582afa32daf8a1d3f477412a80a3118e4721c3d89c80471f2c586d62b72aa8"
+    },
+    {
+      "path": "scripts/check-interlink-package.sh",
+      "sha256": "830554dcb58c7967737b81643e0223afaecb3f28e060457fbbd9e47f6610f385"
+    },
+    {
+      "path": "scripts/check-openapi-routes.mjs",
+      "sha256": "e4eabe8f7b46530bdce79469f240df6d1334c5f7826442ec98281ab5ac4dc905"
+    },
+    {
+      "path": "scripts/check-required-checks.sh",
+      "sha256": "8dc6ced027648859966f45b8c999baf612379c97efd992e3ab778e006b592178"
+    },
+    {
+      "path": "scripts/check-zero-open-codeql-alerts.sh",
+      "sha256": "36b2a1a544b9afd53875994e98af2a6a80ce63800edad0acd66914088595eefb"
+    },
+    {
+      "path": "scripts/check.sh",
+      "sha256": "818e0a834a66c561a2d76b945989023eceebe1d681df837d25e2c1de9c1f0839"
+    },
+    {
+      "path": "scripts/collect-alpine-runtime-evidence.py",
+      "sha256": "4449659ac94cc9c1516dafce413d27fa73a2fb0dd632d58635cd965be820bed5"
+    },
+    {
+      "path": "scripts/collect-android-native-distribution-summary.py",
+      "sha256": "b03139b31820879f913dbe4fc6c957f640b6155010564eeb9a990545e3a3e214"
+    },
+    {
+      "path": "scripts/collect-android-native-link-provenance.py",
+      "sha256": "8f3b0462a2d490638581987702c0b1b0db3e85829bf81ff652fe3637399de153"
+    },
+    {
+      "path": "scripts/collect-caddy-distribution-evidence.py",
+      "sha256": "f79e7d8d2b6c9273ab9e246d7eaa048c934b9ae639d50327f359107622ef0998"
+    },
+    {
+      "path": "scripts/collect-go-target-license-inventory.py",
+      "sha256": "2a159116e11588e85d9863c6b045d0f49516f6498e3ae644765958c640db763c"
+    },
+    {
+      "path": "scripts/collect-sync-engine-notices.py",
+      "sha256": "280b5ff1f628ef3831e0dbfab704c4be50e3c0d830f08254b6f82e0475962cd3"
+    },
+    {
+      "path": "scripts/configure-trusted-console.py",
+      "sha256": "f68849468e6cfab7c50f00c4de021988fab0f9a378e4eae1565c22ffa5ac686c"
+    },
+    {
+      "path": "scripts/container-folder-sync-e2e.py",
+      "sha256": "3e02e353043eb33e8e5eb49d5151ffb79c64f61097be8a84e71a8db3ef66d160"
+    },
+    {
+      "path": "scripts/container-latest-version.mjs",
+      "sha256": "ebf782617205f1d98c20df562c1df480159e702486a651dea1d8434650ad077f"
+    },
+    {
+      "path": "scripts/container-runtime-platform.sh",
+      "sha256": "2acaf19f7d5a95d4724bf641ed5e49050c40ab7128e36927fbf92f280cfc9b91"
+    },
+    {
+      "path": "scripts/disable-android-guest-launcher.sh",
+      "sha256": "3916f1e2ddd90d9d0cdc51ef95f8e1cc264e172822ece4e08b97f79507a3ba75"
+    },
+    {
+      "path": "scripts/disable-android-guest-snapshots.sh",
+      "sha256": "ac7a262b3b27a292f22183430edf28bf7833f9de4987c61e418f0133932f2ac5"
+    },
+    {
+      "path": "scripts/docker-compose-e2e.sh",
+      "sha256": "923727cad3a77a9c65f34e5ce9af44f39eb7029832a848fe2226e714b2b163b7"
+    },
+    {
+      "path": "scripts/docker-source-fingerprint.sh",
+      "sha256": "f170a12400d34ed5d478d5972adfe0c9544c124415e94d34f2b6baf686591f6b"
+    },
+    {
+      "path": "scripts/finalize-container-vulnerability-scans.sh",
+      "sha256": "f967714e9c4d5d8ce6d701f684c07adef2ba5b369414b81d0dfb79ea4d4eb481"
+    },
+    {
+      "path": "scripts/generate-cli-release-inventory.sh",
+      "sha256": "5652ada2862f9b1508f129ed4422ae4226693c0f37c40b17aa5835ae5fed7648"
+    },
+    {
+      "path": "scripts/install-xcodegen.sh",
+      "sha256": "10326a676a8e37dc05bd12d19bdcd3605589bf888b288633bfa730fd3928f28d"
+    },
+    {
+      "path": "scripts/interlink-api37-permission-test.py",
+      "sha256": "97d47ee35a45ac9f0294273d94a970abb2f3539c7a59cb09c3aaa9798abef191"
+    },
+    {
+      "path": "scripts/interlink-api37-reboot-test.py",
+      "sha256": "7c19842ed13751c712f479e982eda5ebc0db7cb30bb26e77398648bc4bef8391"
+    },
+    {
+      "path": "scripts/interlink-release.py",
+      "sha256": "8faac40b05aab80a270aaaaf92087ffc95b04db7f2d53806b8e6bea3614b26b8"
+    },
+    {
+      "path": "scripts/interlink_framework_trace.py",
+      "sha256": "cb14714892879551607de292d155d33ae7214a18df6ba48d1b6b7de09686186f"
+    },
+    {
+      "path": "scripts/interlink_native_reports.py",
+      "sha256": "de1298052e65573cd1bfd023e3c3a2fe19e4204382048f17666f9766f6389807"
+    },
+    {
+      "path": "scripts/package-cli-release.sh",
+      "sha256": "8e6a86d3f356d7c13a8318595ad155598cb488cf49fc3e0ba2d70bbec0d07480"
+    },
+    {
+      "path": "scripts/publish-release-assets.sh",
+      "sha256": "00e3bfdb157aa32a510d5c7f1657461fe78d488fee13574425b9638d53f4d839"
+    },
+    {
+      "path": "scripts/refresh-tailscale-discovery.sh",
+      "sha256": "d20f232b4a30737b2266fef89d5dd912fe98003c3d006ce66ddf008df1254fb3"
+    },
+    {
+      "path": "scripts/release-version.sh",
+      "sha256": "5c602ef0157c1868eab266172884a6ed1eb041291e316039f72d35abde523b82"
+    },
+    {
+      "path": "scripts/remote_drill_api.py",
+      "sha256": "877611862e1ad307595d8d2266ffcf33a4751f975d6349387e9285b7d1fe251e"
+    },
+    {
+      "path": "scripts/require-kvm-acceleration.sh",
+      "sha256": "cebbab3961a214268e36023732034de8b93e03973d15afc8c3fe5e391f520544"
+    },
+    {
+      "path": "scripts/run-pinned-grype-scan.sh",
+      "sha256": "dd4fc31c3f683459156f24d5d52155f3f6dbd16fa3397b6375b8bb217339ed52"
+    },
+    {
+      "path": "scripts/setup-doctor.sh",
+      "sha256": "4002c9035238ed92847d746c6dad18656fccd57f7cbf49abb1ff628dc2a97164"
+    },
+    {
+      "path": "scripts/smoke.sh",
+      "sha256": "e4e256ee5863a336978a543507f441ce904d33b373d1bfa4e978d87625fa4a09"
+    },
+    {
+      "path": "scripts/test-android-instrumentation-result.sh",
+      "sha256": "e7a4d56dbd16291b55ac1d6ffde47b455d2f08fd323b77ab1d77a62bbe709a84"
+    },
+    {
+      "path": "scripts/test-android-inventory.py",
+      "sha256": "35c09419143afb5b3802284c4aa0173c4e748d8533b178b4509b9fc9bce0a241"
+    },
+    {
+      "path": "scripts/test-android-jni-build-command.sh",
+      "sha256": "56b3271f49244de057c3f4563cc3c3c36cb61a6ec57b5d3d6980c0ed72a71883"
+    },
+    {
+      "path": "scripts/test-android-native-library-directory.py",
+      "sha256": "9965ce2f023ead0c3def901bead8620394d8ff1ab092a4e747984f2206c1106d"
+    },
+    {
+      "path": "scripts/test-android-native-package.sh",
+      "sha256": "a676a3da708d9006b9e5cf03fb55d26e1a1e3675c43de2d80af64550056399f3"
+    },
+    {
+      "path": "scripts/test-android-prebuilt-freshness.sh",
+      "sha256": "db5d289b8ad597ee58f62985104159927b44e3828faacedfd5f26b1f17cd9479"
+    },
+    {
+      "path": "scripts/test-android-source-fingerprint.sh",
+      "sha256": "252085f0976f9526c7bcc419a689ee4a44a2defcce696533d7450e00484128de"
+    },
+    {
+      "path": "scripts/test-atlas-preflight.sh",
+      "sha256": "bae2fa009045bb68acb98e4767e4880361809b70159e769dbfd801908e2432b9"
+    },
+    {
+      "path": "scripts/test-cli-release-attestation.sh",
+      "sha256": "9a9be8eb2649deff8d11dbeb2698bc390098c7cef1867af01309f5d22edf0cf6"
+    },
+    {
+      "path": "scripts/test-cli-release-workflow.sh",
+      "sha256": "93e54dfa5c755daab5f90819ea9fc97ad24b2e069bab410cd5e3643895c1b724"
+    },
+    {
+      "path": "scripts/test-collect-alpine-runtime-evidence.py",
+      "sha256": "f7f7bbf1d411f385b5b64cda8203e66dc9ff1cdb39013c1ead9b01550e211b12"
+    },
+    {
+      "path": "scripts/test-collect-android-native-distribution-summary.py",
+      "sha256": "0fee3e7cd549e8f5fadf6757365827df595b5e1f7fea71adecd566c6b94246b9"
+    },
+    {
+      "path": "scripts/test-collect-android-native-link-provenance.py",
+      "sha256": "8e47d4eb4d80415eca336b8dd9c66b467f08637305834f9415e5e707575ac863"
+    },
+    {
+      "path": "scripts/test-collect-caddy-distribution-evidence.py",
+      "sha256": "cb4b0b27714f326bc58b5eadaacc8906f0ea74c564f432d79b46fdd9e2ed0aa4"
+    },
+    {
+      "path": "scripts/test-collect-go-target-license-inventory.py",
+      "sha256": "347008311c7b2c7b63724748153bc2b5052ca7b99d010ae1edb7182378d92ae1"
+    },
+    {
+      "path": "scripts/test-collect-sync-engine-notices.py",
+      "sha256": "4096acc46420b2dc3222dd2f298bb42a338f4eccaf713d540ebd13ccf021fa20"
+    },
+    {
+      "path": "scripts/test-container-build-repair.sh",
+      "sha256": "ef47b4c3211b2a9af467460b215152f4d1706e9b071534f50891684ddb0a10ae"
+    },
+    {
+      "path": "scripts/test-container-entrypoint.py",
+      "sha256": "028999973c82baa7f05ba6ae41c79f2b3621c02096fdc17f8ccc12186276f7d7"
+    },
+    {
+      "path": "scripts/test-container-index.sh",
+      "sha256": "1db4a8c2f9241a7a756f171a219aaa781f3d1dfa70c04c2839013d7193c23672"
+    },
+    {
+      "path": "scripts/test-container-latest-version.sh",
+      "sha256": "5d21b5ac22dc357385a602aedb9f8f69e04d63eccf24e4106b2d04affe3018ee"
+    },
+    {
+      "path": "scripts/test-container-runtime-fallback.sh",
+      "sha256": "1cf8f5e4bc02dd31b461072259cabb1c0a7f9d0ab0983aff55e23101f6af4975"
+    },
+    {
+      "path": "scripts/test-container-update-source.sh",
+      "sha256": "e4295d778452296f77db3ef4ff14370aad974f9ccd3b4b667cd2eee2c779d692"
+    },
+    {
+      "path": "scripts/test-docker-source-fingerprint.sh",
+      "sha256": "ae125b025852ea47169118b78dec7467320d63a86441f20653413b02bae687d5"
+    },
+    {
+      "path": "scripts/test-interlink-native-reports.py",
+      "sha256": "c540d6313a8d2be563bd55bc7c9277b58ce1f878833b7d08d970fee48bf64a20"
+    },
+    {
+      "path": "scripts/test-interlink-permission-harness.py",
+      "sha256": "e916cd0f728aa02873f5e09f668208176b79462644aa6bbf09d6097374052292"
+    },
+    {
+      "path": "scripts/test-interlink-reboot-harness.py",
+      "sha256": "76614f0a662683a0a94187f22b7bb350f60544522b24f2ca0373ef134ba105dc"
+    },
+    {
+      "path": "scripts/test-interlink-release-sdk.py",
+      "sha256": "7e994ba7e829e0a93fb0ab4916f661f733c23177bbac175a4801c4a98b610fc7"
+    },
+    {
+      "path": "scripts/test-interlink-release.py",
+      "sha256": "97b3a03fb5bf20ff969ffb424f7c106076844f293eb22350b9f6a0f6916ccbfd"
+    },
+    {
+      "path": "scripts/test-linux-sync-engine-notice-packaging.sh",
+      "sha256": "ad8890ab088e5357655ea36e6df1ba756d3de9408c3f56b40881cd87be56e472"
+    },
+    {
+      "path": "scripts/test-macos-open-source-notices.sh",
+      "sha256": "84964cb140be18517675b7df0475b6fe72524eb1f9a86cb6ee491b416646bbc2"
+    },
+    {
+      "path": "scripts/test-macos-sync-engine-packaging.sh",
+      "sha256": "ee3eab63481982c3dde9b5314d024bdfdc5d256b7f488a7aa7f4d0863e185ec5"
+    },
+    {
+      "path": "scripts/test-openapi-routes.sh",
+      "sha256": "e5f909b8481ee3a663a0efddd99767ae70473623129fb2d54eca66a76e17aee2"
+    },
+    {
+      "path": "scripts/test-package-cli-release.sh",
+      "sha256": "b061db935ebf875b7d9010a3905256a386fd6c096f9520dabf886d66e38d7ce8"
+    },
+    {
+      "path": "scripts/test-personal-android-apk-builder.sh",
+      "sha256": "cf9ab7b411d396382b23efbe6556389479b334fa0f66fbcfa7e6e2bfb61d36d7"
+    },
+    {
+      "path": "scripts/test-personal-macos-app-builder.sh",
+      "sha256": "a07b42cdbe216ab7852a700d65190fad6857570f721663ba09b86ed96e6f81d5"
+    },
+    {
+      "path": "scripts/test-pinned-grype-scan.sh",
+      "sha256": "8e522001dbea55903bd9cfde31056c8111d42166e9eb283125494ffcaa3f7570"
+    },
+    {
+      "path": "scripts/test-publish-release-assets.sh",
+      "sha256": "f4f7bd5eb25e55cef36e5c14f0cf42ceb19ab7e2e5982954027cc9c50c4e0541"
+    },
+    {
+      "path": "scripts/test-release-guardrails.sh",
+      "sha256": "d16f2559f0c4fd4973b47191512c165b94d1fcc7ef2748a1519fda30e450516e"
+    },
+    {
+      "path": "scripts/test-release-version.sh",
+      "sha256": "64514059ba8bca5c7a90fca7e38f27ee1e4a80ac82e53cfa697747f4db6eb910"
+    },
+    {
+      "path": "scripts/test-remote-drill-owner-loss.sh",
+      "sha256": "c8972debe25b6cf5bcc0b4d7861aebe6373043f665a0505664a04a94c56b90be"
+    },
+    {
+      "path": "scripts/test-remote-drill.sh",
+      "sha256": "b159f52b438cfc0d4b6bb22cf235f7ae8874da4360656ba06de7a555639716ea"
+    },
+    {
+      "path": "scripts/test-setup-guidance.mjs",
+      "sha256": "3e05c8100c81ffc44d7d5644c8970843948f079c5d38e2363724011fe78a6336"
+    },
+    {
+      "path": "scripts/test-setup-paths.sh",
+      "sha256": "61d487ee28bbbe889631987be3f0df25dda63c038523c4c3f040bb88d9f7e23f"
+    },
+    {
+      "path": "scripts/test-tailscale-discovery.py",
+      "sha256": "467be9bc4d5d9e35be6e4089c15d61af7bce504ea4959a3cdb13ce6ddd581cf8"
+    },
+    {
+      "path": "scripts/test-trusted-console.py",
+      "sha256": "24c5eac4641f529afb39b19f5eaf47f64b8e8710c350f1acaec629c8453ff128"
+    },
+    {
+      "path": "scripts/test-verify-alpine-runtime-evidence.py",
+      "sha256": "aa63bc69d01f4281575072c9f6101234e683fd77f7ea2f8bc8a5ecc1529fcf56"
+    },
+    {
+      "path": "scripts/test-verify-caddy-distribution-evidence.py",
+      "sha256": "39f36fe914d0e43911b03dc1919979c213adae4dd7026bf3bdd09a6730e61895"
+    },
+    {
+      "path": "scripts/test-zero-open-codeql-alerts.sh",
+      "sha256": "3b6e8409d236e79113451b770bf4fb3e26f5202c2ac79d595e07997ef3b8ca96"
+    },
+    {
+      "path": "scripts/validate-foundation.sh",
+      "sha256": "0850a98fb25b72d3b7810c7be08739baf6b377e60339a96e300bea84ac33bd59"
+    },
+    {
+      "path": "scripts/validate-setup-paths.sh",
+      "sha256": "b8a17749ad00004bb6d51b708254e8322c7aa5fd94464c787235c7ed6f913635"
+    },
+    {
+      "path": "scripts/validate-unraid-template.sh",
+      "sha256": "8c7714853da1787b0b902b18533b64c13c6e5c75275535104d8a6d5177a56b06"
+    },
+    {
+      "path": "scripts/verify-alpine-runtime-evidence.py",
+      "sha256": "0b330738bfada77ef5167f5195d71c8b04389a7ef9e0fdd4daebebcdd5d29b60"
+    },
+    {
+      "path": "scripts/verify-apple-silicon-bundle.sh",
+      "sha256": "f2d0d89d5fdaa5ee7d66d3d6532da5b500f0e78b140a7209f96a92b823eedd54"
+    },
+    {
+      "path": "scripts/verify-caddy-distribution-evidence.py",
+      "sha256": "819b83b7eb0f0a12d308db1448a85bc6ee47207c7d06e95ad4fab35a77155e42"
+    },
+    {
+      "path": "scripts/verify-cli-release-attestation.sh",
+      "sha256": "d2485995951917335bb19f454c7354c28db438b6d94f298a186f905f5b2d34f0"
+    },
+    {
+      "path": "scripts/verify-container-build-repair.sh",
+      "sha256": "f357cf700a388bba767d3ac41e484712d44b25a7349a2535ba6e4d5994b720e9"
+    },
+    {
+      "path": "scripts/verify-grype-report.py",
+      "sha256": "9d3a3975448404bb8c379051d897d54967ff5378bb68928095fc413d9b14c54e"
+    },
+    {
+      "path": "scripts/verify-release-commit-signature.sh",
+      "sha256": "210954c90684c326a0ae2de1b385ce582a2d688ff2fda0cb4b30127efb45a330"
+    },
+    {
+      "path": "scripts/wait-for-android-guest.sh",
+      "sha256": "3e3dd412196b2c404d42a5f76cbbb10b93a82bb9b16cab9c2eb0db849f82a09f"
+    }
+  ],
+  "archivePath": "/Users/michaelwong/Library/Caches/Covalent/sandbox-worker-9437714/CovalentMac.xcarchive",
+  "status": "built",
+  "exitCode": 0,
+  "seconds": 258.406,
+  "logSha256": "bd50d9831eb3cc9b62c32531003f297a75d5a480619da13295d2eaf4268e671c",
+  "signedForSandboxGate": true,
+  "changedInputsOutsideArchiveBuild": [
+    "scripts/validate-foundation.sh"
+  ],
+  "signSeconds": 0.085
+}

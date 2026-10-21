@@ -1,0 +1,19 @@
+{
+  "sourceCommit": "9437714ab534bd843432a93702340d5f6efd7d27",
+  "mergeCommit": "26c566dc3ffc0bf62ae1633bfb64f811b0138833",
+  "runId": 39663018772,
+  "jobId": 119440676123,
+  "conclusion": "failure",
+  "decodedLogBytes": 611353,
+  "decodedLogSha256": "272619ea793b666f83d513ad18b4f7b1328294424c5b89045d3a7db97a318b1f",
+  "scope": "connector-decoded full job log; hosted initial batch failed before either endpoint move; root cause not proven by this log alone",
+  "selectedLines": [
+    "2026-10-21T19:40:28.6044670Z \u001b[36;1mecho \"Hardened-runtime bundle gate executed and passed on $(uname -m).\"\u001b[0m",
+    "2026-10-21T19:50:05.2225810Z Hardened-runtime bundle gate executed and passed on arm64.",
+    "2026-10-21T19:51:40.3806210Z ADDRESS_HANDOFF_PHASE paired complete=true",
+    "2026-10-21T19:52:52.1435410Z timed out waiting for batch phase; last status: {\"availability\":\"available\",\"connectionFreshness\":\"neverObserved\",\"folders\":[],\"healthFreshness\":\"neverObserved\",\"issue\":\"initialScan\",\"lifecycle\":\"needsAttention\",\"peers\":[{\"address\":\"127.0.0.1:54142\",\"displayName\":\"Moving target\",\"peerId\":\"dbf1c201-891e-4306-b891-e283420a2e96\"}],\"schemaVersion\":1,\"shares\":[{\"expired\":false,\"expiresAtUnixMs\":null,\"folderId\":\"36da74f5-8aac-4d60-b02a-16d00d0754fd\",\"incoming\":false,\"label\":\"Three-node one-way link\",\"linkPolicy\":{\"propagateSourceDeletions\":false,\"restoreLocalDeletions\":false},\"linkRun\":{\"deadlineUnixMs\":1792698710865,\"destinations\":[{\"endedAtUnixMs\":null,\"peerId\":\"dbf1c201-891e-4306-b891-e283420a2e96\",\"result\":\"pending\"}],\"endedAtUnixMs\":null,\"generation\":1,\"nextDueAtUnixMs\":null,\"pendingRequest\":null,\"phase\":\"preparing\",\"rejectedRequest\":null,\"settingsRevision\":0,\"startedAtUnixMs\":1792612310865,\"stateRevision\":1},\"linkSettings\":{\"acceptedAtUnixMs\":1792612300381,\"changeId\":\"00000000-0000-0000-0000-000000000000\",\"changedBy\":\"33e83249-eefb-44fb-a748-b1afa682ae75\",\"confirmed\":true,\"conflictedChange\":null,\"pendingChange\":null,\"revision\":0,\"settings\":{\"androidConditions\":{\"chargingOnly\":false,\"wifiOnly\":false},\"cadence\":{\"mode\":\"manual\"},\"deletionPolicy\":{\"propagateSourceDeletions\":false,\"restoreLocalDeletions\":false},\"paused\":false}},\"offerId\":\"11a7af83-67d0-48d8-b16e-5fbd03bef911\",\"peerConnection\":\"unknown\",\"peerId\":\"dbf1c201-891e-4306-b891-e283420a2e96\",\"phase\":\"ready\",\"remoteRemovalPending\":false,\"supersededOfferIds\":[],\"waitingForConditions\":false}]}",
+    "2026-10-21T19:52:52.1621160Z ADDRESS_HANDOFF_CLEANUP temp_root=/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/covalent-address-handoff-HiesRb runtimes_stopped=true temp_root_absent=true",
+    "2026-10-21T19:52:52.1638590Z test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 7 filtered out; finished in 75.39s",
+    "2026-10-21T19:52:52.1827210Z ##[error]Process completed with exit code 101."
+  ]
+}

@@ -1,0 +1,19 @@
+SANDBOX_WORKER_GATE outside_read_denied=true private_temp_writable=true
+rclone v1.75.1
+- os/version: darwin 26.5.1 (64 bit)
+- os/kernel: 25.5.0 (arm64)
+- os/type: darwin
+- os/arch: arm64 (ARMv8 compatible)
+- go/version: go1.26.10
+- go/linking: static
+- go/tags: none
+SANDBOX_WORKER_GATE child_exit=0 child_signal=false
+SANDBOX_WORKER_GATE packaged_worker_started=true
+
+running 1 test
+test manual_link_survives_both_endpoint_moves_and_retains_pairing has been running for over 60 seconds
+test manual_link_survives_both_endpoint_moves_and_retains_pairing ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 136.43s
+
+SANDBOX_WORKER_GATE child_exit=0 child_signal=false

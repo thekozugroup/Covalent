@@ -1,0 +1,16 @@
+{
+  "exitCode": 0,
+  "seconds": 46.846,
+  "inputs": {
+    ".github/workflows/ci.yml": "9350e58abe64f2c280a7ac392e79d125f080e1da4326f76464b74cbbfd407eb5",
+    "scripts/validate-foundation.sh": "d490dcbb39bbaa9b33ee9ca02ea4e7eddad0ea16e837305570be1eb92eccde61",
+    "scripts/test-macos-sandboxed-address-handoff.py": "ae5bd9b3fdc26428696079d0302520b51d01ba7afc9726bd7bb1be21d0519221",
+    "scripts/test-macos-sandboxed-address-handoff-contract.py": "1f4c98c02972131173574fc3bfce6069d841b06268b2830488134c6080cd36df",
+    "packaging/macos-qa/sandboxed-worker-parent.m": "5a4773723a77ed015a23a4d193b8679432ed35f5d630c157e6815ff143576330",
+    "packaging/macos-qa/Parent.entitlements": "947ca934d695b9f0965e992f2c6485deb4a6f316a07aec141dc50a914419d742",
+    "crates/covalent-node/tests/one_way_links.rs": "0de6b7647f6b00fa31df6aa001d9df596acf0fe3c6d08dc9f88483ccf146fff5",
+    "docs/security/sandboxed-worker-gate.md": "bf121f7c5758ed3449eaa3b9e0e03a1bf3c376b7d6ec3bceb19fbcaa162623fa"
+  },
+  "inputsUnchanged": true,
+  "logSha256": "7876a47bf05f5a7a0592ce4b00a6bf0432d41c7ae8d54e189570ee117dbda140"
+}

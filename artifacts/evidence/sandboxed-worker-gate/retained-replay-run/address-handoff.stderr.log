@@ -1,0 +1,14 @@
+ADDRESS_HANDOFF_PHASE paired complete=true
+ADDRESS_HANDOFF_PHASE initial_run complete=true generation=1
+ADDRESS_HANDOFF_PHASE receiver_move complete=true busy_responses=0
+ADDRESS_HANDOFF_PHASE receiver_move_replay complete=true busy_responses=0
+ADDRESS_HANDOFF_PHASE receiver_run complete=true generation=2
+ADDRESS_HANDOFF_PHASE sender_move complete=true busy_responses=0
+ADDRESS_HANDOFF_PHASE sender_move_replay complete=true busy_responses=0
+ADDRESS_HANDOFF_PHASE completed_run_replay complete=true busy_responses=0
+ADDRESS_HANDOFF_PHASE sender_run complete=true generation=3
+ADDRESS_HANDOFF_PHASE receiver_move_reopened_replay complete=true busy_responses=0
+ADDRESS_HANDOFF_PHASE sender_move_reopened_replay complete=true busy_responses=1
+ADDRESS_HANDOFF_PHASE reopened_run_replay complete=true busy_responses=0
+ADDRESS_HANDOFF_RESULT receiver_peer_and_worker_moved=true sender_peer_and_worker_moved=true identities_retained=true generation=3 exact_replays=true manual_stopped=true deletion_policy_retained=true original_preserved=true
+ADDRESS_HANDOFF_CLEANUP temp_root=/Users/michaelwong/Library/Containers/life.michaelwong.covalent.worker-gate-qa/Data/tmp/covalent-address-handoff-8326wT runtimes_stopped=true temp_root_absent=true
