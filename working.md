@@ -1,4 +1,17 @@
-# Interlink companion and appliance robustness — 2026-10-20
+# Interlink companion and appliance robustness — 2026-10-21
+
+Manual pairing now reports a missing local transport endpoint as the existing
+409 peer_endpoint_unavailable response. Previously pair/accept alone mapped
+that normal offline state to 400 invalid_contract, misleading clients into
+reporting a version/request problem. The appliance's real offline-startup test
+exposed this gap; its older pinned native core is not replaced by this change.
+The new real-router regression reproduces 400 before the repair, then verifies
+missing endpoint/certificate refusals, authentication, reuse of the same valid
+invitation after endpoint restoration and unchanged identity/trust settings.
+All 303 node library tests and 10 actual network-pairing tests pass. API route
+inventory, OpenAPI lint and Rust formatting pass. No APK/device update or
+release is published by these tests. The existing 2c5fe4d hosted run is retained
+while its API37 job remains active; its seven non-device jobs pass.
 
 Software work continues first at the user's request. Hosted 97bf199 run
 39541339765 is terminal: seven non-device lanes and all 86 baseline device

@@ -2498,7 +2498,7 @@ async fn pair_accept(
     authorize(&state, &headers)?;
     let binding = state
         .local_transport_binding()
-        .map_err(ApiError::from_core)?;
+        .map_err(|_| ApiError::peer_endpoint_unavailable())?;
     let session = state
         .engine
         .accept_pairing_with_transport(
@@ -6641,6 +6641,78 @@ mod tests {
         ));
         let engine = Arc::new(Engine::open(options).expect("test engine"));
         AppState::new(engine, PlatformTier::Tier1, TEST_TOKEN.to_owned()).expect("state")
+    }
+
+    #[tokio::test]
+    async fn manual_pairing_without_local_endpoint_is_recoverable_without_new_identity() {
+        let inviter_directory = TempDir::new().expect("inviter directory");
+        let inviter = test_state(&inviter_directory);
+        let invitation = inviter
+            .engine
+            .pairing_manager()
+            .create_invitation(now_unix_ms(), 600_000, Vec::new())
+            .expect("valid invitation");
+        let directory = TempDir::new().expect("responder directory");
+        let state = test_state(&directory);
+        let saved_config = serde_json::to_value(state.engine.config().unwrap()).unwrap();
+        let protector = StaticKeyProtector::new(1, [0x27; 32]).expect("protector");
+        let tls = crate::transport::TlsIdentity::load_or_create(
+            directory.path().join("tls"),
+            directory.path(),
+            &protector,
+        )
+        .expect("real transport identity");
+        let payload = serde_json::json!({
+            "invitation": invitation,
+            "responderName": "Offline receiver",
+            "responderRoles": ["storage_provider", "backup_reader"],
+            "inviterRoles": ["backup_writer", "backup_reader"]
+        })
+        .to_string();
+        let request = |authorized: bool| {
+            let mut builder = Request::builder()
+                .method("POST")
+                .uri("/api/v1/pair/accept")
+                .header(header::CONTENT_TYPE, "application/json");
+            if authorized {
+                builder = builder.header(header::AUTHORIZATION, format!("Bearer {TEST_TOKEN}"));
+            }
+            builder.body(Body::from(payload.clone())).expect("request")
+        };
+        let endpoint = "127.0.0.1:55001".parse().expect("endpoint");
+        let offline = state
+            .clone()
+            .with_transport_certificate(tls.certificate_der().to_vec());
+        for unavailable in [offline.clone(), state.clone().with_peer_address(endpoint)] {
+            let response = router(unavailable)
+                .oneshot(request(true))
+                .await
+                .expect("offline response");
+            assert_contract_error(
+                response,
+                StatusCode::CONFLICT,
+                "peer_endpoint_unavailable",
+                false,
+            )
+            .await;
+        }
+        let unauthorized = router(offline.clone())
+            .oneshot(request(false))
+            .await
+            .expect("unauthorized response");
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+        let restored = router(offline.with_peer_address(endpoint))
+            .oneshot(request(true))
+            .await
+            .expect("restored response");
+        assert_eq!(restored.status(), StatusCode::OK);
+        let bytes = restored.into_body().collect().await.unwrap().to_bytes();
+        let session: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(session["authenticationString"].as_str().is_some());
+        assert_eq!(
+            serde_json::to_value(state.engine.config().unwrap()).unwrap(),
+            saved_config
+        );
     }
 
     #[tokio::test]
