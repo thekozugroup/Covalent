@@ -1,7 +1,26 @@
 # Interlink companion and appliance robustness — 2026-10-20
 
-Software work continues first at the user's request. Latest hosted source
-d9eb263, run 39526795075, is terminal: seven non-device lanes and all 87
+Software work continues first at the user's request. Hosted 97bf199 run
+39541339765 is terminal: seven non-device lanes and all 86 baseline device
+tests pass. The SAF journey fails at Manual Run Now after exact grant repair
+with folder_sync_unavailable. Its later permission/continuous-recorder journey
+is not reached; the combined release gate fails. Artifact 12320881159 is
+retained with verified ZIP SHA-256
+6f04dd0b96400d406ffd2335db78f4be4fcb9808a0e02a0579c121309f562867.
+No cause is assigned to the unavailable repaired API.
+
+The follow-up fixes a confirmed test gap: its refreshed-connection predicate
+previously accepted saved share/folder state without requiring native sync to
+be available and running. It now requires AVAILABLE, RUNNING and no issue for
+the unchanged five-second stability window and 90-second overall deadline.
+If the single manual-run mutation is rejected, a read-only observation records
+the current connection match and safe availability/lifecycle/issue values.
+No mutation replay, guest restart, deadline extension or app-runtime change is
+introduced. The instrumentation APK builds successfully in 16 seconds (53
+tasks). This is compile/package validation, not an executed device-journey pass;
+current hosted/device acceptance remains required.
+
+Earlier hosted source d9eb263, run 39526795075, is terminal: seven non-device lanes and all 87
 baseline/SAF tests pass, but the permission tap reports exit20/missing-service.
 The subsequent framework observation has no system_server PID. The full gate
 fails; neither crash cause nor tap delivery is established by that evidence.
