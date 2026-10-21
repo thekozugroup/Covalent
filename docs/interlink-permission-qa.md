@@ -5,8 +5,9 @@ the app's runtime prompt and Settings → Permissions → Nearby devices → All
 Returning from Settings must restart the opted-in native host itself. The test
 does not reopen the Activity or start the service to make that return pass.
 
-`scripts/interlink-api37-permission-test.py` accepts only the two named QA AVDs
-at their fixed serials. It installs and reads back the exact debug APK, refuses
+`scripts/interlink-api37-permission-test.py` accepts only the named QA AVDs
+at their fixed serials (including Interlink_Unlock_API37 at emulator-5592 for
+fresh startup checks). It installs and reads back the exact debug APK, refuses
 an existing non-debug app, requires the unpaired native-ready screen and a
 foreground service, and compares device/TLS/key-envelope hashes. It never clears
 app data. A permission left revoked by a failure is restored during cleanup.

@@ -1,5 +1,34 @@
 # Interlink companion and appliance robustness — 2026-10-21
 
+The shared Android unlock gate now closes a missed-unlock registration gap and
+prevents repeated/concurrent notifications from starting the same action twice.
+Credentials and existing opt-in/ownership checks stay intact. Seven deterministic
+gate tests pass; five checks fail against the retained former-callback model,
+which is not an old-APK reproduction. See docs/interlink-startup-recovery.md.
+
+The full Android build passes in 6m55s: 212 debug/two release unit tests, both
+apps, lint, native provenance and package checks. Thirty permission-harness and
+six cleanup host tests pass. Five actual Android storage checks pass; sealed-
+storage cases use a context double rather than a real locked user. On fresh
+Interlink_Unlock_API37/emulator5592, both actual permission routes pass with
+unchanged identities/framework. The final corrected reboot journey passes:
+one reboot, native ready API and foreground service return with Activity
+unresumed, 21.126 seconds stable, same APK/UID/three identity hashes, verified
+owned-forward absence/removal, and final pass publication after cleanup.
+
+The first reboot's native behavior passed for20.373s but its overall receipt
+remains failed because cleanup mistook an absent forward for an error. A separate
+same-boot follow-up proves native readiness, no remaining forwards, exact owned
+removal/readback and already-absent handling. The corrected full journey uses
+new receipts. Original failed build/admission/reboot evidence stays intact.
+Source-bound evidence: artifacts/evidence/android-unlock-startup.json.
+Debug APK SHA-256: f7f6b62362c8abfaf5d4b132b9fa17c32a48a270ace11d314d94cdc8bfb6ab9b.
+
+This is a software/emulator milestone. Hosted x86 API37 permission recovery,
+real first unlock, phone/Pi hardware, roaming and production signing remain
+open. Original Android fixtures, signed-in devices, drive, image and source
+photos are unchanged. No release or main merge is promoted; the goal stays active.
+
 Hosted d57deda run39562643351 is terminal. Seven non-device jobs, all 86
 baseline tests and the SAF journey pass (437.290 seconds); permission recovery
 and the combined release gate fail. The new recorder sees system_server1751

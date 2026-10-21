@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Exercise real permission revocation/recovery on an owned, unpaired debug AVD.
 
-No app data is cleared. Only the two named disposable QA emulators are accepted.
+No app data is cleared. Only the named disposable QA emulators are accepted.
 Receipts contain hashes and phase names, never key material or raw private files.
 """
 
@@ -23,7 +23,8 @@ ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = "life.michaelwong.interlink"
 ACTIVITY = f"{PACKAGE}/life.michaelwong.covalent.InterlinkActivity"
 PERMISSION = "android.permission.ACCESS_LOCAL_NETWORK"
-OWNED_AVDS = {"Interlink_QA_API37": "emulator-5572", "Covalent_API_37": "emulator-5570"}
+OWNED_AVDS = {"Interlink_QA_API37": "emulator-5572", "Covalent_API_37": "emulator-5570",
+              "Interlink_Unlock_API37": "emulator-5592"}
 IDENTITIES = (
     "no_backup/covalent-node/identity.json",
     "no_backup/covalent-node/tls/identity.json",

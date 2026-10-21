@@ -71,25 +71,28 @@ internal object DirectBoot {
      */
     fun whenUserUnlocked(context: Context, action: () -> Unit) {
         val applicationContext = context.applicationContext
-        if (isUserUnlocked(applicationContext)) {
-            action()
-            return
-        }
-        Log.i(TAG, "Credential-encrypted storage is sealed; waiting for this user to unlock.")
-        val receiver = object : BroadcastReceiver() {
-            override fun onReceive(receivedIn: Context, intent: Intent) {
-                if (intent.action != Intent.ACTION_USER_UNLOCKED) return
-                // Unregister before acting: the action opens storage and may itself fail,
-                // and a receiver left registered would repeat the attempt on every unlock.
-                runCatching { applicationContext.unregisterReceiver(this) }
-                action()
-            }
-        }
-        ContextCompat.registerReceiver(
-            applicationContext,
-            receiver,
-            IntentFilter(Intent.ACTION_USER_UNLOCKED),
-            ContextCompat.RECEIVER_NOT_EXPORTED,
+        runAfterUserUnlock(
+            isUnlocked = { isUserUnlocked(applicationContext) },
+            observeUnlock = { notify ->
+                Log.i(TAG, "Credential-encrypted storage is sealed; waiting for this user to unlock.")
+                val receiver = object : BroadcastReceiver() {
+                    override fun onReceive(receivedIn: Context, intent: Intent) {
+                        if (intent.action == Intent.ACTION_USER_UNLOCKED) notify()
+                    }
+                }
+                ContextCompat.registerReceiver(
+                    applicationContext,
+                    receiver,
+                    IntentFilter(Intent.ACTION_USER_UNLOCKED),
+                    ContextCompat.RECEIVER_NOT_EXPORTED,
+                )
+                val unregister: () -> Unit = {
+                    runCatching { applicationContext.unregisterReceiver(receiver) }
+                    Unit
+                }
+                unregister
+            },
+            action = action,
         )
     }
 }
