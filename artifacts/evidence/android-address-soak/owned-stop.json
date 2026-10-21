@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "serial": "emulator-5618",
+  "avd": "Interlink_Address_Soak_API37",
+  "attemptTerminal": true,
+  "sameOwnedProcessVerified": true,
+  "sameBootVerified": true,
+  "retainedAvdDisk": true,
+  "otherEmulatorsChanged": false,
+  "command": "adb -s emulator-5618 emu kill",
+  "result": "OK: killing emulator, bye bye\nOK",
+  "postflightSha256": "585ce8fff9d7511e14ea162e0a0a322b9846c21c8871e727fa5639a25d54d18f"
+}

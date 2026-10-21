@@ -109,6 +109,16 @@ class SafFolderSyncJourneyInstrumentedTest {
 
     @Test
     fun nativeManualSafRunRegistersAcrossRestartAndIsolatesLostGrant() {
+        // An explicit diagnostic mode stops after three address handoffs. The normal
+        // device gate still proves the complete restart/grant/settings journey.
+        val addressRecoveryOnly = when (
+            InstrumentationRegistry.getArguments().getString("covalentAddressRecoveryOnly")
+        ) {
+            null, "false" -> false
+            "true" -> true
+            else -> error("Invalid covalentAddressRecoveryOnly argument: expected true or false")
+        }
+        val addressRounds = if (addressRecoveryOnly) 3 else 1
         assertTrue("This folder-picker fixture runs only on an emulator", shell("getprop ro.kernel.qemu") == "1")
         assertTrue(BuildConfig.DEBUG)
         assertTrue(BuildConfig.COVALENT_SYNC_ENGINE_PACKAGED)
@@ -259,101 +269,116 @@ class SafFolderSyncJourneyInstrumentedTest {
             clickScreenText(context.getString(R.string.folder_link_settings_edit))
             clickDialogText(context.getString(R.string.action_cancel))
 
-            val oldWorkerPort = checkNotNull(secondFolderSyncListenerPort)
-            val movedPeerPort = reserveEphemeralPeerPort(identityB.peerPort)
-            val movedWorkerPort = reserveEphemeralWorkerPort(oldWorkerPort)
-            assertTrue(CovalentNative.stop(secondHandle).ok)
-            secondHandle = 0
-            secondSafServers.forEach { it.close() }
-            secondSafServers.clear()
-            awaitExactHelperCounts(0, 0)
-            await("old second-node listeners released") {
-                canBindPeerPort(identityB.peerPort) && canBindWorkerPort(oldWorkerPort)
-            }
-            connectionB = startSecondNode(
-                packageValue,
-                peerListenerPort = movedPeerPort,
-                folderSyncListenerPort = movedWorkerPort,
-                runId = runId,
-            )
-            registerSecondNodeGrant(connectionB, destinationGrant)
-            val movedIdentity = client.transportIdentity(connectionB.baseUrl, connectionB.token)
-            assertEquals(identityB.deviceId, movedIdentity.deviceId)
-            assertEquals(identityB.certificateFingerprint, movedIdentity.certificateFingerprint)
-            assertEquals(identityB.certificateDer, movedIdentity.certificateDer)
-            assertEquals(movedPeerPort, movedIdentity.peerPort)
-            assertTrue(identityB.peerPort != movedIdentity.peerPort)
-            assertEquals(movedWorkerPort, secondFolderSyncListenerPort)
-            assertTrue(oldWorkerPort != movedWorkerPort)
-
-            val movedPeerAddress = advertisedGuestPeerAddress(movedPeerPort)
             val detailsButtonTag = "folder-link-details-${createdShare.offerId}"
             compose.onNodeWithTag("folder-sync-list").performScrollToNode(hasTestTag(detailsButtonTag))
             compose.onNodeWithTag(detailsButtonTag).performClick()
-            val addressButtonTag = "folder-link-address-${createdShare.offerId}"
-            compose.onNodeWithTag("folder-sync-list")
-                .performScrollToNode(hasTestTag(addressButtonTag))
-            compose.onNodeWithTag(addressButtonTag).performClick()
-            val addressInput = compose.onNodeWithTag("folder-peer-address-input")
-            compose.waitUntil(timeoutMillis = DEFAULT_TIMEOUT_MILLIS) {
-                runCatching { addressInput.assertIsDisplayed(); addressInput.assertIsEnabled(); true }.getOrDefault(false)
-            }
-            addressInput.performTextReplacement(movedPeerAddress)
-            closeSoftKeyboard()
-            clickDialogText(context.getString(R.string.folder_sync_verify_address))
-            try {
-                await("native address refresh becomes authoritative") {
-                    client.folderSyncStatus(connectionA.baseUrl, connectionA.token).peers
-                        .singleOrNull { it.peerId == identityB.deviceId }
-                        ?.address == movedPeerAddress
+            var movedPeerAddress = ""
+            var addressRun = firstRun
+            repeat(addressRounds) { round ->
+                val previousIdentity = client.transportIdentity(connectionB.baseUrl, connectionB.token)
+                val oldWorkerPort = checkNotNull(secondFolderSyncListenerPort)
+                val movedPeerPort = reserveEphemeralPeerPort(previousIdentity.peerPort)
+                val movedWorkerPort = reserveEphemeralWorkerPort(oldWorkerPort)
+                assertTrue(CovalentNative.stop(secondHandle).ok)
+                secondHandle = 0
+                secondSafServers.forEach { it.close() }
+                secondSafServers.clear()
+                awaitExactHelperCounts(0, 0)
+                await("old second-node listeners released") {
+                    canBindPeerPort(previousIdentity.peerPort) && canBindWorkerPort(oldWorkerPort)
                 }
-            } catch (failure: AssertionError) {
-                val confirm = compose.onAllNodes(hasTestTag("folder-peer-address-confirm"))
-                val confirmNodes = runCatching { confirm.fetchSemanticsNodes().size }.getOrDefault(0)
-                val confirmEnabled = confirmNodes == 1 && runCatching {
-                    confirm[0].assertIsEnabled()
-                    true
-                }.getOrDefault(false)
-                throw AssertionError(
-                    "${failure.message} addressConfirmNodeCount=$confirmNodes addressConfirmEnabled=$confirmEnabled\n" +
-                        recoveryDiagnostic("source", connectionA, "address-verification") + "\n" +
-                        recoveryDiagnostic("destination", connectionB, "address-verification"),
-                    failure,
+                connectionB = startSecondNode(
+                    packageValue,
+                    peerListenerPort = movedPeerPort,
+                    folderSyncListenerPort = movedWorkerPort,
+                    runId = runId,
                 )
-            }
-            writeSafFile(sourceGrant, "after-address.txt", SAF_ADDRESS_CONTENT)
-            val addressShare = sourceShare(connectionA)
-            val addressRequestId = UUID.randomUUID().toString()
-            client.runFolderLinkNow(
-                connectionA.baseUrl,
-                connectionA.token,
-                folderId.toString(),
-                addressRequestId,
-                expectedGeneration = checkNotNull(addressShare.linkRun).generation,
-                settingsRevision = checkNotNull(addressShare.linkSettings).revision,
-            )
-            try {
-                awaitSafFile(
-                    "Manual Run Now after native address refresh",
-                    destinationGrant,
-                    "after-address.txt",
-                    SAF_ADDRESS_CONTENT,
-                )
-            } catch (failure: AssertionError) {
-                throw AssertionError(
-                    "${failure.message}\n" +
-                        recoveryDiagnostic("source", connectionA, addressRequestId) +
-                        "\n" +
-                        recoveryDiagnostic("destination", connectionB, addressRequestId),
-                    failure,
-                )
-            }
-            val addressRun = awaitValue("address-refreshed SAF run completion") {
-                sourceShare(connectionA).linkRun?.takeIf {
-                    it.generation == firstRun.generation + 1 && it.phase == FolderLinkRunPhase.SUCCEEDED
+                registerSecondNodeGrant(connectionB, destinationGrant)
+                val movedIdentity = client.transportIdentity(connectionB.baseUrl, connectionB.token)
+                assertEquals(identityB.deviceId, movedIdentity.deviceId)
+                assertEquals(identityB.certificateFingerprint, movedIdentity.certificateFingerprint)
+                assertEquals(identityB.certificateDer, movedIdentity.certificateDer)
+                assertEquals(movedPeerPort, movedIdentity.peerPort)
+                assertTrue(previousIdentity.peerPort != movedIdentity.peerPort)
+                assertEquals(movedWorkerPort, secondFolderSyncListenerPort)
+                assertTrue(oldWorkerPort != movedWorkerPort)
+
+                movedPeerAddress = advertisedGuestPeerAddress(movedPeerPort)
+                val addressButtonTag = "folder-link-address-${createdShare.offerId}"
+                compose.onNodeWithTag("folder-sync-list")
+                    .performScrollToNode(hasTestTag(addressButtonTag))
+                compose.onNodeWithTag(addressButtonTag).performClick()
+                val addressInput = compose.onNodeWithTag("folder-peer-address-input")
+                compose.waitUntil(timeoutMillis = DEFAULT_TIMEOUT_MILLIS) {
+                    runCatching { addressInput.assertIsDisplayed(); addressInput.assertIsEnabled(); true }.getOrDefault(false)
                 }
+                addressInput.performTextReplacement(movedPeerAddress)
+                closeSoftKeyboard()
+                clickDialogText(context.getString(R.string.folder_sync_verify_address))
+                try {
+                    await("native address refresh becomes authoritative") {
+                        client.folderSyncStatus(connectionA.baseUrl, connectionA.token).peers
+                            .singleOrNull { it.peerId == identityB.deviceId }
+                            ?.address == movedPeerAddress
+                    }
+                } catch (failure: AssertionError) {
+                    val confirm = compose.onAllNodes(hasTestTag("folder-peer-address-confirm"))
+                    val confirmNodes = runCatching { confirm.fetchSemanticsNodes().size }.getOrDefault(0)
+                    val confirmEnabled = confirmNodes == 1 && runCatching {
+                        confirm[0].assertIsEnabled()
+                        true
+                    }.getOrDefault(false)
+                    throw AssertionError(
+                        "${failure.message} addressConfirmNodeCount=$confirmNodes addressConfirmEnabled=$confirmEnabled\n" +
+                            recoveryDiagnostic("source", connectionA, "address-verification") + "\n" +
+                            recoveryDiagnostic("destination", connectionB, "address-verification"),
+                        failure,
+                    )
+                }
+                val addressFileName = if (round == 0) "after-address.txt" else "after-address-${round + 1}.txt"
+                val addressFileContent = SAF_ADDRESS_CONTENT + if (round == 0) byteArrayOf() else " round=${round + 1}".toByteArray(StandardCharsets.UTF_8)
+                writeSafFile(sourceGrant, addressFileName, addressFileContent)
+                val addressShare = sourceShare(connectionA)
+                val addressRequestId = UUID.randomUUID().toString()
+                client.runFolderLinkNow(
+                    connectionA.baseUrl,
+                    connectionA.token,
+                    folderId.toString(),
+                    addressRequestId,
+                    expectedGeneration = checkNotNull(addressShare.linkRun).generation,
+                    settingsRevision = checkNotNull(addressShare.linkSettings).revision,
+                )
+                try {
+                    awaitSafFile(
+                        "Manual Run Now after native address refresh round=${round + 1}",
+                        destinationGrant,
+                        addressFileName,
+                        addressFileContent,
+                    )
+                } catch (failure: AssertionError) {
+                    throw AssertionError(
+                        "${failure.message}\n" +
+                            recoveryDiagnostic("source", connectionA, addressRequestId) +
+                            "\n" +
+                            recoveryDiagnostic("destination", connectionB, addressRequestId),
+                        failure,
+                    )
+                }
+                addressRun = awaitValue("address-refreshed SAF run completion round=${round + 1}") {
+                    sourceShare(connectionA).linkRun?.takeIf {
+                        it.generation == firstRun.generation + round + 1 && it.phase == FolderLinkRunPhase.SUCCEEDED
+                    }
+                }
+                awaitExactHelperCounts(0, 0)
+                assertArrayEquals(SAF_MANUAL_CONTENT, readSafFile(sourceGrant, "manual.txt"))
+                assertArrayEquals(SAF_UNICODE_CONTENT, readSafFile(sourceGrant, SAF_UNICODE_NAME))
+                assertArrayEquals(addressFileContent, readSafFile(sourceGrant, addressFileName))
+                println("COVALENT_ADDRESS_RECOVERY_ROUND round=${round + 1} generation=${addressRun.generation} phase=${addressRun.phase} originalsUnchanged=true helpers=0")
             }
-            awaitExactHelperCounts(0, 0)
+            if (addressRecoveryOnly) {
+                println("COVALENT_ADDRESS_RECOVERY_ONLY rounds=$addressRounds complete=true")
+                return
+            }
 
             val firstApi = connectionA.baseUrl
             manager.refreshFolderSyncAccess()

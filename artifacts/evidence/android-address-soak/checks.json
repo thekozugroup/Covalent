@@ -1,0 +1,12 @@
+{
+  "format": 1,
+  "command": [
+    "sh",
+    "scripts/validate-foundation.sh"
+  ],
+  "exitCode": 0,
+  "seconds": 42.765,
+  "trackedFilesObserved": 1097,
+  "trackedFilesUnchanged": true,
+  "logSha256": "030dc99ad6b7b1d662b390cd330ba0565871c2806f0de0e365e86f3079028fb7"
+}

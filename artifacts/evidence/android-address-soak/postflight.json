@@ -1,0 +1,11 @@
+{
+  "format": 1,
+  "serial": "emulator-5618",
+  "avd": "Interlink_Address_Soak_API37",
+  "sameBoot": true,
+  "receiptSha256": "96d8a5fbf053f12ce0362b19f1cb155c3da896bfb8bee2895bdecdf4a5be48c4",
+  "secondNodeFixtureAbsent": true,
+  "systemPickerFixtureAbsent": true,
+  "cleanupWasIndependentPostflight": true,
+  "driverSha256": "3e35cabcf4a016846f3b725b63c2b0618b7747c7776b30f1d73ad93023e941af"
+}

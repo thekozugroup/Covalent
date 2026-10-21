@@ -1,3 +1,27 @@
+# Repeated Android address handoffs — 2026-10-21
+
+The companion now has an explicit diagnostic mode that proves three receiver
+peer/worker-port changes in one session. Actual SAF transfers pass for generations
+2, 3 and 4 in185.612s JUnit /187.278s host time. Each round checks pinned pairing
+identities, the new address, exact file bytes, unchanged source originals and no
+remaining worker/guardian processes. The original120s transfer deadline stays
+unchanged; no transfer retry or request replay is added.
+
+The first build fails before compilation because its NDK path is missing. The
+corrected pinned environment passes the build in60.539s. The companion APK stays
+byte-identical; only instrumentation changes. A new owned API37 ARM64 emulator
+keeps the same boot and framework processes. Independent postflight confirms
+both synthetic fixture trees are absent. That emulator is stopped only after
+terminal/ownership verification, retaining its disk and all earlier fixtures.
+
+The normal gate still proves its complete one-handoff/restart/grant/settings
+journey. This diagnostic mode does not replace it. Three passing handoffs do not
+establish a cause or fix for the retained intermittent stall. See
+docs/android-address-recovery-diagnostics.md and artifacts/evidence/android-address-soak/.
+No production source, Pi image, account, personal media or real device changes.
+
+---
+
 # Sandboxed packaged-worker gate — 2026-10-21
 
 The exact fresh Mac archive's packaged workers now complete the real transfer
