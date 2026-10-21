@@ -5,6 +5,8 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -12,6 +14,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import life.michaelwong.covalent.ui.FolderSyncScreen
 
@@ -37,7 +40,9 @@ class InterlinkActivity : ComponentActivity() {
                     containerColor = MaterialTheme.colorScheme.surface,
                     topBar = {
                         TopAppBar(
-                            title = { Text("Interlink", fontFamily = FontFamily.Serif, style = MaterialTheme.typography.headlineMedium) },
+                            title = { Text("Interlink", fontFamily = FontFamily.Serif,
+                                style = MaterialTheme.typography.headlineMedium,
+                                maxLines = 1, overflow = TextOverflow.Ellipsis) },
                             navigationIcon = {
                                 Icon(painterResource(R.drawable.ic_brand_mark), contentDescription = null,
                                     modifier = Modifier.padding(start = 20.dp, end = 12.dp).size(28.dp))
@@ -55,9 +60,9 @@ class InterlinkActivity : ComponentActivity() {
                                     .align(androidx.compose.ui.Alignment.TopCenter),
                             )
                         } else {
-                            Column(Modifier.align(androidx.compose.ui.Alignment.Center).padding(24.dp),
+                            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
                                 horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                                verticalArrangement = Arrangement.spacedBy(16.dp, androidx.compose.ui.Alignment.CenterVertically)) {
                                 if (failed) {
                                     Text("Secure sync could not start. Your saved identity is retained.")
                                     Button(onClick = owner::reconnect) { Text("Retry") }

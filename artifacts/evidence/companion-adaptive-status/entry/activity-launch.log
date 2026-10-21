@@ -1,0 +1,4 @@
+10-21 14:36:07.899   610  1702 I ActivityTaskManager: START u0 {flg=0x10008000 xflg=0x5 cmp=life.michaelwong.interlink/life.michaelwong.covalent.InterlinkActivity} with LAUNCH_SINGLE_TOP from uid 2000 (com.android.shell) (BAL_ALLOW_PERMISSION) result code=0
+10-21 14:36:07.918   610   640 I ActivityManager: Start proc 9589:life.michaelwong.interlink/u0a232 for next-top-activity {life.michaelwong.interlink/life.michaelwong.covalent.InterlinkActivity}
+10-21 14:36:09.265   610   630 I ActivityTaskManager: Displayed life.michaelwong.interlink/life.michaelwong.covalent.InterlinkActivity for user 0: +1s369ms
+10-21 14:39:37.027   610  1035 W ActivityTaskManager: Force removing ActivityRecord{164053970 u0 life.michaelwong.interlink/life.michaelwong.covalent.InterlinkActivity t15 f}}: app died, no saved state

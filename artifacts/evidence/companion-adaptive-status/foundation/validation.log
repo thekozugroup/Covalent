@@ -1,0 +1,109 @@
+Unraid template XML: ok
+Unraid template XML: ok
+Atlas preflight fixtures: ok
+release version 0.2.12 (build 2012): every surface agrees
+Release version failure regression: ok
+relative CLI package output fixture: ok
+CLI attestation fixtures: ok
+CLI release workflow fixtures: ok
+release is not visible yet; polling without another create
+draft release publisher fixture: ok
+Verified signed v0.2.12 build repair; runtime source remains 7bb83c27ed56d2b78517845db7bdf1757b80fbe1.
+Container build repair: signed exact source accepted; 11 invalid identities rejected.
+container OCI index fixture: ok (21 workflow run steps parsed)
+Grype report summary: scanner=grype/0.117.0 dbSchema=unknown dbBuilt=fixture matches=0 severities=none
+pinned Grype scan: high or critical vulnerability found
+Grype report summary: scanner=grype/0.117.0 dbSchema=unknown dbBuilt=fixture matches=0 severities=none
+Grype report summary: scanner=grype/0.117.0 dbSchema=unknown dbBuilt=fixture matches=0 severities=none
+invalid Grype report: Grype report input does not match the exact requested image ID
+pinned Grype scan: Grype report validation failed
+invalid Grype report: Grype report resolved a different image ID
+pinned Grype scan: Grype report validation failed
+invalid Grype report: Grype report contains suppressed findings
+pinned Grype scan: Grype report validation failed
+pinned Grype scan: Grype did not produce a regular JSON report
+pinned Grype scan: Grype scan failed with status 17
+Grype report summary: scanner=grype/0.117.0 dbSchema=unknown dbBuilt=fixture matches=0 severities=none
+Grype report summary: scanner=grype/0.117.0 dbSchema=unknown dbBuilt=fixture matches=0 severities=none
+Grype report summary: scanner=grype/0.117.0 dbSchema=unknown dbBuilt=fixture matches=0 severities=none
+Grype report summary: scanner=grype/0.117.0 dbSchema=unknown dbBuilt=fixture matches=0 severities=none
+Pinned Grype scan fixtures: ok
+Container channel ordering and immutable provenance checks passed.
+Native source matches 04e4ebf58fe8372760158a49389dd229a634e35d; container checks must run on HEAD.
+Container source reuse guard passed.
+Container runtime cross-architecture fallback contract: ok
+Personal Android APK builder contract: ok
+Personal macOS builder contract: ok
+release guardrails: ok
+.........
+----------------------------------------------------------------------
+Ran 9 tests in 6.389s
+
+OK
+.
+----------------------------------------------------------------------
+Ran 1 test in 0.324s
+
+OK
+Trusted console configuration checks passed
+container Alpine documentation and OCI contract: ok
+setup guidance: 11 guides and 15 script references verified
+Setup path validation fixtures: ok
+Personal macOS builder contract: ok
+macOS sync-engine packaging contract: ok
+Android native package regression fixtures passed.
+..............
+----------------------------------------------------------------------
+Ran 14 tests in 0.080s
+
+OK
+........
+----------------------------------------------------------------------
+Ran 8 tests in 0.038s
+
+OK
+..........
+----------------------------------------------------------------------
+Ran 10 tests in 0.100s
+
+OK
+............................
+----------------------------------------------------------------------
+Ran 28 tests in 0.112s
+
+OK
+............
+----------------------------------------------------------------------
+Ran 12 tests in 0.098s
+
+OK
+...........
+----------------------------------------------------------------------
+Ran 11 tests in 0.480s
+
+OK
+..........
+----------------------------------------------------------------------
+Ran 10 tests in 0.063s
+
+OK
+...........
+----------------------------------------------------------------------
+Ran 11 tests in 0.112s
+
+OK
+......
+----------------------------------------------------------------------
+Ran 6 tests in 0.018s
+
+OK
+Linux engine package bytes: worker=16777216 guardian=8192
+Linux sync-engine target notice packaging: ok
+Personal Android APK builder contract: ok
+Android JNI build command contract: ok
+Remote one-way drill contract fixtures: ok
+OpenAPI route handoff fixtures: ok
+CodeQL alert policy: zero open alerts.
+open CodeQL alert #1: java/example at Example.kt:7
+CodeQL alert policy fixture: ok
+foundation structure: ok
