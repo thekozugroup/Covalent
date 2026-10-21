@@ -1,0 +1,23 @@
+   Compiling covalent-node v0.2.12 (/Users/michaelwong/Developer/Covalent/crates/covalent-node)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.52s
+     Running tests/one_way_links.rs (target/debug/deps/one_way_links-4ab91248ad55ab56)
+
+running 1 test
+test manual_link_survives_both_endpoint_moves_and_retains_pairing has been running for over 60 seconds
+
+thread 'tokio-rt-worker' (128425864) panicked at crates/covalent-node/tests/one_way_links.rs:182:5:
+assertion `left == right` failed: POST /api/v1/sync/peers/refresh-address: {"protocolVersion":1,"code":"folder_sync_busy","message":"Folder sync is busy. Try again shortly.","retryable":true}
+  left: 503
+ right: 200
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+ADDRESS_HANDOFF_CLEANUP temp_root=/var/folders/yj/rzyx3s1j65d26c9l8b3mjbb00000gn/T/covalent-address-handoff-LZj7SY runtimes_stopped=true temp_root_absent=true
+test manual_link_survives_both_endpoint_moves_and_retains_pairing ... FAILED
+
+failures:
+
+failures:
+    manual_link_survives_both_endpoint_moves_and_retains_pairing
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 7 filtered out; finished in 140.24s
+
+error: test failed, to rerun pass `-p covalent-node --test one_way_links`

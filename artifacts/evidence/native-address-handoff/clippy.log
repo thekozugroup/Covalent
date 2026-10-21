@@ -1,0 +1,10 @@
+    Checking regex-syntax v0.8.11
+    Checking getrandom v0.3.4
+    Checking tempfile v3.27.0
+    Checking regex-automata v0.4.18
+    Checking matchers v0.2.0
+    Checking globset v0.4.20
+    Checking tracing-subscriber v0.3.23
+    Checking covalent-core v0.2.12 (/Users/michaelwong/Developer/Covalent/crates/covalent-core)
+    Checking covalent-node v0.2.12 (/Users/michaelwong/Developer/Covalent/crates/covalent-node)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 14.36s

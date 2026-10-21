@@ -1,0 +1,7 @@
+{
+  "command": [
+    "./scripts/validate-foundation.sh"
+  ],
+  "exitCode": 0,
+  "elapsedSeconds": 43.849
+}

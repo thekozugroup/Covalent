@@ -1,0 +1,18 @@
+{
+  "command": [
+    "cargo",
+    "test",
+    "--locked",
+    "-p",
+    "covalent-node",
+    "--test",
+    "one_way_links",
+    "--",
+    "--ignored",
+    "--exact",
+    "manual_link_survives_both_endpoint_moves_and_retains_pairing",
+    "--nocapture"
+  ],
+  "exitCode": 101,
+  "elapsedSeconds": 146.695
+}
