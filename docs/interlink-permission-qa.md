@@ -56,7 +56,7 @@ command. The stream remains active through failure observation and cleanup.
 Stopping it terminates only the owned adb log client, never the server, guest
 or app. An unready, prematurely ended or incompletely stopped stream prevents
 an otherwise successful journey from passing; it cannot hide the primary
-input failure. No input is replayed and no guest is restarted. Twenty-two host
+input failure. No input is replayed and no guest is restarted. Thirty host
 tests cover privacy, bounded storage, actual managed child-process lifecycle,
 stream readiness/loss, missing-framework failures and existing input/cleanup
 behavior. Resource warnings are treated as errors in the local check.
@@ -96,3 +96,40 @@ python3 -B scripts/interlink-api37-permission-test.py \
 
 The permission receipt proves only this synthetic emulator journey. It does
 not certify phone roaming, pairing, production signing or Pi hardware.
+
+## Native framework abort details
+
+The e0dfc1c hosted recording establishes a native signal6 in the previously
+observed system_server PID657 before the failed Permissions tap. It establishes
+neither the initiating cause nor the trigger. The old recorder discarded the
+native dump; the new follow-up decodes a bounded subset in memory. Android's
+[native crash documentation](https://source.android.com/docs/core/tests/debug/native-crash)
+explains the separate signal, abort-message and backtrace records.
+
+A DEBUG dump header must match a known process whose native fatal signal was
+already observed. The logging crash_dump PID remains distinct from the victim
+PID. Unknown/mismatched headers and a new dump reset that logger's context.
+Only fixed approved system-library names, relative code offsets, bounded build
+IDs and a small fixed symbol set are emitted. Arbitrary library paths, symbols,
+thread names, registers, abort messages and raw lines are discarded. Abort
+messages retain a fixed prefix-family label or unclassified, their byte count
+and SHA-256; that label is diagnostic metadata, not an established crash cause.
+Traversal/relative/private paths are refused. There are at most 32 known fault
+PIDs, 16 dump contexts and 32 unique frames per dump; omitted-frame counts remain
+visible within the existing 256-event bound.
+
+After an observed known native fault, stopping capture allows at most five
+seconds for delayed native details on the same log stream. This is read-only;
+input, service, acceptance and framework-stability conditions are unchanged.
+A stream that dies during this drain still fails continuity. Only the owned
+log client is terminated afterward. Eight new host regressions cover privacy,
+correlation, context reset, limits, delayed frames and stream loss, using real
+managed child processes. All thirty host tests pass with resource warnings
+promoted to errors.
+
+The source-bound Android36 read-only smoke on the retained boot reads two idle
+log lines and one capture marker, stops its reader/client cleanly, and preserves
+boot ID plus both framework PIDs/start ticks. It validates stream operation;
+it has no native dump and does not prove the API37 failure cause or permission
+recovery. Evidence: `artifacts/interlink-qa/native-framework-smoke-1792566867768376000.json`.
+The earlier native crash and all failed journey artifacts remain retained.

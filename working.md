@@ -1,5 +1,32 @@
 # Interlink companion and appliance robustness — 2026-10-21
 
+The native framework recorder now retains bounded approved dump metadata after
+an observed fatal signal in a known process. It correlates the separate logger
+and victim PIDs, refuses unknown/mismatched/malformed headers, and emits only
+fixed platform-library names, relative code offsets, bounded build IDs, fixed
+symbols and redacted abort-family/hash/length. Raw messages, thread names,
+registers, arbitrary paths/symbols and private libraries remain discarded.
+Fault/context/frame counts are bounded; omitted frames remain visible. Capture
+can drain the same stream for at most five seconds after a known native fault;
+stream loss during that drain still fails continuity. No input is replayed or
+acceptance deadline extended; no guest/app/service is restarted.
+
+All thirty host tests pass with resource warnings treated as errors. Eight new
+regressions include real child-process delayed records, loss during drain,
+privacy, victim/logger correlation, malformed context reset and bounds. The
+final-source read-only Android36 smoke on the retained boot reads two idle
+lines and one safe capture marker, stops its owned client/reader cleanly and
+preserves boot ID plus framework PIDs/start ticks. It has no native dump and
+is not proof of the API37 cause or permission recovery. Its source-bound receipt
+is artifacts/interlink-qa/native-framework-smoke-1792566867768376000.json;
+the earlier-source smoke is retained separately. See docs/interlink-permission-qa.md.
+
+Hosted 1e54976 run39558337954 remains active at its API37 device step at the
+last authoritative check; all seven non-device jobs pass. This local follow-up
+is held from pushing while that exact run finishes, because workflow concurrency
+would cancel it. Its earlier recorder remains unchanged in that run; no passing
+permission journey is inferred from the local metadata tests.
+
 Hosted e0dfc1c run 39552976561 is terminal. All seven non-device lanes,
 all 86 baseline instrumentation tests and the complete SAF folder journey pass
 (the latter in 422.361 seconds). The corrected idle/manual observation now has

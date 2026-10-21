@@ -26,6 +26,20 @@ PHASES=frozenset(("capture-started","input-tap-started","input-tap-returned","in
     "Android framework remained stable through both recovery routes"))
 PREFIX=re.compile(r"^(\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3})\s+(\d{1,10})\s+(\d{1,10})\s+([VDIWEF])\s+([A-Za-z0-9_$.-]{1,64})\s*: (.*)$")
 START_SECONDS=5
+NATIVE_DRAIN_SECONDS=5
+# Fixed platform names only. Never emit a library path, thread name or arbitrary
+# native symbol/message. Relative code offsets can identify a platform frame.
+NATIVE_LIBRARIES=frozenset(("libc.so","libc++.so","libbase.so","liblog.so","libutils.so","libcutils.so",
+    "libart.so","libartd.so","libandroid_runtime.so","libandroid_servers.so","libinputflinger.so","libinput.so",
+    "libbinder.so","libhwbinder.so","libgui.so","libui.so","libsurfaceflinger.so","libEGL.so","libGLESv2.so",
+    "libGLESv1_CM.so","libvulkan.so","libhwui.so","libnetd_client.so","libunwindstack.so","libopenjdk.so",
+    "libjavacore.so","libgfxstream_backend.so","libOpenglRender.so","libEGL_emulation.so",
+    "libGLESv2_emulation.so","libvulkan_ranchu.so","gralloc.ranchu.so"))
+NATIVE_SYMBOLS=frozenset(("abort","__assert2","__fortify_fatal","__stack_chk_fail","tgkill","pthread_kill",
+    "raise","__android_log_assert","android::base::DefaultAborter(char const*)",
+    "android::base::LogMessage::~LogMessage()","art::Runtime::Abort(char const*)"))
+NATIVE_PATH=re.compile(r"/(?:system|system_ext|vendor|product)/(?:lib|lib64)/(?:[A-Za-z0-9_.-]+/){0,3}([A-Za-z0-9_.+-]+)"
+    r"|/apex/com\.android\.[a-z0-9.]+/(?:lib|lib64)/(?:[A-Za-z0-9_.-]+/){0,3}([A-Za-z0-9_.+-]+)")
 SOURCE_SHA256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 
 
@@ -36,6 +50,7 @@ class FrameworkTrace:
         self.command=[adb,"-s",serial,"logcat","-b","crash","-b","events","-b","system","-b","main","-v","threadtime","-T","1"]
         self.pids={int(framework[p]):p for p in ("system_server","surfaceflinger")}
         self.fatal_pids=set()
+        self.native_faults={};self.native_dumps={};self.native_frames_omitted=0;self.native_drain_ms=0
         self.events=deque(maxlen=256);self.lock=threading.Lock();self.lines=0;self.dropped=0;self.error=None
         self.proc=None;self.thread=None;self.started=time.monotonic();self.terminal=None;self.attempted=False
         self.ready=threading.Event()
@@ -54,6 +69,50 @@ class FrameworkTrace:
         event={"kind":"phase","name":phase}
         if exit_code is not None:event["exitCode"]=int(exit_code)
         self._append(event)
+
+    def _native_dump(self,logger,payload,event):
+        # crash_dump's logging PID differs from the crashed process. Attribute
+        # only a header that matches a previously observed known-process signal.
+        if payload.startswith("*** ***"):
+            self.native_dumps.pop(logger,None);return None
+        header=re.fullmatch(r"pid: ([0-9]{1,10}), tid: ([0-9]{1,10}), name: .{0,256}  >>> ([^<>]{1,128}) <<<",payload)
+        if payload.lstrip().startswith("pid:"):
+            self.native_dumps.pop(logger,None)
+            if not header:return None
+        if header:
+            victim=int(header[1]);process=header[3]
+            if self.native_faults.get(victim)!=process:return None
+            self.native_dumps[logger]={"victim":victim,"process":process,"frames":set()}
+            if len(self.native_dumps)>16:self.native_dumps.pop(next(iter(self.native_dumps)))
+            return {**event,"kind":"native-dump-header","victimPid":victim,"victimTid":int(header[2]),"process":process}
+        context=self.native_dumps.get(logger)
+        if context is None:return None
+        event={**event,"victimPid":context["victim"],"process":context["process"]}
+        if payload.startswith("Abort message: '") and payload.endswith("'"):
+            message=payload[len("Abort message: '"):-1]
+            families=(("FORTIFY:","fortify"),("Scudo ERROR:","allocator"),("fdsan:","descriptor-ownership"),
+                ("stack corruption detected","stack-corruption"),("JNI DETECTED ERROR IN APPLICATION:","jni-contract"),
+                ("Check failed:","assertion"),("terminating due to uncaught exception of type std::bad_alloc","native-allocation"))
+            family=next((family for prefix,family in families if message.startswith(prefix)),"unclassified")
+            return {**event,"kind":"native-abort-summary","messageFamily":family,
+                "messageSha256":hashlib.sha256(message.encode()).hexdigest(),"messageBytes":len(message.encode())}
+        signal=re.match(r"signal ([0-9]{1,3}) \([A-Z0-9]+\), code (-?[0-9]{1,4}) \([A-Z0-9_]+\), fault addr ",payload)
+        if signal:return {**event,"kind":"native-dump-signal","signal":int(signal[1]),"signalCode":int(signal[2])}
+        frame=re.match(r"\s*#([0-9]{2,3})\s+pc\s+([a-fA-F0-9]{8,16})\s+(\S+)(.*)$",payload)
+        if frame:
+            index=int(frame[1]);path=NATIVE_PATH.fullmatch(frame[3])
+            library=next((part for part in path.groups() if part),None) if path and not any(part in {".",".."} for part in frame[3].split("/")) else None
+            if library not in NATIVE_LIBRARIES or index>=32 or index in context["frames"]:
+                self.native_frames_omitted+=1;return None
+            context["frames"].add(index)
+            event.update(kind="native-frame",frame=index,library=library,pcOffset=int(frame[2],16))
+            suffix=frame[4]
+            build=re.search(r"\(BuildId: ([a-fA-F0-9]{8,64})\)\s*$",suffix)
+            if build:event["buildId"]=build[1].lower();suffix=suffix[:build.start()].rstrip()
+            symbol=re.fullmatch(r"\s+\((.+)\+[0-9]{1,10}\)",suffix)
+            if symbol and symbol[1] in NATIVE_SYMBOLS:event["knownSymbol"]=symbol[1]
+            return event
+        return None
 
     def consume(self,line):
         """Accept only fixed classes, known processes and integer process metadata."""
@@ -92,6 +151,12 @@ class FrameworkTrace:
             event.update(kind="low-memory-kill",process=victim[1],victimPid=int(victim[2]))
         elif tag=="libc" and re.match(r"Fatal signal [0-9]{1,3}\b",payload):
             event.update(kind="native-fatal-signal",signal=int(re.match(r"Fatal signal ([0-9]+)",payload)[1]))
+            if pid in self.pids:
+                self.native_faults[pid]=self.pids[pid]
+                if len(self.native_faults)>32:self.native_faults.pop(next(iter(self.native_faults)))
+        elif tag=="DEBUG":
+            event=self._native_dump(pid,payload,event)
+            if event is None:return
         elif tag=="AndroidRuntime" and (pid in self.pids or pid in self.fatal_pids):
             classes=[e for e in EXCEPTIONS if re.match(r"\s*(?:Caused by: )?"+re.escape(e)+r"(?::|$)",payload)]
             families=[e for e in ("DeadSystemException","DeadSystemRuntimeException") if re.match(r"\s*(?:Caused by: )?"+e+r"(?::|$)",payload)]
@@ -136,11 +201,20 @@ class FrameworkTrace:
                 "rawLogsRetained":False,"mayContainPriorRecords":True,
                 "streamStarted":self.proc is not None,"streamReady":self.ready.is_set(),"streamExitCode":self.proc.poll() if self.proc else None,
                 "readerAlive":bool(self.thread and self.thread.is_alive()),"failureClass":self.error,
+                "nativeFramesOmitted":self.native_frames_omitted,"nativeDetailDrainMs":self.native_drain_ms,
                 "linesExamined":self.lines,"eventsDropped":self.dropped,"events":list(self.events)}
 
     def stop(self):
         if self.terminal is not None:return self.terminal
         before=self.snapshot();live=bool(self.proc and self.proc.poll() is None and self.thread.is_alive())
+        if live and self.native_faults:
+            # A native tombstone may follow the signal/failed command. Finish a
+            # bounded read-only capture; this never retries input or restarts a guest.
+            started=time.monotonic();deadline=started+NATIVE_DRAIN_SECONDS
+            while self.proc.poll() is None and self.thread.is_alive() and time.monotonic()<deadline:
+                time.sleep(min(0.05,max(0,deadline-time.monotonic())))
+            self.native_drain_ms=round((time.monotonic()-started)*1000)
+            live=bool(self.proc.poll() is None and self.thread.is_alive())
         if self.proc:
             if self.proc.poll() is None:
                 self.proc.terminate()
