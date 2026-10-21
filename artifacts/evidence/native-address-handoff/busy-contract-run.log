@@ -1,0 +1,22 @@
+   Compiling covalent-node v0.2.12 (/Users/michaelwong/Developer/Covalent/crates/covalent-node)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.44s
+     Running tests/one_way_links.rs (target/debug/deps/one_way_links-4ab91248ad55ab56)
+
+running 1 test
+ADDRESS_HANDOFF_PHASE paired complete=true
+ADDRESS_HANDOFF_PHASE initial_run complete=true generation=1
+ADDRESS_HANDOFF_PHASE receiver_move complete=true busy_responses=0
+ADDRESS_HANDOFF_PHASE receiver_move_replay complete=true busy_responses=0
+test manual_link_survives_both_endpoint_moves_and_retains_pairing has been running for over 60 seconds
+ADDRESS_HANDOFF_PHASE receiver_run complete=true generation=2
+ADDRESS_HANDOFF_PHASE sender_move complete=true busy_responses=0
+ADDRESS_HANDOFF_PHASE sender_move_replay complete=true busy_responses=0
+ADDRESS_HANDOFF_PHASE sender_run complete=true generation=3
+ADDRESS_HANDOFF_PHASE receiver_move_reopened_replay complete=true busy_responses=0
+ADDRESS_HANDOFF_PHASE sender_move_reopened_replay complete=true busy_responses=0
+ADDRESS_HANDOFF_RESULT receiver_peer_and_worker_moved=true sender_peer_and_worker_moved=true identities_retained=true generation=3 exact_replays=true manual_stopped=true deletion_policy_retained=true original_preserved=true
+ADDRESS_HANDOFF_CLEANUP temp_root=/var/folders/yj/rzyx3s1j65d26c9l8b3mjbb00000gn/T/covalent-address-handoff-dEJYKz runtimes_stopped=true temp_root_absent=true
+test manual_link_survives_both_endpoint_moves_and_retains_pairing ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 136.38s
+

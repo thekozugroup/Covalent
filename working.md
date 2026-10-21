@@ -1,3 +1,31 @@
+# Native address handoff gate — 2026-10-21
+
+Software-first milestone: the real maintained desktop worker passes three manual
+transfer generations while both endpoints change peer/worker ports, then reopen
+with retained pairing, settings and exact request replay. Source bytes and
+receiver deletions remain intact. Test passes in 141.751s wrapper / 136.38s test;
+Clippy passes in 14.527s and foundation in 43.849s. CI now executes this regression
+against the macOS bundle's actual worker and guardian.
+
+The first failed test is retained: its helper rejected a legitimate503 busy
+response. Only that test helper changes; the revised passing run sees no busy
+responses. Production code is unchanged. This does not diagnose or close the
+older intermittent Android address-transfer timeout. See docs/native-address-handoff.md
+and artifacts/evidence/native-address-handoff/.
+
+Hosted9330537 CI39651980156 is terminal failed: seven software lanes plus 86
+baseline Android tests and SAF pass; permission recovery fails on an adb input
+command after an emulator color-buffer error. Source 4a89c2f CI39655613903 fails
+container/Android-fixture builds at the installed-package lock check; logs show
+an unreviewed musl r23-to-r24 upgrade. Dependency review, Mac integration and Mac
+bundle pass; remaining checks keep their own live status. No rerun or gate bypass.
+
+Next: review the signed package difference and recover reproducible builds;
+retain the earlier Android timeout and permission-test failures as open gates.
+Pi image, physical devices, accounts and original media are unchanged.
+
+---
+
 # Adaptive companion status and home screen — 2026-10-21
 
 Software-first UI milestone: a retained manual/paused photo link stays configured
@@ -70,7 +98,7 @@ checks and removal. Exact sources, APKs, UID, boot/framework and all previous
 failed evidence verify. No old pairing state or data is cleared. This single
 pass does not close the earlier intermittent post-address transfer stall.
 
-Hosted fed6107 CI39644102561 is terminal failed: seven software lanes, all86
+Hosted fed6107 CI39644102561 is terminal failed: seven software lanes, all 86
 baseline tests (72.693s) and the ordinary-app SAF journey (422.116s) pass. Both
 CodeQL languages and policy pass. Permission recovery hits the same62-byte
 emulator read-color-buffer-DMA abort, correlated in live and DropBox reports
@@ -101,7 +129,7 @@ small UI smoke. Package alignment/signature and all eight unchanged native
 libraries verify; route and full foundation validation pass. See
 docs/interlink-progressive-setup.md.
 
-Hosted0564034 CI39635433377 is terminal: five non-device lanes, all86 baseline
+Hosted0564034 CI39635433377 is terminal: five non-device lanes, all 86 baseline
 tests (73.139s) and the full SAF journey (426.305s) pass. Shared foundation fails
 at the archived-client gate already corrected in e01dae1; macOS UI is cancelled;
 permission recovery and release gates fail. CodeQL Java/Kotlin passes; Swift is
@@ -341,7 +369,7 @@ all 86 baseline instrumentation tests and the complete SAF folder journey pass
 actual hosted journey evidence. The permission journey remains failed. Its
 continuous recorder sees system_server PID657 receive native signal 6 at
 06:40:10.236, before the failed Permissions tap starts (1.508 host seconds
-later). The tap and subsequent permission restoration report exit20/missing-service.
+later). The tap and subsequent permission restoration report exit 20/missing-service.
 This establishes an earlier core-framework failure, not its cause or trigger.
 All three recorded synthetic identity digests remain unchanged at failure.
 No tap is replayed, deadline extended or framework restarted by this follow-up.
@@ -406,7 +434,7 @@ idle-manual observation was also pushed separately as codex/idle-manual-repair;
 it does not change app runtime or claim to repair the unrelated focus failure.
 
 Earlier hosted source d9eb263, run 39526795075, is terminal: seven non-device lanes and all 87
-baseline/SAF tests pass, but the permission tap reports exit20/missing-service.
+baseline/SAF tests pass, but the permission tap reports exit 20/missing-service.
 The subsequent framework observation has no system_server PID. The full gate
 fails; neither crash cause nor tap delivery is established by that evidence.
 

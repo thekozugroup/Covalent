@@ -2055,6 +2055,178 @@ fn pending_copy_diagnostic(
     )
 }
 
+async fn reported_transport_identity(node: &NodeRuntime) -> (String, String) {
+    let response = call(node, "GET", "/api/v1/transport/identity", None).await;
+    assert_eq!(response.status, 200, "transport identity unavailable");
+    let identity = response.json();
+    (
+        string_field(&identity, "deviceId").to_owned(),
+        string_field(&identity, "certificateFingerprint").to_owned(),
+    )
+}
+
+async fn refresh_address_when_idle(node: &NodeRuntime, request: &Value, phase: &str) {
+    let deadline = Instant::now() + WAIT_LIMIT;
+    let mut busy_count = 0;
+    loop {
+        let response = call(
+            node,
+            "POST",
+            "/api/v1/sync/peers/refresh-address",
+            Some(request),
+        )
+        .await;
+        if response.status == 200 {
+            eprintln!("ADDRESS_HANDOFF_PHASE {phase} complete=true busy_responses={busy_count}");
+            return;
+        }
+        assert!(
+            response.status == 503
+                && response.json()["code"] == "folder_sync_busy"
+                && Instant::now() < deadline,
+            "address handoff {phase} failed: {} {}",
+            response.status,
+            response.body
+        );
+        busy_count += 1;
+        tokio::time::sleep(POLL_INTERVAL).await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires explicit maintained rclone worker and freshly compiled guardian paths"]
+async fn manual_link_survives_both_endpoint_moves_and_retains_pairing() {
+    let binaries = test_binaries();
+    let root = tempfile::Builder::new()
+        .prefix("covalent-address-handoff-")
+        .tempdir()
+        .unwrap();
+    let mut source_spec = NodeSpec::new(root.path(), "moving-source", 0xD1);
+    let mut target_spec = NodeSpec::new(root.path(), "moving-target", 0xD2);
+    let source_root = root.path().join("source-files");
+    let target_root = root.path().join("target-files");
+    private_directory(&source_root);
+    private_directory(&target_root);
+    write(
+        &source_root,
+        "retained-original.jpg",
+        b"original photo fixture\n",
+    );
+    let registry = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let scenario_registry = Arc::clone(&registry);
+    let scenario = tokio::spawn(async move {
+        tokio::time::timeout(Duration::from_secs(240), async {
+            let mut source = start_registered_node(&source_spec, &binaries, &scenario_registry).await;
+            let mut target = start_registered_node(&target_spec, &binaries, &scenario_registry).await;
+            let source_identity = reported_transport_identity(&source).await;
+            let target_identity = reported_transport_identity(&target).await;
+            let target_id = pair(&source, &target, "Moving target").await;
+            assert_eq!(target_id, target_identity.0);
+            eprintln!("ADDRESS_HANDOFF_PHASE paired complete=true");
+            let folder = Uuid::new_v4();
+            offer_and_accept_at_cadence(
+                &source, &target, &target_id, folder, &source_root, &target_root,
+                json!({"mode": "manual"}),
+            ).await;
+            for node in [&source, &target] {
+                wait_ready_at(node, "manual move fixture ready", folder, 1, 0, false, false).await;
+            }
+            request_batch(&source, folder, 0, 0).await;
+            for node in [&source, &target] {
+                assert_eq!(wait_batch(node, folder, 1, "succeeded").await["lifecycle"], "stopped");
+            }
+            assert_eq!(fs::read(target_root.join("retained-original.jpg")).unwrap(), b"original photo fixture\n");
+            fs::remove_file(target_root.join("retained-original.jpg")).unwrap();
+            eprintln!("ADDRESS_HANDOFF_PHASE initial_run complete=true generation=1");
+
+            let old_target_address = target.ready_info().peer_address();
+            let old_target_worker = target_spec.sync_address;
+            target.stop().await.expect("stop receiver before move");
+            // Occupy both old ports so an accidentally reused endpoint cannot
+            // make this test pass without exercising the address transition.
+            let _old_target_peer = std::net::UdpSocket::bind(old_target_address).unwrap();
+            let _old_target_worker = TcpListener::bind(old_target_worker).unwrap();
+            target_spec.sync_address = reserve_loopback();
+            target = start_registered_node(&target_spec, &binaries, &scenario_registry).await;
+            target_spec.peer_address = target.ready_info().peer_address();
+            assert_ne!(target_spec.peer_address, old_target_address);
+            assert_ne!(target_spec.sync_address, old_target_worker);
+            assert_eq!(reported_transport_identity(&target).await, target_identity);
+            let target_move = json!({"peerId": target_id,
+                "expectedAddress": old_target_address.to_string(),
+                "candidateAddress": target_spec.peer_address.to_string()});
+            refresh_address_when_idle(&source, &target_move, "receiver_move").await;
+            refresh_address_when_idle(&source, &target_move, "receiver_move_replay").await;
+            write(&source_root, "after-receiver-move.jpg", b"receiver moved\n");
+            // Request immediately after authenticated refresh, without a
+            // readiness sleep that could conceal a worker handoff race.
+            request_batch(&source, folder, 1, 0).await;
+            for node in [&source, &target] {
+                assert_eq!(wait_batch(node, folder, 2, "succeeded").await["lifecycle"], "stopped");
+            }
+            assert_eq!(fs::read(target_root.join("after-receiver-move.jpg")).unwrap(), b"receiver moved\n");
+            assert_absent(&target_root.join("retained-original.jpg"), "receiver move restored a local deletion");
+            eprintln!("ADDRESS_HANDOFF_PHASE receiver_run complete=true generation=2");
+
+            let old_source_address = source.ready_info().peer_address();
+            let old_source_worker = source_spec.sync_address;
+            source.stop().await.expect("stop sender before move");
+            let _old_source_peer = std::net::UdpSocket::bind(old_source_address).unwrap();
+            let _old_source_worker = TcpListener::bind(old_source_worker).unwrap();
+            source_spec.sync_address = reserve_loopback();
+            source = start_registered_node(&source_spec, &binaries, &scenario_registry).await;
+            source_spec.peer_address = source.ready_info().peer_address();
+            assert_ne!(source_spec.peer_address, old_source_address);
+            assert_ne!(source_spec.sync_address, old_source_worker);
+            assert_eq!(reported_transport_identity(&source).await, source_identity);
+            let source_move = json!({"peerId": source_identity.0,
+                "expectedAddress": old_source_address.to_string(),
+                "candidateAddress": source_spec.peer_address.to_string()});
+            refresh_address_when_idle(&target, &source_move, "sender_move").await;
+            refresh_address_when_idle(&target, &source_move, "sender_move_replay").await;
+            write(&source_root, "after-sender-move.jpg", b"sender moved\n");
+            let run = request_batch(&target, folder, 2, 0).await;
+            for node in [&source, &target] {
+                assert_eq!(wait_batch(node, folder, 3, "succeeded").await["lifecycle"], "stopped");
+            }
+            assert_eq!(fs::read(target_root.join("after-sender-move.jpg")).unwrap(), b"sender moved\n");
+            post_ok(&target, "/api/v1/sync/run", run.clone()).await;
+            eprintln!("ADDRESS_HANDOFF_PHASE sender_run complete=true generation=3");
+
+            source.stop().await.expect("stop moved sender");
+            target.stop().await.expect("stop moved receiver");
+            source = start_registered_node(&source_spec, &binaries, &scenario_registry).await;
+            target = start_registered_node(&target_spec, &binaries, &scenario_registry).await;
+            assert_eq!(reported_transport_identity(&source).await, source_identity);
+            assert_eq!(reported_transport_identity(&target).await, target_identity);
+            // Exact retries survive reopening the journal without replacing
+            // pairing or manufacturing another manual generation.
+            refresh_address_when_idle(&source, &target_move, "receiver_move_reopened_replay").await;
+            refresh_address_when_idle(&target, &source_move, "sender_move_reopened_replay").await;
+            post_ok(&target, "/api/v1/sync/run", run).await;
+            for node in [&source, &target] {
+                let retained = wait_batch(node, folder, 3, "succeeded").await;
+                assert_eq!(retained["lifecycle"], "stopped");
+                assert!(shares_ready_at(&retained, folder, 1, 0, false, false));
+                assert_eq!(folder_shares(&retained, folder)[0]["linkSettings"]["settings"]["cadence"]["mode"], "manual");
+            }
+            assert_eq!(fs::read(source_root.join("retained-original.jpg")).unwrap(), b"original photo fixture\n");
+            assert_eq!(fs::read(target_root.join("after-receiver-move.jpg")).unwrap(), b"receiver moved\n");
+            assert_eq!(fs::read(target_root.join("after-sender-move.jpg")).unwrap(), b"sender moved\n");
+            assert_absent(&target_root.join("retained-original.jpg"), "restart restored a local deletion");
+            eprintln!("ADDRESS_HANDOFF_RESULT receiver_peer_and_worker_moved=true sender_peer_and_worker_moved=true identities_retained=true generation=3 exact_replays=true manual_stopped=true deletion_policy_retained=true original_preserved=true");
+        }).await.expect("address handoff scenario exceeded its original 240 second deadline");
+    });
+    finish_registered_scenario(
+        root,
+        registry,
+        scenario,
+        "address handoff",
+        "ADDRESS_HANDOFF",
+    )
+    .await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires explicit maintained rclone worker and freshly compiled guardian paths"]
 async fn completed_worker_error_reports_failed_run_and_preserves_recovery_state() {

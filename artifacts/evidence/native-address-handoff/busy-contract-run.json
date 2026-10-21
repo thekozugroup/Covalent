@@ -1,0 +1,24 @@
+{
+  "command": [
+    "cargo",
+    "test",
+    "--locked",
+    "-p",
+    "covalent-node",
+    "--test",
+    "one_way_links",
+    "--",
+    "--ignored",
+    "--exact",
+    "manual_link_survives_both_endpoint_moves_and_retains_pairing",
+    "--nocapture"
+  ],
+  "exitCode": 0,
+  "elapsedSeconds": 141.751,
+  "sourceSha256": {
+    "crates/covalent-node/tests/one_way_links.rs": "506efbea2c70fe479054096fea11f1ead927241b859110b1c4086c2333cf8ec5",
+    ".github/workflows/ci.yml": "feecdfd5f9b88b90f95cd850558ede3bab65dd7f54bd7d203690667b353ab8f3",
+    "packaging/sync-engine/engine-guardian.c": "c50b5cf10a287c4c061b7891978fd2681b5c96910eb2c69c922beae349140579"
+  },
+  "sourceUnchanged": true
+}

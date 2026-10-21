@@ -1,0 +1,632 @@
+{
+  "schema": 1,
+  "milestone": "native-address-handoff",
+  "parentCommit": "4a89c2fdff3e5eea0cadcc10ea45a9cc93b0c32d",
+  "productionCodeChanged": false,
+  "firstRunSourceBinding": "Not captured; failed before formatting and the busy-contract helper change. Raw failure remains retained, without an exact-source claim.",
+  "result": {
+    "command": [
+      "cargo",
+      "test",
+      "--locked",
+      "-p",
+      "covalent-node",
+      "--test",
+      "one_way_links",
+      "--",
+      "--ignored",
+      "--exact",
+      "manual_link_survives_both_endpoint_moves_and_retains_pairing",
+      "--nocapture"
+    ],
+    "exitCode": 0,
+    "elapsedSeconds": 141.751,
+    "sourceSha256": {
+      "crates/covalent-node/tests/one_way_links.rs": "506efbea2c70fe479054096fea11f1ead927241b859110b1c4086c2333cf8ec5",
+      ".github/workflows/ci.yml": "feecdfd5f9b88b90f95cd850558ede3bab65dd7f54bd7d203690667b353ab8f3",
+      "packaging/sync-engine/engine-guardian.c": "c50b5cf10a287c4c061b7891978fd2681b5c96910eb2c69c922beae349140579"
+    },
+    "sourceUnchanged": true
+  },
+  "sources": [
+    {
+      "path": ".github/workflows/ci.yml",
+      "sha256": "feecdfd5f9b88b90f95cd850558ede3bab65dd7f54bd7d203690667b353ab8f3",
+      "bytes": 57789
+    },
+    {
+      "path": "Cargo.lock",
+      "sha256": "590c07f6ba8a47f8fbadd7ca500f9c02f9582bbf0ed361d5f0d5577539124421",
+      "bytes": 69694
+    },
+    {
+      "path": "Cargo.toml",
+      "sha256": "a40eac6a0e640a4b62cebd04e0540cd7e69a95f54ab938ca322d6eec340acb00",
+      "bytes": 3531
+    },
+    {
+      "path": "crates/covalent-android-jni/Cargo.toml",
+      "sha256": "981db2fe883f2a2e9413caaee7b055bfaa39818515bcfaedd84648b634c1667a",
+      "bytes": 1506
+    },
+    {
+      "path": "crates/covalent-android-jni/exports.map",
+      "sha256": "d5701bb81da5fdee546805f5ab6aa6082e514cf412154d4e62e045e9410ac560",
+      "bytes": 625
+    },
+    {
+      "path": "crates/covalent-android-jni/src/lib.rs",
+      "sha256": "68a9e3605c7e4d401b1e1b81ad1956ae1a23852d4fe6f068b717d09e4e2b33ba",
+      "bytes": 48666
+    },
+    {
+      "path": "crates/covalent-cli/Cargo.toml",
+      "sha256": "ef2cb64907b520b590ecc4ac47e8e4ffd7aeb96bd578a53d1414d20ea88d2e61",
+      "bytes": 874
+    },
+    {
+      "path": "crates/covalent-cli/src/main.rs",
+      "sha256": "77c17f59fbf7a60111ff82acee44435585034af466ccb504e76f6df5044c5167",
+      "bytes": 82438
+    },
+    {
+      "path": "crates/covalent-core/Cargo.toml",
+      "sha256": "d20216d6781a17f91525883809410177e8637b4da29706b2ee701b24c84341ea",
+      "bytes": 970
+    },
+    {
+      "path": "crates/covalent-core/benches/engine_smoke.rs",
+      "sha256": "926cd129ddbc973eb6e95ed2c4d211f62fa8a0f3c75dd3023d967cb7c7e4bfb0",
+      "bytes": 10607
+    },
+    {
+      "path": "crates/covalent-core/src/atomic.rs",
+      "sha256": "5a816b197d4f9fb59893c4078064422f345e49555401ac5d2c07a53033e22834",
+      "bytes": 21305
+    },
+    {
+      "path": "crates/covalent-core/src/backup.rs",
+      "sha256": "5c1a2b7f25a3c1acfc03c35cceb9d7c479db2445857157b3e03cf04bb813575e",
+      "bytes": 46513
+    },
+    {
+      "path": "crates/covalent-core/src/chunker.rs",
+      "sha256": "b7915265a43440fef2f8115ffbfef3fb8a558b73650484984d17e8ebeac72588",
+      "bytes": 8634
+    },
+    {
+      "path": "crates/covalent-core/src/crypto.rs",
+      "sha256": "5b9aca7265eb440c8f26d3b2b0e5d78cadc6d264b16dd2a745500c58d3ec8507",
+      "bytes": 26940
+    },
+    {
+      "path": "crates/covalent-core/src/engine.rs",
+      "sha256": "bbd84c48c917bd3d66eecb2e9f6817b0bbd973062dc3a433d6b99af5dd6e8ede",
+      "bytes": 182622
+    },
+    {
+      "path": "crates/covalent-core/src/engine/recovery_import.rs",
+      "sha256": "2a688459e449d38386b9bd8bb72cdbffb381c66923aaf9eca75f5a21099713cf",
+      "bytes": 22108
+    },
+    {
+      "path": "crates/covalent-core/src/engine/transport_update.rs",
+      "sha256": "80b266def005d66ec37c5a642312c37d8bb4485b6e15394ed8aaf53b9fb212d8",
+      "bytes": 13987
+    },
+    {
+      "path": "crates/covalent-core/src/folder_sharing.rs",
+      "sha256": "642fec7628443c4fe40cf84e0b51631f9f065384ea29beeae0b73c694e213fc4",
+      "bytes": 20634
+    },
+    {
+      "path": "crates/covalent-core/src/folder_sharing_tests.rs",
+      "sha256": "c78cc771dbd600db786dcdc1eb8f23483b13f98eadd003cbe8b03b24553cb567",
+      "bytes": 19723
+    },
+    {
+      "path": "crates/covalent-core/src/identity.rs",
+      "sha256": "5a63342bc084470ff514f55d40de5bfb87012712c172ac50f0d494e2a358fd72",
+      "bytes": 19455
+    },
+    {
+      "path": "crates/covalent-core/src/key_envelope.rs",
+      "sha256": "b1b73487abf10e57a38c4f304c55459b5b1a12cb8884d91fdfb84454d62395d1",
+      "bytes": 25414
+    },
+    {
+      "path": "crates/covalent-core/src/lib.rs",
+      "sha256": "d0fcd7e41f08ce354fd68042e15c527769f25ede4398c3694e2c760bb4611e2c",
+      "bytes": 15819
+    },
+    {
+      "path": "crates/covalent-core/src/manifest.rs",
+      "sha256": "beeafbd8ff3d111fa20c340eb070ef1a9d36253c55db81f82699ab2c03e68761",
+      "bytes": 12394
+    },
+    {
+      "path": "crates/covalent-core/src/pairing.rs",
+      "sha256": "05af10b7969949e52ce8d5d8e7a0e50347d7a8adf52d787c927fae6d6dddc387",
+      "bytes": 60023
+    },
+    {
+      "path": "crates/covalent-core/src/recovery.rs",
+      "sha256": "48946078892a31e3eb81565caab02f8271ffe8cb65ec1c87d8ad8c58a0ee8810",
+      "bytes": 28113
+    },
+    {
+      "path": "crates/covalent-core/src/replication.rs",
+      "sha256": "070f725e648ee792f4e7f1d338a68398da9b5723667352d6ef8a435a109ae5e5",
+      "bytes": 74228
+    },
+    {
+      "path": "crates/covalent-core/src/restore.rs",
+      "sha256": "e19109cebebbad39b6c71cafbbe02db6b1f682900fa8bbe96b51cc464cb89abc",
+      "bytes": 95857
+    },
+    {
+      "path": "crates/covalent-core/src/storage.rs",
+      "sha256": "7c948680b94d796c35112e8dae33b6cd27e3b87a02b82c3f10b6ae487ff5c953",
+      "bytes": 495010
+    },
+    {
+      "path": "crates/covalent-core/src/sync.rs",
+      "sha256": "90f7da6fd643a0837ceaa820cab293a090524bd4178cb0180f3b8b97519a0d8a",
+      "bytes": 177
+    },
+    {
+      "path": "crates/covalent-core/src/sync/state_dir.rs",
+      "sha256": "7777dc8c241864a4c94c164ec81b9d5ae849ba80966b83be12a7cc4322c09de1",
+      "bytes": 77591
+    },
+    {
+      "path": "crates/covalent-core/tests/fixtures/folder-share-v1-checkpoint46.json",
+      "sha256": "83ce68aa8a56816a18a53e1a421adf3ce666ea7ff7a170788bd71f2c33b3b10a",
+      "bytes": 2146
+    },
+    {
+      "path": "crates/covalent-core/tests/key_protection.rs",
+      "sha256": "a66c84ab6242546d4426a2629b5e1064ceacba9008d1bec3f81f15474002de32",
+      "bytes": 6127
+    },
+    {
+      "path": "crates/covalent-core/tests/owner_loss_recovery.rs",
+      "sha256": "f1f2d5b1f44779202ec3753585048f04ae2f3d4b114fc3d4be485df18a8b0b97",
+      "bytes": 4366
+    },
+    {
+      "path": "crates/covalent-core/tests/production_scenarios.rs",
+      "sha256": "dea77bd33c55b192b900058a637c298ccb536c57229320268cbf3068b0e6ecf7",
+      "bytes": 14704
+    },
+    {
+      "path": "crates/covalent-core/tests/provider_lease_enforcement.rs",
+      "sha256": "bdebdedf5f0c286fb886ac276795f25b10dafc423016ecd1ad375922524c1952",
+      "bytes": 5705
+    },
+    {
+      "path": "crates/covalent-node/Cargo.toml",
+      "sha256": "e13b82220a8bfb6de134bd4ca87c7170cf67fb623dee32334e05ce9ccf0a91b9",
+      "bytes": 2349
+    },
+    {
+      "path": "crates/covalent-node/src/advertised_address.rs",
+      "sha256": "613ccfe7b7a0b8bfdf62658af882b0ada3a49ed9d5c201e0f593a4fa3b2e95c1",
+      "bytes": 19762
+    },
+    {
+      "path": "crates/covalent-node/src/discovery.rs",
+      "sha256": "9a353d64a7b026b7504e512b8811cc1d1e36f4331f54d9df85df6ada9de2ac2e",
+      "bytes": 30390
+    },
+    {
+      "path": "crates/covalent-node/src/display_names.rs",
+      "sha256": "d0518d0fab815e88244d5bb3d5bd918bd17303094ccca1c4f433848abfb94c38",
+      "bytes": 5568
+    },
+    {
+      "path": "crates/covalent-node/src/first_run_claim.rs",
+      "sha256": "0b5980d836c47c665556ebfc17062006bd68f86962ad844558ae7e49883b0ffd",
+      "bytes": 67117
+    },
+    {
+      "path": "crates/covalent-node/src/lib.rs",
+      "sha256": "265061dad58bfef5c6760359d098edb895c9c486574f6adda3126a5d4a8d0f3a",
+      "bytes": 338099
+    },
+    {
+      "path": "crates/covalent-node/src/main.rs",
+      "sha256": "ec27c0971c7eda320d8ff0107898b8303ea926e3edd1d8d6f6d17a8103f8c7b3",
+      "bytes": 54382
+    },
+    {
+      "path": "crates/covalent-node/src/network_pairing.rs",
+      "sha256": "30330b2c0db6ae53981ab411243ee31081fa53c4ed0221b95038fea44e7265e1",
+      "bytes": 91723
+    },
+    {
+      "path": "crates/covalent-node/src/pairing_transport.rs",
+      "sha256": "d0908fe8c2cdac8c5d5dabdb0769b1c1aa07dc0e7ee1c73e4ebcb51b9b2723e0",
+      "bytes": 45136
+    },
+    {
+      "path": "crates/covalent-node/src/recovery_bootstrap.rs",
+      "sha256": "bd859cc258d4fb39177ae852d083a9127b7a596bcbd8df5951c497d9d3b1ad92",
+      "bytes": 9043
+    },
+    {
+      "path": "crates/covalent-node/src/recovery_state.rs",
+      "sha256": "73dbea10bd899d7064461c704fa4e813ea51da09f51a4adfbb34d45f850c6f3d",
+      "bytes": 24659
+    },
+    {
+      "path": "crates/covalent-node/src/runtime.rs",
+      "sha256": "23de3f16fde833113ea2946cd2831c8114cccc65874adc2ccbebc4b044f84277",
+      "bytes": 62745
+    },
+    {
+      "path": "crates/covalent-node/src/sync_api.rs",
+      "sha256": "91e0b2fb83241a7e2b7e2c1ab45f0fb5459f7dcda9f9d6ac41f70f9006c38f1b",
+      "bytes": 54958
+    },
+    {
+      "path": "crates/covalent-node/src/sync_control.rs",
+      "sha256": "940299c50f333c33e94133c3faa1cc89fd824c79c0d1103b4994df761da5d234",
+      "bytes": 35700
+    },
+    {
+      "path": "crates/covalent-node/src/sync_control_tests.rs",
+      "sha256": "9c8a7b0f4e2ace7be56780280f0e594ab2c8fd5e9fd93c63a1c0e2c64bf2d307",
+      "bytes": 32684
+    },
+    {
+      "path": "crates/covalent-node/src/sync_delivery.rs",
+      "sha256": "e0b55107807da76a29d3be5a27ca359072def27d8de9f2075476f2871ac19149",
+      "bytes": 21919
+    },
+    {
+      "path": "crates/covalent-node/src/sync_engine.rs",
+      "sha256": "88a020062d364a7a483f3075f40137fc4d033b63a12a64968b7b85dee9d157fd",
+      "bytes": 2647
+    },
+    {
+      "path": "crates/covalent-node/src/sync_engine/access_recovery.rs",
+      "sha256": "e12909dcb04a6efb7294e0a9a531ba63afcf7ee432abc74dfab879d2a3dd15c5",
+      "bytes": 2479
+    },
+    {
+      "path": "crates/covalent-node/src/sync_engine/android_saf.rs",
+      "sha256": "cb69bb78ba0cb797f8f1d4f45acf534fb231bac018111091a77556e01f5393ca",
+      "bytes": 10787
+    },
+    {
+      "path": "crates/covalent-node/src/sync_engine/config.rs",
+      "sha256": "1e9463633ffc939a6f29b4b7f762add7056900120262ab1447663f137cf5b6f6",
+      "bytes": 11310
+    },
+    {
+      "path": "crates/covalent-node/src/sync_engine/connection.rs",
+      "sha256": "e843d32d6672516ebbe1b5cb031c0440498100fb98ba0ae3fac0e976d38de041",
+      "bytes": 1276
+    },
+    {
+      "path": "crates/covalent-node/src/sync_engine/connection_tests.rs",
+      "sha256": "a34a94bd1e6c0f3a73c5108ad2e69d7e54130c587df39428b6a2042443ffaca6",
+      "bytes": 642
+    },
+    {
+      "path": "crates/covalent-node/src/sync_engine/controller.rs",
+      "sha256": "1d588bab776bda2e072e44cc01c8ffe3a3f8c1d5ab84548e9facdd3c722a5459",
+      "bytes": 27018
+    },
+    {
+      "path": "crates/covalent-node/src/sync_engine/health.rs",
+      "sha256": "fa65d75131a09cfb5325fb940a2b2f2241db581857daf0af7aecd18fb61afe3b",
+      "bytes": 1373
+    },
+    {
+      "path": "crates/covalent-node/src/sync_engine/host.rs",
+      "sha256": "b3eb32793dc8f976f79be13ec224210e1f600f7e7ed8ca915bc43b4550f92153",
+      "bytes": 7854
+    },
+    {
+      "path": "crates/covalent-node/src/sync_engine/identity.rs",
+      "sha256": "fe93ef40f61c30261659f6cbe502a79d47c99b01b671a3b16bb4455dfbb4c0fb",
+      "bytes": 12900
+    },
+    {
+      "path": "crates/covalent-node/src/sync_engine/installation.rs",
+      "sha256": "de0f709edc1ce1829f5e9cf19ba7ef7436f46c721179332a0567b21b556e269c",
+      "bytes": 9699
+    },
+    {
+      "path": "crates/covalent-node/src/sync_engine/installation_tests.rs",
+      "sha256": "67fcf97541a55d9278ac5bcdb8c036884a1fc39dc86c590ad185323713db6b4e",
+      "bytes": 5217
+    },
+    {
+      "path": "crates/covalent-node/src/sync_engine/linux_host.rs",
+      "sha256": "726fa3bf9b477ab660e86fba547db83e465648d1aa86e5885319f94b470bc65a",
+      "bytes": 29105
+    },
+    {
+      "path": "crates/covalent-node/src/sync_engine/mac_host.rs",
+      "sha256": "7ed8054d787447e6e56c512827862b29b005e948d286c64d689108912b440b37",
+      "bytes": 19949
+    },
+    {
+      "path": "crates/covalent-node/src/sync_engine/rclone.rs",
+      "sha256": "64dce236cb87bce0c10093bfbf2ddeae4e42fa61db8a176a45c1350b8048c588",
+      "bytes": 64398
+    },
+    {
+      "path": "crates/covalent-node/src/sync_engine/run_observation.rs",
+      "sha256": "4ae8fb14f6453193f24c682ba745637e290bf4dbd69747c102a6f10cd27bbb12",
+      "bytes": 2299
+    },
+    {
+      "path": "crates/covalent-node/src/sync_engine/service.rs",
+      "sha256": "e8bf341aca7341aaae16a83e37b6390b4bd6ab37b95ce5b3381a494d9303edae",
+      "bytes": 76953
+    },
+    {
+      "path": "crates/covalent-node/src/sync_engine/service_tests.rs",
+      "sha256": "a93bd2a957fc06ebcf773204c0cc0b6f87914fcbfd853e102e46f07ca21a801f",
+      "bytes": 109009
+    },
+    {
+      "path": "crates/covalent-node/src/sync_engine/sharing.rs",
+      "sha256": "a6ee38fea66e471eaefe2b9f7520aafcbdd97384a8bcdccb900495b0c3226653",
+      "bytes": 121017
+    },
+    {
+      "path": "crates/covalent-node/src/sync_engine/sharing/endpoint_roster.rs",
+      "sha256": "24da4486728233c8938212ab0159509fd6be35a7b272569764a07943b1f1bb59",
+      "bytes": 9042
+    },
+    {
+      "path": "crates/covalent-node/src/sync_engine/sharing/link_runs.rs",
+      "sha256": "ee7afcde7e8f33e76067a1d29fb8fe931d86f65b13ba8c47c02d4f0c303ce51a",
+      "bytes": 54413
+    },
+    {
+      "path": "crates/covalent-node/src/sync_engine/sharing/link_settings.rs",
+      "sha256": "75f7e0d097dffa0dd080505fcf1595efa4c9a136da0bbc27908ef20727b8b15b",
+      "bytes": 19624
+    },
+    {
+      "path": "crates/covalent-node/src/sync_engine/sharing_tests.rs",
+      "sha256": "12228c2a797a08aca50d287540bb949bc323975a154371f3983f79376fd8b2f4",
+      "bytes": 99035
+    },
+    {
+      "path": "crates/covalent-node/src/sync_engine/state.rs",
+      "sha256": "a603549c715652ec774ac5b4caca6275a5403d03bb1526c5a804fade39ebe0ed",
+      "bytes": 18314
+    },
+    {
+      "path": "crates/covalent-node/src/sync_engine/state_tests.rs",
+      "sha256": "265193f71512c20a443757f0f141d97e6d586168dc824b2c045727f9a1c80e30",
+      "bytes": 9368
+    },
+    {
+      "path": "crates/covalent-node/src/sync_engine/supervisor.rs",
+      "sha256": "5de86dca94950db0ce8c95427e172f01e33c7650832a89e11cbe6438efc7c98d",
+      "bytes": 28175
+    },
+    {
+      "path": "crates/covalent-node/src/sync_engine/supervisor_tests.rs",
+      "sha256": "b00e1c3772868dbdc473c64744798c52d14df86c78f45214d18d0662d6254b45",
+      "bytes": 4744
+    },
+    {
+      "path": "crates/covalent-node/src/transport.rs",
+      "sha256": "a931a3af83806de32d99e1ace4878d4a294ebb81d8e5fd211666c1762548fdc3",
+      "bytes": 220386
+    },
+    {
+      "path": "crates/covalent-node/tests/first_run_claim_flow.rs",
+      "sha256": "3c95329f9da76a2f3d77bc0df923cfa124ea05c995ab5fbe2f675e41d1d44cfc",
+      "bytes": 13957
+    },
+    {
+      "path": "crates/covalent-node/tests/fixtures/prior-package-9ac1f7e-state.zip.b64",
+      "sha256": "c0197e0889c364b5ab378db0fbb4692d70ca993c6780ec44161700589c97e325",
+      "bytes": 15837
+    },
+    {
+      "path": "crates/covalent-node/tests/network_pairing_flow.rs",
+      "sha256": "114a87f7c9c5b295e0f830438b43c28c7bfc6abc060db787fe50d0ab47906230",
+      "bytes": 49290
+    },
+    {
+      "path": "crates/covalent-node/tests/one_way_links.rs",
+      "sha256": "506efbea2c70fe479054096fea11f1ead927241b859110b1c4086c2333cf8ec5",
+      "bytes": 99304
+    },
+    {
+      "path": "crates/covalent-node/tests/owner_loss_runtime.rs",
+      "sha256": "02a05d52606eedf45b0f5cc0bc41b0c0de019f27dadacae730827f7f51a397dc",
+      "bytes": 12487
+    },
+    {
+      "path": "crates/covalent-node/tests/prior_package_upgrade.rs",
+      "sha256": "5a37b4a963cdd51441b2162824365ff58d7ee78feb2561119fe3b0c6d799fda9",
+      "bytes": 5807
+    },
+    {
+      "path": "crates/covalent-node/tests/quic_vertical_slice.rs",
+      "sha256": "8a8b208f95c599df438a43069883650fd8874a0d364d5b4bd7ec4f569dd5f351",
+      "bytes": 25195
+    },
+    {
+      "path": "crates/covalent-node/tests/recovery_shutdown.rs",
+      "sha256": "954b266eeefbaf698fe7fbd17ec94afcae198f1a3d38730dac20cd29072041b6",
+      "bytes": 14787
+    },
+    {
+      "path": "crates/covalent-protocol/Cargo.toml",
+      "sha256": "8ccb0496e0276abb0d002ff259f13ba24d3429eac6bd9637c3d6acba9f14352d",
+      "bytes": 482
+    },
+    {
+      "path": "crates/covalent-protocol/src/lib.rs",
+      "sha256": "9cfc1f832210a1506696454a7c024732ef36de460e0696fea5b45a10ca349aed",
+      "bytes": 51991
+    },
+    {
+      "path": "crates/covalent-protocol/tests/contract_fixtures.rs",
+      "sha256": "6c530fb1d354ddb9a8f341bacc95ae8d560cd52dd115f0a90260a0e00f9b94e6",
+      "bytes": 5060
+    },
+    {
+      "path": "packaging/rclone/LICENSE.rclone",
+      "sha256": "9266eae9c6a441de0f6847f19ac8f09b280d55612b079eca03b3d49b822c1a71",
+      "bytes": 1094
+    },
+    {
+      "path": "packaging/rclone/README.md",
+      "sha256": "62ab5548394ade7b3c67afe90bf8b4ea698ee1d4bc6c6913158d19ffcf75aba1",
+      "bytes": 1838
+    },
+    {
+      "path": "packaging/rclone/auth_proxy.go",
+      "sha256": "18c9c1910c5ecd653788adfaf274096a9e6ac10cacb04839d6a9879b98e0dafd",
+      "bytes": 4412
+    },
+    {
+      "path": "packaging/rclone/auth_proxy_test.go",
+      "sha256": "2f433d2819008ccec7aa08b539ac0feb3598d92afbe986372a27714a601ed5ea",
+      "bytes": 4857
+    },
+    {
+      "path": "packaging/rclone/go.mod",
+      "sha256": "eaa7a6edf41ca097fc52097c9ff7abf71a3b1e28d8b553372d54999711bf6f6d",
+      "bytes": 3291
+    },
+    {
+      "path": "packaging/rclone/go.sum",
+      "sha256": "57f578898529d6604fcb0484cffa6f09d74e082151cd146e841b630f55d03637",
+      "bytes": 48584
+    },
+    {
+      "path": "packaging/rclone/main.go",
+      "sha256": "394ace7bfe17a005398625577a311c96fd7a6f5f63533f6ccebecdda08337143",
+      "bytes": 963
+    },
+    {
+      "path": "packaging/sync-engine/engine-guardian.c",
+      "sha256": "c50b5cf10a287c4c061b7891978fd2681b5c96910eb2c69c922beae349140579",
+      "bytes": 18202
+    },
+    {
+      "path": "rust-toolchain.toml",
+      "sha256": "279d77167cec5426fa80f457cd066dc74a360fbe4e2816f4f3fa01487a918fdc",
+      "bytes": 86
+    }
+  ],
+  "evidence": [
+    {
+      "path": "artifacts/evidence/native-address-handoff/first-run.log",
+      "sha256": "eb7f961f49a751b42d0741b62ad82c836cff11c79ab67c8323fc5a0af102e0ce",
+      "bytes": 1269
+    },
+    {
+      "path": "artifacts/evidence/native-address-handoff/first-run.json",
+      "sha256": "bdbd4bfce331de8f30303f504bc8e81624764c389095841e37b66b133c4fef52",
+      "bytes": 306
+    },
+    {
+      "path": "artifacts/evidence/native-address-handoff/busy-contract-run.log",
+      "sha256": "6fdca9460bf82ace4e2c06aa68fc2688e0b833d6ccfde439830de9bc494adff9",
+      "bytes": 1597
+    },
+    {
+      "path": "artifacts/evidence/native-address-handoff/busy-contract-run.json",
+      "sha256": "2c8c9927c120e58181f51a1be4f70ee7f6ec7c4d57b9191edad8e3b660fe78db",
+      "bytes": 689
+    },
+    {
+      "path": "artifacts/evidence/native-address-handoff/clippy.log",
+      "sha256": "7a96b2884d55ac3752e6823ca3d736b4c0f0ac3a8b7df92624589bbbf3c7eecf",
+      "bytes": 493
+    },
+    {
+      "path": "artifacts/evidence/native-address-handoff/clippy.json",
+      "sha256": "409c3d5892e1b8f21be1466356a025917738757ab9b3f0fad34f21127bb07fe4",
+      "bytes": 212
+    },
+    {
+      "path": "artifacts/evidence/native-address-handoff/foundation.log",
+      "sha256": "4f85489df73f9c159ca08d00bfdcdfba3e54b0e43a6ccb66432382a9f347af56",
+      "bytes": 4207
+    },
+    {
+      "path": "artifacts/evidence/native-address-handoff/foundation.json",
+      "sha256": "b6e1a67ec66de8fabb35aa7b9ae5795bf1b405b605b2e0b2f6e2de4ad8b7d873",
+      "bytes": 107
+    }
+  ],
+  "executables": [
+    {
+      "path": "artifacts/go-security/macos-engine-retry/covalent-rclone",
+      "sha256": "07cb75e9292c3c3a08322f4e34a6b1e6f91599b43ae917ae64f6d13bfb864922",
+      "bytes": 20047234
+    },
+    {
+      "path": "artifacts/evidence/native-address-handoff/covalent-engine-guardian",
+      "sha256": "c7f68bc9c60769fad1bd2627ab260e56afd1878953bd45392ce9319601a6794a",
+      "bytes": 35144
+    }
+  ],
+  "hostedBuildFailures": [
+    {
+      "jobId": 119414916223,
+      "runId": 39655613903,
+      "sourceHead": "4a89c2fdff3e5eea0cadcc10ea45a9cc93b0c32d",
+      "rawLogLocalPath": "artifacts/evidence/native-address-handoff/ci-119414916223.log",
+      "rawLogSha256": "d983e6edd1854235ef95e7148685c8cfb2ad2ece185c3db4882c3c4f99fc47da",
+      "rawLogBytes": 568336,
+      "events": [
+        "2026-10-21T18:46:04.7245982Z #13 0.932 (1/3) Upgrading musl (1.2.5-r23 -> 1.2.5-r24)",
+        "2026-10-21T18:46:08.4840710Z #15 0.416 ( 1/75) Upgrading musl (1.2.5-r23 -> 1.2.5-r24)",
+        "2026-10-21T18:51:37.3312600Z #58 0.185 Alpine runtime evidence failed: installed runtime packages differ from reviewed lock",
+        "2026-10-21T18:51:37.4805250Z 0.185 Alpine runtime evidence failed: installed runtime packages differ from reviewed lock"
+      ]
+    },
+    {
+      "jobId": 119414916377,
+      "runId": 39655613903,
+      "sourceHead": "4a89c2fdff3e5eea0cadcc10ea45a9cc93b0c32d",
+      "rawLogLocalPath": "artifacts/evidence/native-address-handoff/ci-119414916377.log",
+      "rawLogSha256": "0da5016b7fb4b652e850ff94f9173e6bbea93f3f7c746a5df752eea13675ae30",
+      "rawLogBytes": 569835,
+      "events": [
+        "2026-10-21T18:46:06.4527926Z #14 0.685 (1/3) Upgrading musl (1.2.5-r23 -> 1.2.5-r24)",
+        "2026-10-21T18:46:13.8357281Z #15 0.383 ( 1/75) Upgrading musl (1.2.5-r23 -> 1.2.5-r24)",
+        "2026-10-21T18:49:39.8184138Z #58 0.110 Alpine runtime evidence failed: installed runtime packages differ from reviewed lock",
+        "2026-10-21T18:49:39.9774480Z 0.110 Alpine runtime evidence failed: installed runtime packages differ from reviewed lock"
+      ]
+    },
+    {
+      "jobId": 119414916497,
+      "runId": 39655613903,
+      "sourceHead": "4a89c2fdff3e5eea0cadcc10ea45a9cc93b0c32d",
+      "rawLogLocalPath": "artifacts/evidence/native-address-handoff/ci-119414916497.log",
+      "rawLogSha256": "9f433fefad7b36e3fd829cf97ce08f20ca6b1d10fecd7c1869e231ebc7b23667",
+      "rawLogBytes": 800481,
+      "events": [
+        "2026-10-21T18:47:27.7015517Z #14 0.920 (1/3) Upgrading musl (1.2.5-r23 -> 1.2.5-r24)",
+        "2026-10-21T18:47:27.8140448Z #15 0.459 ( 1/75) Upgrading musl (1.2.5-r23 -> 1.2.5-r24)",
+        "2026-10-21T18:53:38.8484451Z #59 0.149 Alpine runtime evidence failed: installed runtime packages differ from reviewed lock",
+        "2026-10-21T18:53:39.0023680Z 0.149 Alpine runtime evidence failed: installed runtime packages differ from reviewed lock"
+      ]
+    }
+  ],
+  "acceptanceLimits": [
+    "Earlier intermittent Android transfer timeout unresolved",
+    "Busy retry branch not exercised by passing run",
+    "No physical Pi/phone, cloud cleanup, background or gold-image acceptance",
+    "No production signer or new APK/image"
+  ]
+}
