@@ -1,3 +1,53 @@
+# Dedicated companion native verification — 2026-10-21
+
+The real Android folder journey now builds under the dedicated Interlink
+identity and its Expressive theme. It pairs first, chooses both folders with
+its synthetic peer offline, reconnects using retained trust, then exercises
+native copies, address/restart recovery, lost-grant repair and link settings.
+Companion-specific checks retain destination copies after source deletion and
+keep destination deletions; ordinary Covalent retains its opt-in policy checks.
+The generated bridge, test theme and test activity remain debug-only.
+
+Build/lint and both instrumentation classpaths pass. Full foundation validation
+passes in62.888s; all11 helper resolver checks pass, including explicit package
+selection, path injection and changed native bytes. Three individually verified
+Google Maven artifacts are pinned without changing prior hashes or policy.
+The unchanged debug companion APK is b2bb9709a4b0c2739bb832d3d99651d2e1959efbea16b80ef76e2461aa83df86;
+its eight native libraries match the previously exercised production bytes.
+
+Two actual failed device results stay preserved: the first generic journey
+expected deletion controls absent from this safer photo UI; its policy-corrected
+fresh run then timed out after a coordinate tap left DocumentsUI's ALLOW dialog
+open. A new exact-button accessibility action is dispatched once and still
+requires the real persisted folder grant. The confirmation-corrected run obtains both grants and transfers manual/Unicode
+files, then fails waiting for an authoritative changed address (184.330s JUnit).
+The next test correction guards the address input/confirmation readiness and
+adds bounded endpoint/button diagnostics at that exact deadline. Both classpaths
+compile and the new isolated run passes the full dedicated-package journey
+in458.364s JUnit / 466.038s wrapper, including both acknowledged-cycle retention
+checks and removal. Exact sources, APKs, UID, boot/framework and all previous
+failed evidence verify. No old pairing state or data is cleared. This single
+pass does not close the earlier intermittent post-address transfer stall.
+
+Hosted fed6107 CI39644102561 is terminal failed: seven software lanes, all86
+baseline tests (72.693s) and the ordinary-app SAF journey (422.116s) pass. Both
+CodeQL languages and policy pass. Permission recovery hits the same62-byte
+emulator read-color-buffer-DMA abort, correlated in live and DropBox reports
+2312ms after the prior successful tap; three identity digests survive Android
+framework restart8816. All73 archive entries and its GitHub digest verify.
+No renderer experiment or gate exemption is used; this remains a release block.
+See artifacts/evidence/api37-fed6107/result.json.
+The appliance runtime/image and physical devices are unchanged. Current private
+Interlink CI39644383871 at eb98079 cannot start due to account payments/spending
+limits. Physical roaming/imports, exact cloud-confirmed cleanup, production
+signing, natural authenticated updates and gold-image acceptance remain open.
+Next: actual companion entry/scaffold and large-font checks; correct the top
+summary that still asks for a source when a retained paused/manual photo link
+has an empty worker-folder list. See docs/interlink-native-journey.md and its
+retained evidence directory.
+
+---
+
 # Interlink companion and appliance robustness — 2026-10-21
 
 The dedicated photo companion now reveals source-folder/link setup only after a

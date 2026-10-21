@@ -1,0 +1,83 @@
+{
+  "sourceSha": "fed6107937f5c9208a899c1cc37c01c4f039a05f",
+  "mergeSha": "8f25a7bb9d1871097a0c18aca4dac5eada606adc",
+  "ciRunId": 39644102561,
+  "codeqlRunId": 39644102518,
+  "ciJobs": [
+    {
+      "id": 119375006291,
+      "name": "macOS app bundle",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "id": 119375006342,
+      "name": "Shared Rust and contracts",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "id": 119375006359,
+      "name": "macOS integration and UI",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "id": 119375006379,
+      "name": "Container arm64 image",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "id": 119375006428,
+      "name": "Android API 37 device",
+      "status": "completed",
+      "conclusion": "failure"
+    },
+    {
+      "id": 119375006512,
+      "name": "Dependency vulnerability and license delta",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "id": 119375006556,
+      "name": "Container foundation",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "id": 119375006653,
+      "name": "Android foundation",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "id": 119392542508,
+      "name": "Release candidate software gates",
+      "status": "completed",
+      "conclusion": "failure"
+    }
+  ],
+  "codeqlJobs": [
+    {
+      "id": 119375004820,
+      "name": "CodeQL swift",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "id": 119375005227,
+      "name": "CodeQL java-kotlin",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "id": 119385343720,
+      "name": "CodeQL policy",
+      "status": "completed",
+      "conclusion": "success"
+    }
+  ],
+  "releaseReady": false
+}

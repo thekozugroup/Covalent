@@ -4,6 +4,8 @@
 import hashlib
 import importlib.util
 import pathlib
+import subprocess
+import sys
 import tempfile
 import unittest
 import zipfile
@@ -63,6 +65,49 @@ class NativeDirectoryTests(unittest.TestCase):
         self.assertEqual(directory, parent + "/lib/arm64")
         for helper,digest in hashes.items():
             self.assertEqual(digest, hashlib.sha256(("owned ELF fixture " + helper + " arm64-v8a").encode()).hexdigest())
+
+    def test_companion_requires_explicit_exact_installed_identity(self):
+        package = "life.michaelwong.interlink"
+        for parent in [f"/data/app/~~Aa_123-==/{package}-Bb_456-==", f"/data/app/{package}-1"]:
+            output = f"package:{parent}/base.apk\r\n".encode()
+            with self.assertRaises(ValueError):
+                module.resolve(self.apk, output)
+            for abi, directory_name in module.ABI_DIRECTORIES.items():
+                directory, hashes = module.resolve(self.apk, output, abi, package)
+                self.assertEqual(directory, parent + "/lib/" + directory_name)
+                self.assertEqual(set(hashes), set(module.HELPERS))
+
+    def test_companion_selection_rejects_other_package_and_path_injection(self):
+        valid = b"package:/data/app/life.michaelwong.interlink-1/base.apk\n"
+        for output in [valid.replace(b"interlink-", b"covalent-"),
+                       valid.replace(b"interlink-", b"interlink.test-"),
+                       valid.replace(b"/base.apk", b"/../base.apk"), valid + valid]:
+            with self.subTest(output=output), self.assertRaises(ValueError):
+                module.resolve(self.apk, output, "arm64-v8a", "life.michaelwong.interlink")
+        for package in ["", "life.michaelwong.interlink.test", "life.*", "../interlink"]:
+            with self.subTest(package=package), self.assertRaisesRegex(ValueError, "unsupported fixture package"):
+                module.resolve(self.apk, valid, "arm64-v8a", package)
+
+    def test_companion_cannot_accept_tampered_native_bytes(self):
+        self.create_apk(tampered_abi="arm64-v8a")
+        with self.assertRaisesRegex(ValueError, "bytes differ"):
+            module.resolve(self.apk, b"package:/data/app/life.michaelwong.interlink-1/base.apk\n",
+                           "arm64-v8a", "life.michaelwong.interlink")
+
+    def test_cli_selects_companion_without_broadening_the_default(self):
+        output = b"package:/data/app/life.michaelwong.interlink-1/base.apk\n"
+        command = [sys.executable, "-B", spec.origin, str(self.apk)]
+        selected = subprocess.run(command + ["--abi", "arm64-v8a", "--package", "life.michaelwong.interlink"],
+                                  input=output, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.assertEqual(selected.returncode, 0, selected.stderr)
+        self.assertEqual(selected.stdout.splitlines()[0], b"/data/app/life.michaelwong.interlink-1/lib/arm64")
+        default = subprocess.run(command, input=output, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.assertEqual(default.returncode, 1)
+        self.assertFalse(default.stdout)
+        unknown = subprocess.run(command + ["--package", "life.michaelwong.interlink.test"],
+                                 input=output, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.assertEqual(unknown.returncode, 2)
+        self.assertFalse(unknown.stdout)
 
     def test_other_abi_bytes_cannot_substitute_for_tampered_arm64(self):
         self.create_apk(tampered_abi="arm64-v8a")

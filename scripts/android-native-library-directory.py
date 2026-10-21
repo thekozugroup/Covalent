@@ -6,16 +6,15 @@ still verify the proposed immutable directory's executables and hashes as the
 app UID before changing any permission or running the fixture.
 """
 
+import argparse
 import hashlib
 import pathlib
 import re
 import sys
 import zipfile
 
-PACKAGE_APK = re.compile(
-    r"package:(/data/app/(?:~~[A-Za-z0-9_=-]{1,128}/)?"
-    r"life\.michaelwong\.covalent-[A-Za-z0-9_=-]{1,128}/base\.apk)"
-)
+DEFAULT_PACKAGE = "life.michaelwong.covalent"
+PACKAGES = (DEFAULT_PACKAGE, "life.michaelwong.interlink")
 HELPERS = {
     "libcovalentrclone.so": "rclone-sha256.txt",
     "libengineguardian.so": "engine-guardian-sha256.txt",
@@ -23,14 +22,21 @@ HELPERS = {
 ABI_DIRECTORIES = {"arm64-v8a": "arm64", "x86_64": "x86_64"}
 
 
-def resolve(apk: pathlib.Path, package_output: bytes, abi: str = "x86_64") -> tuple[str, dict[str, str]]:
+def resolve(apk: pathlib.Path, package_output: bytes, abi: str = "x86_64",
+            package: str = DEFAULT_PACKAGE) -> tuple[str, dict[str, str]]:
     if abi not in ABI_DIRECTORIES:
         raise ValueError("unsupported fixture ABI")
+    if package not in PACKAGES:
+        raise ValueError("unsupported fixture package")
+    package_apk = re.compile(
+        r"package:(/data/app/(?:~~[A-Za-z0-9_=-]{1,128}/)?"
+        + re.escape(package) + r"-[A-Za-z0-9_=-]{1,128}/base\.apk)"
+    )
     if not 0 < len(package_output) <= 4096:
         raise ValueError("installed package response exceeds its bound or is empty")
     lines = package_output.decode("ascii", "strict").splitlines()
-    if len(lines) != 1 or (match := PACKAGE_APK.fullmatch(lines[0])) is None:
-        raise ValueError("expected the exact Covalent base APK under /data/app")
+    if len(lines) != 1 or (match := package_apk.fullmatch(lines[0])) is None:
+        raise ValueError("expected the exact selected base APK under /data/app")
     directory = str(pathlib.PurePosixPath(match[1]).parent / "lib" / ABI_DIRECTORIES[abi])
     hashes = {}
     with zipfile.ZipFile(apk) as archive:
@@ -71,15 +77,13 @@ def resolve(apk: pathlib.Path, package_output: bytes, abi: str = "x86_64") -> tu
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("apk", type=pathlib.Path)
+    parser.add_argument("--abi", choices=ABI_DIRECTORIES, default="x86_64")
+    parser.add_argument("--package", choices=PACKAGES, default=DEFAULT_PACKAGE)
+    args = parser.parse_args()
     try:
-        args = sys.argv[1:]
-        if len(args) == 1:
-            abi = "x86_64"
-        elif len(args) == 3 and args[1] == "--abi":
-            abi = args[2]
-        else:
-            raise ValueError("usage: android-native-library-directory.py debug.apk [--abi arm64-v8a|x86_64] < pm-path.txt")
-        directory, hashes = resolve(pathlib.Path(args[0]), sys.stdin.buffer.read(4097), abi)
+        directory, hashes = resolve(args.apk, sys.stdin.buffer.read(4097), args.abi, args.package)
         print(directory)
         for helper, digest in hashes.items():
             print(digest, helper)

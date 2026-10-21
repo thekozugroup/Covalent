@@ -1,0 +1,70 @@
+To honour the JVM settings for this build a single-use Daemon process will be forked. For more on this, please refer to https://docs.gradle.org/9.7.1/userguide/gradle_daemon.html#sec:disabling_the_daemon in the Gradle documentation.
+Daemon will be stopped at the end of the build 
+
+> Configure project :companion
+w: file:///Users/michaelwong/Developer/Covalent/apps/android/companion/build.gradle.kts:36:16: 'fun srcDir(srcDir: Any): Any' is deprecated. Use `directories` mutable set instead.
+w: file:///Users/michaelwong/Developer/Covalent/apps/android/companion/build.gradle.kts:37:13: 'fun srcDir(srcDir: Any): Any' is deprecated. Use `directories` mutable set instead.
+w: file:///Users/michaelwong/Developer/Covalent/apps/android/companion/build.gradle.kts:38:16: 'fun srcDir(srcDir: Any): Any' is deprecated. Use `directories` mutable set instead.
+w: file:///Users/michaelwong/Developer/Covalent/apps/android/companion/build.gradle.kts:39:16: 'fun srcDir(srcDir: Any): Any' is deprecated. Use `directories` mutable set instead.
+w: file:///Users/michaelwong/Developer/Covalent/apps/android/companion/build.gradle.kts:40:17: 'fun srcDir(srcDir: Any): Any' is deprecated. Use `directories` mutable set instead.
+w: file:///Users/michaelwong/Developer/Covalent/apps/android/companion/build.gradle.kts:41:17: 'fun srcDir(srcDir: Any): Any' is deprecated. Use `directories` mutable set instead.
+w: file:///Users/michaelwong/Developer/Covalent/apps/android/companion/build.gradle.kts:46:16: 'fun srcDir(srcDir: Any): Any' is deprecated. Use `directories` mutable set instead.
+e: file:///Users/michaelwong/Developer/Covalent/apps/android/companion/build.gradle.kts:47:16: Unresolved reference 'include'.
+w: file:///Users/michaelwong/Developer/Covalent/apps/android/companion/build.gradle.kts:50:16: 'fun srcDir(srcDir: Any): Any' is deprecated. Use `directories` mutable set instead.
+e: file:///Users/michaelwong/Developer/Covalent/apps/android/companion/build.gradle.kts:51:16: Unresolved reference 'include'.
+
+[Incubating] Problems report is available at: file:///Users/michaelwong/Developer/Covalent/apps/android/build/reports/problems/problems-report.html
+
+FAILURE: Build failed with an exception.
+
+* Where:
+Build file '/Users/michaelwong/Developer/Covalent/apps/android/companion/build.gradle.kts' line: 36
+
+* What went wrong:
+Script compilation errors:
+
+  Line 36:         kotlin.srcDir("../app/src/main/java")
+                          ^ 'fun srcDir(srcDir: Any): Any' is deprecated. Use `directories` mutable set instead.
+
+  Line 37:         res.srcDir("../app/src/main/res")
+                       ^ 'fun srcDir(srcDir: Any): Any' is deprecated. Use `directories` mutable set instead.
+
+  Line 38:         assets.srcDir("../app/src/main/assets")
+                          ^ 'fun srcDir(srcDir: Any): Any' is deprecated. Use `directories` mutable set instead.
+
+  Line 39:         assets.srcDir(project(":app").layout.buildDirectory.dir("generated/syncEngine/assets").get().asFile)
+                          ^ 'fun srcDir(srcDir: Any): Any' is deprecated. Use `directories` mutable set instead.
+
+  Line 40:         jniLibs.srcDir(project(":app").layout.buildDirectory.dir("generated/jniLibs").get().asFile)
+                           ^ 'fun srcDir(srcDir: Any): Any' is deprecated. Use `directories` mutable set instead.
+
+  Line 41:         jniLibs.srcDir(project(":app").layout.buildDirectory.dir("generated/syncEngine/jniLibs").get().asFile)
+                           ^ 'fun srcDir(srcDir: Any): Any' is deprecated. Use `directories` mutable set instead.
+
+  Line 46:         kotlin.srcDir("../app/src/debug/java")
+                          ^ 'fun srcDir(srcDir: Any): Any' is deprecated. Use `directories` mutable set instead.
+
+  Line 47:         kotlin.include("**/FolderSyncInstrumentationBridge.kt")
+                          ^ Unresolved reference 'include'.
+
+  Line 50:         kotlin.srcDir("../app/src/androidTest/java")
+                          ^ 'fun srcDir(srcDir: Any): Any' is deprecated. Use `directories` mutable set instead.
+
+  Line 51:         kotlin.include("**/SafFolderSyncJourneyInstrumentedTest.kt")
+                          ^ Unresolved reference 'include'.
+
+10 errors
+
+* Try:
+> Run with --stacktrace option to get the stack trace.
+> Run with --info or --debug option to get more log output.
+> Run with --scan to get full insights from a Build Scan (powered by Develocity).
+> Get more help at https://help.gradle.org.
+
+Deprecated Gradle features were used in this build, making it incompatible with Gradle 10.
+
+You can use '--warning-mode all' to show the individual deprecation warnings and determine if they come from your own scripts or plugins.
+
+For more on this, please refer to https://docs.gradle.org/9.7.1/userguide/command_line_interface.html#sec:command_line_warnings in the Gradle documentation.
+
+BUILD FAILED in 8s

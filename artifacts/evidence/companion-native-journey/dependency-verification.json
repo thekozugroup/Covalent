@@ -1,0 +1,35 @@
+{
+  "verifiedArtifacts": [
+    {
+      "group": "androidx.compose.ui",
+      "name": "ui-test-manifest-1.12.0.module",
+      "version": "1.12.0",
+      "sha256": "c9544156e54e202bfbcd956bf2856f91525209a0561447f2f7812ebcfd37487c",
+      "bytes": 23185,
+      "officialUrl": "https://dl.google.com/dl/android/maven2/androidx/compose/ui/ui-test-manifest/1.12.0/ui-test-manifest-1.12.0.module",
+      "cacheMatchesOfficialBytes": true
+    },
+    {
+      "group": "androidx.compose.ui",
+      "name": "ui-test-manifest-1.13.0-alpha01.module",
+      "version": "1.13.0-alpha01",
+      "sha256": "21c8565628f618411f5e7afa3cf3ce9c81740ec2697da25ddd0a6860e8232b96",
+      "bytes": 23865,
+      "officialUrl": "https://dl.google.com/dl/android/maven2/androidx/compose/ui/ui-test-manifest/1.13.0-alpha01/ui-test-manifest-1.13.0-alpha01.module",
+      "cacheMatchesOfficialBytes": true
+    },
+    {
+      "group": "androidx.compose.ui",
+      "name": "ui-test-manifest-1.13.0-alpha01.aar",
+      "version": "1.13.0-alpha01",
+      "sha256": "5bce77235c2d4cc1e0a505df01712417c28942cc436cb24d0f60f25aa1c50b2b",
+      "bytes": 16730,
+      "officialUrl": "https://dl.google.com/dl/android/maven2/androidx/compose/ui/ui-test-manifest/1.13.0-alpha01/ui-test-manifest-1.13.0-alpha01.aar",
+      "cacheMatchesOfficialBytes": true
+    }
+  ],
+  "metadataBeforeSha256": "883e86ad7f31bfad9b86a1fa09bf0d7ad4dc211fd3ad22bf94206fd17dca8b90",
+  "metadataAfterSha256": "7e3d3b75a2dcb6ceeb3ea2593c54c48b71432a1caab04d616a18115728360f51",
+  "existingVerificationSettingsUnchanged": true,
+  "verificationDisabled": false
+}

@@ -1,0 +1,54 @@
+{
+  "format": 1,
+  "serial": "emulator-5612",
+  "avd": "Interlink_Companion_Retention_API37",
+  "syntheticOnly": true,
+  "passed": false,
+  "phase": "failed-state-retained",
+  "dataCleared": false,
+  "instrumentationRetried": false,
+  "newAttemptAfterTestPolicyCorrection": true,
+  "physicalDeviceAccepted": false,
+  "releaseReady": false,
+  "before": {
+    "bootId": "b81cf37d-1d8b-4fc9-95f4-c8482a7ef46e",
+    "system_server": "608:609",
+    "surfaceflinger": "470:409"
+  },
+  "systemFingerprint": "google/sdk_gphone64_arm64/emu64a:17/CE2A.260420.019/15611780:user/release-keys",
+  "sourceHashes": {
+    "apps/android/companion/build.gradle.kts": "56f84ff404ef08271f6007e7efd06e263484fc9abad1d7fc68a0f404ad558f8b",
+    "apps/android/gradle/verification-metadata.xml": "7e3d3b75a2dcb6ceeb3ea2593c54c48b71432a1caab04d616a18115728360f51",
+    "apps/android/app/src/androidTest/java/life/michaelwong/covalent/node/SafFolderSyncJourneyInstrumentedTest.kt": "4f84f473da6680d86f78a4952fd9da2c296c87820afe5bc8335eb323e608ee55",
+    "apps/android/app/src/main/java/life/michaelwong/covalent/ui/FolderSyncScreen.kt": "8bd474f640b211c86333001c173e41f89a7b5e369ebfa1cdecf0e27d48ddb141",
+    "apps/android/app/src/debug/java/life/michaelwong/covalent/node/FolderJourneyTheme.kt": "f107591bb934465160c44f2d60453db4d7b3719d54e9bb2e2216dda6f77ed979",
+    "apps/android/companion/src/debug/java/life/michaelwong/covalent/node/FolderJourneyTheme.kt": "702ce66ff98e5367222fce12f474c0063989be07f4eaa3be41b86eda572a5518",
+    "scripts/android-native-library-directory.py": "944c818d9b204d76cfd42d84bb79328ef2144b915ff7fee50c04ffe55923de1f",
+    "scripts/android-instrumentation-result.sh": "9e6b68c870aea2327c1e8e1c5017febfdf73a408f3c981181db995ecac37bd13",
+    "apps/android/app/src/debug/java/life/michaelwong/covalent/node/FolderSyncInstrumentationBridge.kt": "7899741911a4ff929325e8a74990859b9946c8ca52616f9cd4e17754a865d47e"
+  },
+  "previousEvidence": {
+    "native/receipt.json": "a134e038f0cb7c5d7fe89d165db4dd64e33e8d332de9821f7c582fe10e81a654",
+    "native-after-installed-update/receipt.json": "ac1f25dfa77ceab54db620806a2a7bcb5aaba3ae4f4b1c470485e79c6a0793fc",
+    "native-after-installed-update/instrumentation.log": "5afed38d7a21c78eb2e93a7a89ceca168c31486fff39f4a3df217b58dec16f08",
+    "attempt-photo-policy-assumption/SafFolderSyncJourneyInstrumentedTest.kt": "6ff721efccff33d48972d1feeb3bdf6cbfe182be020b8e8300b7ebc459201602"
+  },
+  "apkSha256": "b2bb9709a4b0c2739bb832d3d99651d2e1959efbea16b80ef76e2461aa83df86",
+  "testApkSha256": "3014246264c4d641eaf8068b73e74f8f84b58c2007314b2c1bdd79b2e4d841c0",
+  "packageAlignmentAndDebugSignatureVerified": true,
+  "uid": "package:life.michaelwong.interlink uid:10232",
+  "nativeHelpers": {
+    "libcovalentrclone.so": "1db1b5e859edc16ef074e14e980e338b4bbfa8503bce369fc52b5b3f083ef72e",
+    "libengineguardian.so": "2fcc818aa81d0c470ceb632022c924481cee63feef86521d16404856a73f7253"
+  },
+  "seconds": 131.082,
+  "instrumentationExitCode": 0,
+  "after": {
+    "bootId": "b81cf37d-1d8b-4fc9-95f4-c8482a7ef46e",
+    "system_server": "608:609",
+    "surfaceflinger": "470:409"
+  },
+  "sourceHashesUnchanged": true,
+  "previousEvidenceUnchanged": true,
+  "failureClass": "AssertionError"
+}

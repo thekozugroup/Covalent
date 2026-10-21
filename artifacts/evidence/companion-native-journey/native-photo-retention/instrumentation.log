@@ -1,0 +1,47 @@
+INSTRUMENTATION_STATUS: class=life.michaelwong.covalent.node.SafFolderSyncJourneyInstrumentedTest
+INSTRUMENTATION_STATUS: current=1
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=1
+INSTRUMENTATION_STATUS: stream=
+life.michaelwong.covalent.node.SafFolderSyncJourneyInstrumentedTest:
+INSTRUMENTATION_STATUS: test=nativeManualSafRunRegistersAcrossRestartAndIsolatesLostGrant
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=life.michaelwong.covalent.node.SafFolderSyncJourneyInstrumentedTest
+INSTRUMENTATION_STATUS: current=1
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=1
+INSTRUMENTATION_STATUS: stack=java.lang.AssertionError: destination system folder grant did not complete before its deadline.
+	at life.michaelwong.covalent.node.SafFolderSyncJourneyInstrumentedTest.await(SafFolderSyncJourneyInstrumentedTest.kt:1688)
+	at life.michaelwong.covalent.node.SafFolderSyncJourneyInstrumentedTest.await$default(SafFolderSyncJourneyInstrumentedTest.kt:1676)
+	at life.michaelwong.covalent.node.SafFolderSyncJourneyInstrumentedTest.awaitValue(SafFolderSyncJourneyInstrumentedTest.kt:1693)
+	at life.michaelwong.covalent.node.SafFolderSyncJourneyInstrumentedTest.chooseSystemFolder(SafFolderSyncJourneyInstrumentedTest.kt:1069)
+	at life.michaelwong.covalent.node.SafFolderSyncJourneyInstrumentedTest.nativeManualSafRunRegistersAcrossRestartAndIsolatesLostGrant(SafFolderSyncJourneyInstrumentedTest.kt:158)
+
+INSTRUMENTATION_STATUS: stream=
+Error in nativeManualSafRunRegistersAcrossRestartAndIsolatesLostGrant(life.michaelwong.covalent.node.SafFolderSyncJourneyInstrumentedTest):
+java.lang.AssertionError: destination system folder grant did not complete before its deadline.
+	at life.michaelwong.covalent.node.SafFolderSyncJourneyInstrumentedTest.await(SafFolderSyncJourneyInstrumentedTest.kt:1688)
+	at life.michaelwong.covalent.node.SafFolderSyncJourneyInstrumentedTest.await$default(SafFolderSyncJourneyInstrumentedTest.kt:1676)
+	at life.michaelwong.covalent.node.SafFolderSyncJourneyInstrumentedTest.awaitValue(SafFolderSyncJourneyInstrumentedTest.kt:1693)
+	at life.michaelwong.covalent.node.SafFolderSyncJourneyInstrumentedTest.chooseSystemFolder(SafFolderSyncJourneyInstrumentedTest.kt:1069)
+	at life.michaelwong.covalent.node.SafFolderSyncJourneyInstrumentedTest.nativeManualSafRunRegistersAcrossRestartAndIsolatesLostGrant(SafFolderSyncJourneyInstrumentedTest.kt:158)
+
+INSTRUMENTATION_STATUS: test=nativeManualSafRunRegistersAcrossRestartAndIsolatesLostGrant
+INSTRUMENTATION_STATUS_CODE: -2
+INSTRUMENTATION_RESULT: stream=
+
+Time: 122.447
+There was 1 failure:
+1) nativeManualSafRunRegistersAcrossRestartAndIsolatesLostGrant(life.michaelwong.covalent.node.SafFolderSyncJourneyInstrumentedTest)
+java.lang.AssertionError: destination system folder grant did not complete before its deadline.
+	at life.michaelwong.covalent.node.SafFolderSyncJourneyInstrumentedTest.await(SafFolderSyncJourneyInstrumentedTest.kt:1688)
+	at life.michaelwong.covalent.node.SafFolderSyncJourneyInstrumentedTest.await$default(SafFolderSyncJourneyInstrumentedTest.kt:1676)
+	at life.michaelwong.covalent.node.SafFolderSyncJourneyInstrumentedTest.awaitValue(SafFolderSyncJourneyInstrumentedTest.kt:1693)
+	at life.michaelwong.covalent.node.SafFolderSyncJourneyInstrumentedTest.chooseSystemFolder(SafFolderSyncJourneyInstrumentedTest.kt:1069)
+	at life.michaelwong.covalent.node.SafFolderSyncJourneyInstrumentedTest.nativeManualSafRunRegistersAcrossRestartAndIsolatesLostGrant(SafFolderSyncJourneyInstrumentedTest.kt:158)
+
+FAILURES!!!
+Tests run: 1,  Failures: 1
+
+
+INSTRUMENTATION_CODE: -1
