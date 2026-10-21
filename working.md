@@ -1,5 +1,22 @@
 # Interlink companion and appliance robustness — 2026-10-21
 
+Hosted e0dfc1c run 39552976561 is terminal. All seven non-device lanes,
+all 86 baseline instrumentation tests and the complete SAF folder journey pass
+(the latter in 422.361 seconds). The corrected idle/manual observation now has
+actual hosted journey evidence. The permission journey remains failed. Its
+continuous recorder sees system_server PID657 receive native signal6 at
+06:40:10.236, before the failed Permissions tap starts (1.508 host seconds
+later). The tap and subsequent permission restoration report exit20/missing-service.
+This establishes an earlier core-framework failure, not its cause or trigger.
+All three recorded synthetic identity digests remain unchanged at failure.
+No tap is replayed, deadline extended or framework restarted by this follow-up.
+Artifact 12325408311 is retained with verified ZIP SHA-256
+7f28229f6fbf26d388bd2ab20df9e84bfe058c58919f9290e87b894bd2e7710d;
+artifacts/evidence/api37-e0dfc1c/result.json binds the exact source/run and
+separate passing/failing gates. The earlier focus/manual failures remain
+retained; this run does not establish their causes. No runtime change, main
+merge, device installation or production release is made by this evidence.
+
 Manual pairing now reports a missing local transport endpoint as the existing
 409 peer_endpoint_unavailable response. Previously pair/accept alone mapped
 that normal offline state to 400 invalid_contract, misleading clients into
