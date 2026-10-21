@@ -1,3 +1,44 @@
+# Adaptive companion status and home screen — 2026-10-21
+
+Software-first UI milestone: a retained manual/paused photo link stays configured
+when its worker-folder list is empty. Destination choice and repair remain
+explicit; setup does not imply cloud backup. Source/destination and Refresh
+adapt to narrow/large-text screens. The serif/logo home title stays on one line,
+and short startup/retry content can scroll.
+
+Exact debug/test builds and both modules' debug lint pass in120.291s. Two native
+component regressions pass in3.517s JUnit / 4.852s wrapper; full foundation passes
+in45.722s. An in-place update on the owned API37 emulator keeps UID and all five
+checked records unchanged; all eight native objects match the prior APK.
+The initial runner stops on adb's progress heading after successful app install;
+its failure is retained, and a guarded continuation installs only tests and runs
+instrumentation once. No data clear or original media/account operation.
+
+Headed checks cover the actual InterlinkActivity home, normal and 200% system
+text at320dp portrait width, retained paired source setup, keyboard-open pairing
+and landscape controls reached by scrolling. The top bar stays fixed. Display
+settings are restored and the app is force-stopped. Get started enabled the
+owned synthetic host. Its replay-request file advances on host open; core/TLS/
+engine identities and folder-sharing trust remain byte-identical and one paired
+device remains visible. No new pair or folder grant is created.
+
+Release-package verification passes in153.950s: unsigned APK/AAB, native
+provenance, both release/debug lint and the dedicated license/SBOM inventories.
+The APK is28,856,202 bytes; production signing and installed minified-app
+acceptance remain open. This UI milestone
+does not replay the full native journey or close the prior intermittent address
+transfer stall. Hosted9330537 CI39651980156 and CodeQL39651980176 remain in flight
+at this checkpoint; seven CI lanes and Kotlin CodeQL have passed. Their run is
+left intact. The new milestone can be published separately without cancelling it.
+See docs/interlink-adaptive-status.md and artifacts/evidence/companion-adaptive-status/.
+
+The appliance runtime/image and physical devices are unchanged. Private Interlink
+CI39652182849 atfc49db4 cannot start due to account payments/spending limits.
+Real Pi/phone roaming, physical imports/cameras, exact cloud-confirmed cleanup,
+production signing, natural updates and gold-image acceptance remain open.
+
+---
+
 # Dedicated companion native verification — 2026-10-21
 
 The real Android folder journey now builds under the dedicated Interlink

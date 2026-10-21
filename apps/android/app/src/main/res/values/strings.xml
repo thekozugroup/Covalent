@@ -8,6 +8,11 @@
     <string name="interlink_setup_body">First, pair with your Pi. Then choose a source folder.</string>
     <string name="interlink_pair_next">Pair your Pi to continue</string>
     <string name="interlink_folder_next">Choose a source folder</string>
+    <string name="interlink_destination_next">Choose a destination folder</string>
+    <string name="interlink_links_ready">Photo links are set up</string>
+    <string name="interlink_links_paused">Photo links are paused</string>
+    <string name="interlink_links_pending">Photo link setup is pending</string>
+    <string name="interlink_links_removing">Finishing photo link removal</string>
     <string name="folder_sync_network_access_title">Nearby devices access is off</string>
     <string name="folder_sync_network_access_body">Allow Nearby devices access to pair and sync. Saved links and files are kept.</string>
     <string name="interlink_network_access_body">Allow Nearby devices access to pair and sync with your Pi. Your originals stay on this phone.</string>

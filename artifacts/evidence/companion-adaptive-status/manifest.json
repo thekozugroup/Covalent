@@ -1,0 +1,242 @@
+{
+  "format": 1,
+  "parentCommit": "9330537ed737098b8055252828d8773425e3d661",
+  "sources": {
+    "apps/android/app/build.gradle.kts": "761975ca9f0aecf88c537f4077ace39a153d6c5e197b3b045f27a865e5573213",
+    "apps/android/app/src/main/AndroidManifest.xml": "5db9438eb08bcfb984a07c20cc85abd53ec050143b6cc8ec33b54cf2f1a3e06d",
+    "apps/android/app/src/main/java/life/michaelwong/covalent/CovalentApplication.kt": "a86342991bc3ac654d64afae50850c2f7d83ce371daa9337a08698b9bd1ae295",
+    "apps/android/app/src/main/java/life/michaelwong/covalent/MainActivity.kt": "6651bf77076807537084ae4b2c8b959a43f2535a4cfd1b888b149d580d007540",
+    "apps/android/app/src/main/java/life/michaelwong/covalent/data/CovalentNodeClient.kt": "758015f608bb5739edd0eb8c1f0c3f9a6bff473ebba4ef9fcea37b55ae6ad0f6",
+    "apps/android/app/src/main/java/life/michaelwong/covalent/data/DurableTransferJournal.kt": "d1fd2bae062fe9c9a130cfdacb7013755ce09e6d5155a18bdb41def7634375e5",
+    "apps/android/app/src/main/java/life/michaelwong/covalent/data/FolderAcceptanceRetry.kt": "a43139540cd552b17e748f7bbb91a7448fdfe09525fa766b7c5ac896ddeabb67",
+    "apps/android/app/src/main/java/life/michaelwong/covalent/data/RecoverySafFiles.kt": "26deff2ccd1f40daebd856b99fba2e0d40e31870307b20a1ed1aaa1e6fc7e473",
+    "apps/android/app/src/main/java/life/michaelwong/covalent/data/SafTransferBridge.kt": "882334342e3b15f70601a332af136ab087f984f861e4c384275ab9f3c452e154",
+    "apps/android/app/src/main/java/life/michaelwong/covalent/model/Contracts.kt": "9941c5a3520b052547100bedc341f80ea2c0c3019a4a41e3cfbc19e773d0cded",
+    "apps/android/app/src/main/java/life/michaelwong/covalent/model/FolderSyncContracts.kt": "62c84d802ebfcd15a6ac2dfabd29427ba8ee66ac4a0f918bb5e8d3149366baf1",
+    "apps/android/app/src/main/java/life/michaelwong/covalent/node/ActiveNodeConnectionResolver.kt": "26214fbfe2c82f26af80531d76051c42f8ccb7582cc6937111c9438c941c9c3c",
+    "apps/android/app/src/main/java/life/michaelwong/covalent/node/AndroidConditionFeed.kt": "0fbf4720c92c4c09cb64edbcfe5645d90ecaf6263b045806ce1eca9abcd20e16",
+    "apps/android/app/src/main/java/life/michaelwong/covalent/node/AndroidSafGrantCoordinator.kt": "00b39542f319d97f43bbf41f31c7f18ae23aa3d68e5c77fed725685df7e2059f",
+    "apps/android/app/src/main/java/life/michaelwong/covalent/node/CovalentNative.kt": "bb467521998ccdf81cfbbdc70f960af0ec61ab7e9c40c345d0a1c633eb52d24a",
+    "apps/android/app/src/main/java/life/michaelwong/covalent/node/DirectBoot.kt": "7b519bcad8910ef06aae47bdc54b382bde69812aaec6ae6f76ae95b64df25a5d",
+    "apps/android/app/src/main/java/life/michaelwong/covalent/node/EmbeddedNodeManager.kt": "17eed744ff3b97fd503b9fe43649126633dc192dd3ded9b9acfa99ecea9b0463",
+    "apps/android/app/src/main/java/life/michaelwong/covalent/node/IdentityKeyProtector.kt": "28d661f1b528bd82e05e1fd68d13b3f239da75319d23a1aaa87594fbb2718436",
+    "apps/android/app/src/main/java/life/michaelwong/covalent/node/NodeProviderService.kt": "fdc2031bff56f2219c65a784a2c6cde8440615f7c917282ca1709ac26ae3cc48",
+    "apps/android/app/src/main/java/life/michaelwong/covalent/node/NodeRestartReceiver.kt": "8c75ad183867461372d81427c3d4c523b454bccb9d0f26c6fa72c069e6de82c5",
+    "apps/android/app/src/main/java/life/michaelwong/covalent/node/PackagedSyncEngine.kt": "a6fbffe2a169686d945f426888c48f7bd9ebf9e6f70e99aede084ddbf6b8033f",
+    "apps/android/app/src/main/java/life/michaelwong/covalent/node/PeerRoute.kt": "e07f6cc24e0fd061bd2f34fe19837852daeed4a722d8b916759b2172e0c8f704",
+    "apps/android/app/src/main/java/life/michaelwong/covalent/node/RecoveryBootstrapHandoff.kt": "79c32169ebc6f648c80d8637fafe21e8315a2a5beff1dd0a674e0da576201ca9",
+    "apps/android/app/src/main/java/life/michaelwong/covalent/node/UserUnlockGate.kt": "1fb7a59758f7f78c23ab3ab7f7098335592631c10943f76cda5f6779dd3e86ca",
+    "apps/android/app/src/main/java/life/michaelwong/covalent/sync/FolderLinkSettingsChangeStore.kt": "4bb4b261710fc8771c41934c3eb2d1760a5b4087e9e0130cb48bd9ef9ea86fa0",
+    "apps/android/app/src/main/java/life/michaelwong/covalent/sync/FolderSyncActions.kt": "8cd2e52551b72ad2f64456f17c09043c7ec811468961eb1696d3f24fa9a17a54",
+    "apps/android/app/src/main/java/life/michaelwong/covalent/sync/FolderSyncApi.kt": "ed4bcc85c35b5a60103f78f913f65538820883cab4c1890532836c6736a41567",
+    "apps/android/app/src/main/java/life/michaelwong/covalent/sync/FolderSyncGrantStore.kt": "b7ed0f931ba74e5e626921aa446ac0f5c89313055d1a7e389e8623638fb8cbd8",
+    "apps/android/app/src/main/java/life/michaelwong/covalent/sync/FolderSyncStatusRead.kt": "c20bf71930f0ed00267cda50906d2b17e260bab8adf76f228cef0751ec29498d",
+    "apps/android/app/src/main/java/life/michaelwong/covalent/sync/PeerAddressUpdate.kt": "ed2db7d022dded9b74f886480e4e02789be92731534f5ab797aa91a58a3e23bf",
+    "apps/android/app/src/main/java/life/michaelwong/covalent/sync/SafFolderGrantStore.kt": "d53b4792c4c747d6b3167368998f02e57ba434941754f5dd17aaadcfca83f3bc",
+    "apps/android/app/src/main/java/life/michaelwong/covalent/sync/SafStrictQuery.kt": "9260b82d5337139ab3b0b20224d2e6d69226ab658de402071e2c6640063f1a86",
+    "apps/android/app/src/main/java/life/michaelwong/covalent/sync/SafWebDavServer.kt": "4045571ec327f71ed57c2f24cf616d770ffa547df27ee7cd5fa6aeef0bc2b329",
+    "apps/android/app/src/main/java/life/michaelwong/covalent/ui/CovalentApp.kt": "d3b2ad4bc21b76acb1a23722f8ddf94860ccb82ae075e6a9268c0dee324515b8",
+    "apps/android/app/src/main/java/life/michaelwong/covalent/ui/CovalentViewModel.kt": "95ff4a3bb608a294ba6aa7fe11a665bb40420362bc93b423f51819c557a76961",
+    "apps/android/app/src/main/java/life/michaelwong/covalent/ui/DestructiveConfirmation.kt": "acac50da93456bb65199b20812d849aa2789bbde094caf5957d31c7ab4e8d7d5",
+    "apps/android/app/src/main/java/life/michaelwong/covalent/ui/FolderSyncOverview.kt": "bc192753a8fbdad8a8ac961836b9082f731c19a3e7a65b00f90eecd2b2d38ca5",
+    "apps/android/app/src/main/java/life/michaelwong/covalent/ui/FolderSyncPairing.kt": "84dc2146ddf50d7858b4b83c1db8f5944b4199a9b09e43f270640b01183a4d0a",
+    "apps/android/app/src/main/java/life/michaelwong/covalent/ui/FolderSyncScreen.kt": "6d56223c318c146780f4bcbe93d4f4b480093168b1a22f6958452c4883ff46ed",
+    "apps/android/app/src/main/java/life/michaelwong/covalent/ui/NodeFailure.kt": "84f156e5c74eb639bf319ec08f57c1660c37097b21757bc145b65d456f348a9c",
+    "apps/android/app/src/main/java/life/michaelwong/covalent/ui/OpenSourceNotices.kt": "31fc231a0b8465fc0bd7cf7914274d9cded873a48b580bca1d764709a0666b2c",
+    "apps/android/app/src/main/java/life/michaelwong/covalent/ui/theme/Theme.kt": "13711d1c9469b180e066dc8aaa54e45ab70cb38bc97ae0623314afb0185bed6a",
+    "apps/android/app/src/main/java/life/michaelwong/covalent/work/TransferExecution.kt": "c844f98b9b1cbcf5cee77ad82914d015a26bccbbcbd7c927c6cbbb1a433fdf53",
+    "apps/android/app/src/main/java/life/michaelwong/covalent/work/TransferScheduler.kt": "de0c6314a94f386d6a09646e9a0e506fbc500ff6f53f251caee046c81fca71af",
+    "apps/android/app/src/main/java/life/michaelwong/covalent/work/TransferWorker.kt": "3aa2cc245d35a1a87423ae812ea2aea01c76131d7390f397cfdd9bf994513acf",
+    "apps/android/app/src/main/res/drawable/ic_brand_mark.xml": "396c8cc9c204fcd3124650420abf7eab6bb6f36331c1011aef40c009ef728f13",
+    "apps/android/app/src/main/res/drawable/ic_launcher.xml": "9de2e3378bdccedf0414c5f7671f08c99654ca79d7802515bce1683fe6ab05f4",
+    "apps/android/app/src/main/res/drawable/ic_launcher_foreground.xml": "bf17475a166812424f7f668cad83dbf232992ce7da06a5258b123d26bd4c4dec",
+    "apps/android/app/src/main/res/mipmap-anydpi/ic_launcher.xml": "b14d1d36a5f3cb40921143c47db1a5cdcb624ae5d4e8ff40753e614bead1c7e8",
+    "apps/android/app/src/main/res/values/icon_colors.xml": "e7f22bc1880466deef161f9e0c24697faff42f0142270300207c48b36a678071",
+    "apps/android/app/src/main/res/values/strings.xml": "e5e19923c5f487126ff48a91992fd077ceb630fa9daddd642f54bc68aaa5ad31",
+    "apps/android/app/src/main/res/values/themes.xml": "648f28190968daed546f31778a4b22aa75717b7b9c7c441b39919aac2771aeaa",
+    "apps/android/app/src/main/res/values-night/themes.xml": "0ea99a3576f48ab41a278cd9eda025765d341a1beda24d260172543725715faa",
+    "apps/android/app/src/main/res/xml/data_extraction_rules.xml": "8b55ff5489071bb19a4e89967b604a16c0e4d1e87a2df3c73c64417314a59f22",
+    "apps/android/app/src/main/res/xml/network_security_config.xml": "c869d1fafdd3261c25f2973afa1d7f77e4e0f476d3dbfe5cfe00028fe81a513a",
+    "apps/android/companion/build.gradle.kts": "56f84ff404ef08271f6007e7efd06e263484fc9abad1d7fc68a0f404ad558f8b",
+    "apps/android/companion/src/androidTest/java/life/michaelwong/covalent/ui/InterlinkLayoutInstrumentedTest.kt": "5151498c0622400bb77ad31b2415904255f824c775a85bd1c166ebdb2c3cc2b1",
+    "apps/android/companion/src/debug/java/life/michaelwong/covalent/node/FolderJourneyTheme.kt": "702ce66ff98e5367222fce12f474c0063989be07f4eaa3be41b86eda572a5518",
+    "apps/android/companion/src/main/AndroidManifest.xml": "32256b3ea6fdeab3814350fa85ede77a4aa3ebb9843e88d5830a496366f56503",
+    "apps/android/companion/src/main/java/life/michaelwong/covalent/InterlinkActivity.kt": "ff0f9d04d9c3096205aec997b8988f266b42056d84a457fa8f73af28cd689077",
+    "apps/android/companion/src/main/java/life/michaelwong/covalent/InterlinkApplication.kt": "ecb48e683868f3dd35531fea7bf469bb6543225bf51e5b025bc33421dc383362",
+    "working.md": "80cb94383a5bb9b0b2bfe8f90888ef051e8e658aee91834a429141b43141d84c",
+    "docs/interlink-adaptive-status.md": "eb6253a5ddeae4206a43f5a87454d74a1182cfb096cdaa134eda9a263dc2a5d2",
+    "apps/android/gradle/verification-metadata.xml": "7e3d3b75a2dcb6ceeb3ea2593c54c48b71432a1caab04d616a18115728360f51"
+  },
+  "evidence": {
+    "artifacts/evidence/companion-adaptive-status/build.json": {
+      "bytes": 10080,
+      "sha256": "c1650c6a9ea697033436c5b34ae73077de942a1d24ea5bf43e4c4cd2b9d9f882"
+    },
+    "artifacts/evidence/companion-adaptive-status/build.log": {
+      "bytes": 26186,
+      "sha256": "765df1a420b0cc2e394c9256f184c5ce946c8489701fe89f1f2528e74db60b41"
+    },
+    "artifacts/evidence/companion-adaptive-status/build.py": {
+      "bytes": 2503,
+      "sha256": "622c1a7160ff3055d61211d3db7c51c31fa100b949af028935891ec2bfe88d83"
+    },
+    "artifacts/evidence/companion-adaptive-status/ci-9330537-checkpoint.json": {
+      "bytes": 22097,
+      "sha256": "435efc824a5260d46b1a43bedd914e9497a26726ab9e59589cac20073576f978"
+    },
+    "artifacts/evidence/companion-adaptive-status/ci-before-publish.json": {
+      "bytes": 18853,
+      "sha256": "9d00e3488d01688234181ad81cf205e792a9099b7bf97c197b6cd6ec4386b878"
+    },
+    "artifacts/evidence/companion-adaptive-status/continue-layout.py": {
+      "bytes": 5850,
+      "sha256": "e64d5b39f07cfc625fd1ca1c3b7fb6b9f7fd3146b7759fcfe5710d11a86b6814"
+    },
+    "artifacts/evidence/companion-adaptive-status/entry/activity-launch.log": {
+      "bytes": 811,
+      "sha256": "519def258a825867f9a4105c0a03276534d69869a94a61a4c29b081b77fa6c33"
+    },
+    "artifacts/evidence/companion-adaptive-status/entry/before-settings.json": {
+      "bytes": 163,
+      "sha256": "3f34c3e7aec12ad599709fb5625a86b9249fccf0557dc22e66a12f6c114ba154"
+    },
+    "artifacts/evidence/companion-adaptive-status/entry/home-large-elements.json": {
+      "bytes": 4979,
+      "sha256": "eec17d9c466a5abc80caffa8febd7fdc4a1a03d0e22bc3952a35ca2e0f8867bd"
+    },
+    "artifacts/evidence/companion-adaptive-status/entry/home-large.png": {
+      "bytes": 144817,
+      "sha256": "9b5949b9a068b585406cb0c01889402b259ad07243ef5ab3c7814f768073070c"
+    },
+    "artifacts/evidence/companion-adaptive-status/entry/home-normal.png": {
+      "bytes": 73753,
+      "sha256": "43b175602af3f7cd66bf632d1147d0a47acd394ed41d3e9116e1fe8091ca4133"
+    },
+    "artifacts/evidence/companion-adaptive-status/entry/keyboard-large.png": {
+      "bytes": 222035,
+      "sha256": "b92052988bfaba7389599ec565e50ab8654a07f9da3eccfae922575942db5c4f"
+    },
+    "artifacts/evidence/companion-adaptive-status/entry/keyboard-reachable-elements.json": {
+      "bytes": 5237,
+      "sha256": "8e1085d792689f4248efc5ca0e997e3cac25a3cee62dacc8e7af5e8be92f7147"
+    },
+    "artifacts/evidence/companion-adaptive-status/entry/keyboard-reachable.png": {
+      "bytes": 198736,
+      "sha256": "edbe3ce29870a35677febc074e0b38b8901be1bba227bb757222987bee7e9033"
+    },
+    "artifacts/evidence/companion-adaptive-status/entry/landscape-large.png": {
+      "bytes": 87328,
+      "sha256": "dd83d20d0258474684d4b9c05154c477ed3b080440abaaab26aa8db1c8659fb1"
+    },
+    "artifacts/evidence/companion-adaptive-status/entry/landscape-pair.png": {
+      "bytes": 85308,
+      "sha256": "657d61efe7c284291dac9663a391e93999dacb39fd12f72801771a2fb238177c"
+    },
+    "artifacts/evidence/companion-adaptive-status/entry/landscape-source-elements.json": {
+      "bytes": 2765,
+      "sha256": "eeb410e254c09619073c04b4e4f3d0c4a59e7fc3c54fa650ebf419de9b47eeaa"
+    },
+    "artifacts/evidence/companion-adaptive-status/entry/landscape-source.png": {
+      "bytes": 80014,
+      "sha256": "858bcadabc3a11ffdfa7168f277239b2e30f9c63a060dec848ca274fb18391b1"
+    },
+    "artifacts/evidence/companion-adaptive-status/entry/pair-large.png": {
+      "bytes": 139793,
+      "sha256": "7bfaf3e79621ca1a508a1f3e22f04a2b69f70f5cb97c4e5213a6189c745964d4"
+    },
+    "artifacts/evidence/companion-adaptive-status/entry/paired-large-elements.json": {
+      "bytes": 2496,
+      "sha256": "1194a97422a087cf53526b17833079095dc8301403e6e505b0bb753d8037731f"
+    },
+    "artifacts/evidence/companion-adaptive-status/entry/receipt.json": {
+      "bytes": 1482,
+      "sha256": "42682a6c85a9acc4e6a5df436841ae361605e4a8e3d57b1fb63e754e34950f56"
+    },
+    "artifacts/evidence/companion-adaptive-status/foundation/receipt.json": {
+      "bytes": 41,
+      "sha256": "8cf688ff6659898c26635e7a8955459934486c9926b3ea2af3b7c399bf1eda82"
+    },
+    "artifacts/evidence/companion-adaptive-status/foundation/validation.log": {
+      "bytes": 4207,
+      "sha256": "7be5f62e25edbb072bb48875c63d84a2b74760f45eb4344690c48b0a8f6d500e"
+    },
+    "artifacts/evidence/companion-adaptive-status/layout/install.log": {
+      "bytes": 32,
+      "sha256": "8cfe21ca9831863004ad6eb25b313f8944786f7a01b291da8fbbe61cc0c847e5"
+    },
+    "artifacts/evidence/companion-adaptive-status/layout/receipt.json": {
+      "bytes": 11542,
+      "sha256": "2cc69a1ea1e692215b0327d0497e95ca5ec57f336b79271a11bd65762595105b"
+    },
+    "artifacts/evidence/companion-adaptive-status/layout-after-install/expected.txt": {
+      "bytes": 241,
+      "sha256": "54d0fb8aa5a8cccca320dde1cbd8830eaf1dcb24dcb66f937206a32ee17e5caf"
+    },
+    "artifacts/evidence/companion-adaptive-status/layout-after-install/install-test.log": {
+      "bytes": 32,
+      "sha256": "8cfe21ca9831863004ad6eb25b313f8944786f7a01b291da8fbbe61cc0c847e5"
+    },
+    "artifacts/evidence/companion-adaptive-status/layout-after-install/instrumentation.log": {
+      "bytes": 1580,
+      "sha256": "4269dcd8768dae6e9082e272e53a7d110af997884234b067159b00bafefa0c48"
+    },
+    "artifacts/evidence/companion-adaptive-status/layout-after-install/receipt.json": {
+      "bytes": 11304,
+      "sha256": "3609a0532c49b6a5d79c9fe7f55c114b05554a0f3bbf8f3d020c66bde66ebbfb"
+    },
+    "artifacts/evidence/companion-adaptive-status/layout-after-install/validation.log": {
+      "bytes": 68,
+      "sha256": "b83ab49559099e190bf487efc62034541a71e5b0ea989d88beac89dc37b45b2b"
+    },
+    "artifacts/evidence/companion-adaptive-status/release-candidate/android-license-inventory.json": {
+      "bytes": 50489,
+      "sha256": "b320a1d29cb29bee3cd10e50d37f987bf1a92cf2dd22261581b450679037ee9d"
+    },
+    "artifacts/evidence/companion-adaptive-status/release-candidate/android-native-distribution-summary.json": {
+      "bytes": 10699,
+      "sha256": "acf948d9bce63ca037b39f74033d82c24b36b3b5d5352afe0574a2a87345e13f"
+    },
+    "artifacts/evidence/companion-adaptive-status/release-candidate/android-sbom.cdx.json": {
+      "bytes": 108502,
+      "sha256": "c27c3efb8f385e7c153d960b38e1747d037e4a5a99af5e0d7846cf5ae32a0552"
+    },
+    "artifacts/evidence/companion-adaptive-status/release-candidate/artifacts.json": {
+      "bytes": 826,
+      "sha256": "e392a7a6f247ccc2c72387fdacb9c68d9c254639d7988f1f0998ff1ae356de0a"
+    },
+    "artifacts/evidence/companion-adaptive-status/release-candidate/build.log": {
+      "bytes": 32065,
+      "sha256": "4a1ef19c863c151dddfc77fe750163a68edeec36537852abfbc809c2329508e1"
+    },
+    "artifacts/evidence/companion-adaptive-status/release-candidate/receipt.json": {
+      "bytes": 300,
+      "sha256": "47adbd88e668f0eef68abe8d122d0c8ba71263c5994c82462c040e9dc1723f01"
+    },
+    "artifacts/evidence/companion-adaptive-status/run-layout.py": {
+      "bytes": 6764,
+      "sha256": "75a75081f53924a34c154f0ed66993f1b81fa039a65716ae380c9163bce8b194"
+    }
+  },
+  "componentTestsPassed": 2,
+  "realEntryChecked": true,
+  "largeSystemTextAndKeyboardChecked": true,
+  "previousNativeJourneyReplayed": false,
+  "nativeObjectsUnchanged": 8,
+  "physicalDeviceAccepted": false,
+  "productionSigningAccepted": false,
+  "cloudBackupOrCleanupProven": false,
+  "imageChanged": false,
+  "releaseReady": false,
+  "priorManifestSha256": "d20919eacb6648f229397f7075dd73cc166bb4b84043431cefbe27ab4a4c6a33",
+  "unresolved": [
+    "intermittent post-address transfer stall",
+    "supported permission-recovery environment",
+    "new source hosted gates",
+    "physical Pi/phone roaming and imports",
+    "exact cloud-confirmed cleanup",
+    "production signing",
+    "natural authenticated updates",
+    "gold-image acceptance"
+  ],
+  "rawEvidenceWhitespacePreserved": true
+}

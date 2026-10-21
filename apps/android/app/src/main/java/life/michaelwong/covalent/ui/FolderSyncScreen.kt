@@ -10,6 +10,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Column
@@ -46,6 +47,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.res.pluralStringResource
@@ -714,35 +716,7 @@ internal fun FolderSyncScreen(
             return@LazyColumn
         }
         item {
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    status?.let {
-                        when {
-                            it.issue != null || it.availability == FolderSyncAvailability.NEEDS_ATTENTION ->
-                                stringResource(R.string.folder_sync_connection_attention)
-                            it.lifecycle == FolderSyncLifecycle.INITIAL_SCANNING ->
-                                stringResource(R.string.folder_sync_checking_folders)
-                            it.lifecycle == FolderSyncLifecycle.STILL_STOPPING ->
-                                stringResource(R.string.folder_sync_stopping)
-                            photoAppliance && it.peers.isEmpty() ->
-                                stringResource(R.string.interlink_pair_next)
-                            photoAppliance && it.folders.isEmpty() ->
-                                stringResource(R.string.interlink_folder_next)
-                            it.lifecycle == FolderSyncLifecycle.RUNNING ->
-                                stringResource(R.string.folder_sync_running)
-                            else -> stringResource(R.string.folder_sync_ready_to_share)
-                        }
-                    } ?: stringResource(R.string.folder_sync_starting),
-                    modifier = Modifier.weight(1f),
-                )
-                OutlinedButton(onClick = ::refresh, enabled = !busy) {
-                    Text(stringResource(R.string.action_refresh))
-                }
-            }
+            FolderSyncOverview(status, photoAppliance, pendingRepairOffers, busy, ::refresh)
         }
         val snapshot = status
         val activeShares = snapshot?.shares.orEmpty().filter {
@@ -1205,23 +1179,26 @@ internal fun FolderShareCard(
     Card(Modifier.fillMaxWidth().testTag("folder-link-card-${share.offerId}")) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(share.label, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(20.dp)) {
-                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(stringResource(R.string.folder_link_source_heading),
-                        style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text(if (share.incoming) peerName else stringResource(R.string.folder_link_this_phone),
-                        fontWeight = FontWeight.Medium)
-                    Text(if (share.incoming) share.label else localFolderName ?: stringResource(R.string.folder_sync_selected_folder),
-                        style = MaterialTheme.typography.bodyMedium)
-                }
-                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(stringResource(R.string.folder_link_destination_heading),
-                        style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text(if (share.incoming) stringResource(R.string.folder_link_this_phone) else peerName,
-                        fontWeight = FontWeight.Medium)
-                    Text(if (share.incoming) localFolderName ?: stringResource(R.string.folder_link_choose_destination)
-                        else stringResource(R.string.folder_link_remote_destination),
-                        style = MaterialTheme.typography.bodyMedium)
+            val sourceDevice = if (share.incoming) peerName else stringResource(R.string.folder_link_this_phone)
+            val sourceFolder = if (share.incoming) share.label else localFolderName ?: stringResource(R.string.folder_sync_selected_folder)
+            val destinationDevice = if (share.incoming) stringResource(R.string.folder_link_this_phone) else peerName
+            val destinationFolder = if (share.incoming) localFolderName ?: stringResource(R.string.folder_link_choose_destination)
+                else stringResource(R.string.folder_link_remote_destination)
+            BoxWithConstraints(Modifier.fillMaxWidth()) {
+                if (maxWidth < 300.dp * LocalDensity.current.fontScale.coerceAtLeast(1f)) {
+                    Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                        FolderLinkEndpoint(R.string.folder_link_source_heading, sourceDevice, sourceFolder,
+                            Modifier.fillMaxWidth().testTag("folder-link-source-${share.offerId}"))
+                        FolderLinkEndpoint(R.string.folder_link_destination_heading, destinationDevice, destinationFolder,
+                            Modifier.fillMaxWidth().testTag("folder-link-destination-${share.offerId}"))
+                    }
+                } else {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(20.dp)) {
+                        FolderLinkEndpoint(R.string.folder_link_source_heading, sourceDevice, sourceFolder,
+                            Modifier.weight(1f).testTag("folder-link-source-${share.offerId}"))
+                        FolderLinkEndpoint(R.string.folder_link_destination_heading, destinationDevice, destinationFolder,
+                            Modifier.weight(1f).testTag("folder-link-destination-${share.offerId}"))
+                    }
                 }
             }
             HorizontalDivider(Modifier.padding(vertical = 4.dp))
@@ -1524,6 +1501,21 @@ private fun FolderLinkSettingsSummary(
         enabled = !busy,
         modifier = Modifier.testTag("folder-link-settings"),
     ) { Text(stringResource(R.string.folder_link_settings_edit)) }
+}
+
+@Composable
+private fun FolderLinkEndpoint(
+    @androidx.annotation.StringRes heading: Int,
+    device: String,
+    folder: String,
+    modifier: Modifier,
+) {
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(stringResource(heading), style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(device, fontWeight = FontWeight.Medium)
+        Text(folder, style = MaterialTheme.typography.bodyMedium)
+    }
 }
 
 @Composable

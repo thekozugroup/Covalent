@@ -1,0 +1,21 @@
+{
+  "unsignedCandidateOnly": true,
+  "artifacts": {
+    "artifacts/candidates/companion-adaptive-status/companion-debug.apk": {
+      "bytes": 67314462,
+      "sha256": "5315e7eee0958bcbb7a4ab4d1864d15bd88fed1add234c80647d27b531b9ec92"
+    },
+    "artifacts/candidates/companion-adaptive-status/companion-release-unsigned.apk": {
+      "bytes": 28856202,
+      "sha256": "25bbe41b44017566964910a4ef31452757a1042fc54b945b495af69fdfadc4fa"
+    },
+    "artifacts/candidates/companion-adaptive-status/companion-release.aab": {
+      "bytes": 31276086,
+      "sha256": "9a9c609660e4df1dfbfedacd09572a8ae4f0f5d5be2cbae8078ad5c294ef4584"
+    },
+    "artifacts/candidates/companion-adaptive-status/mapping.txt": {
+      "bytes": 39335015,
+      "sha256": "1a3207df0f4e8c9c5dbd6441993002d35366bb0c1489b01cca2536cb27b9b860"
+    }
+  }
+}

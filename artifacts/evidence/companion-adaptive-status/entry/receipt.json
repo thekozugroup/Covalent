@@ -1,0 +1,33 @@
+{
+  "displaySettingsRestored": true,
+  "afterSettings": {
+    "font_scale": "1.0",
+    "accelerometer_rotation": "1",
+    "user_rotation": "0",
+    "wmSize": "Physical size: 1080x2400",
+    "wmDensity": "Physical density: 420"
+  },
+  "identitiesAfter": {
+    "no_backup/covalent-node/identity.json": "272d5d660754fafba50d4919a67c8fd7e93331f6874d9d642770ac4e32f8e944",
+    "no_backup/covalent-node/tls/identity.json": "0fb02458bfb64c0a4068481299e1ea6f3a7308d6c591f90d3bdfb94a7e3ea89c",
+    "no_backup/covalent-node/folder-sync/engine-identity.v1": "f6ca5419cd6e4711a9b027aa1ad08bd3ead4cbc3e65b79db715eb0ef1e9d268b",
+    "no_backup/covalent-node/network-pairing.json": "ec3f68e0a8c296d4036dd03f6fba851b9c70575bc2c65c37d994c37bd2293b97",
+    "no_backup/covalent-node/folder-sync/folder-sharing.v1": "4ac7699f3871c9580b1bff21bc8cc06946c4a3c6c78fdc24217b5a2f3ab3f800"
+  },
+  "sourceAndDestinationFilesSelected": false,
+  "pairSubmitted": false,
+  "hostStartedWithExistingTrust": true,
+  "pairedDevicesVisible": 1,
+  "appForceStoppedAfterCheck": true,
+  "networkPairingRequestFileChangedAfterHostStartup": true,
+  "physicalDeviceAccepted": false,
+  "releaseReady": false,
+  "checks": [
+    "real InterlinkActivity home and serif/logo bar",
+    "system font 2.0 and 320dp portrait width",
+    "paired source setup",
+    "same title bounds before and after keyboard",
+    "Pair device reachable with keyboard after scrolling",
+    "landscape Pair device and source chooser reachable"
+  ]
+}
