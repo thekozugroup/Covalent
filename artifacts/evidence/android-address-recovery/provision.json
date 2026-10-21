@@ -1,0 +1,8 @@
+{
+  "syntheticOnly": true,
+  "provisioningBefore": {
+    "device_provisioned": "1",
+    "user_setup_complete": "1"
+  },
+  "physicalDeviceTouched": false
+}

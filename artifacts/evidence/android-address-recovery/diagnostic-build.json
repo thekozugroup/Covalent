@@ -1,0 +1,8 @@
+{
+  "exitCode": 0,
+  "seconds": 11.429,
+  "appApkBeforeSha256": "41d00b5fc927d9fbe60d286336eec5bf8259df811880cc29d79dbda588576661",
+  "appApkAfterSha256": "41d00b5fc927d9fbe60d286336eec5bf8259df811880cc29d79dbda588576661",
+  "testApkSha256": "15225b2aa409363c76804edd91d792d9ee97a8541fdfdc1940ca6efe237bc3b7",
+  "physicalDevicesChanged": false
+}

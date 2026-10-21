@@ -1,0 +1,11 @@
+{
+  "avd": "Interlink_Address_API37",
+  "serial": "emulator-5610",
+  "fresh": true,
+  "syntheticOnly": true,
+  "physicalDeviceTouched": false,
+  "systemImage": "system-images;android-37.0;google_apis_playstore;arm64-v8a",
+  "memoryMiB": 2048,
+  "cores": 2,
+  "dataPartitionGiB": 6
+}

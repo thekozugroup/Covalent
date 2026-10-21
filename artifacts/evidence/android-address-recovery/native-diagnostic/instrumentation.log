@@ -1,0 +1,44 @@
+INSTRUMENTATION_STATUS: class=life.michaelwong.covalent.node.SafFolderSyncJourneyInstrumentedTest
+INSTRUMENTATION_STATUS: current=1
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=1
+INSTRUMENTATION_STATUS: stream=
+life.michaelwong.covalent.node.SafFolderSyncJourneyInstrumentedTest:
+INSTRUMENTATION_STATUS: test=nativeManualSafRunRegistersAcrossRestartAndIsolatesLostGrant
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=life.michaelwong.covalent.node.SafFolderSyncJourneyInstrumentedTest
+INSTRUMENTATION_STATUS: current=1
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=1
+INSTRUMENTATION_STATUS: stack=java.lang.AssertionError
+	at org.junit.Assert.fail(Assert.java:87)
+	at org.junit.Assert.assertTrue(Assert.java:42)
+	at org.junit.Assert.assertTrue(Assert.java:53)
+	at life.michaelwong.covalent.node.SafFolderSyncJourneyInstrumentedTest.nativeManualSafRunRegistersAcrossRestartAndIsolatesLostGrant(SafFolderSyncJourneyInstrumentedTest.kt:113)
+
+INSTRUMENTATION_STATUS: stream=
+Error in nativeManualSafRunRegistersAcrossRestartAndIsolatesLostGrant(life.michaelwong.covalent.node.SafFolderSyncJourneyInstrumentedTest):
+java.lang.AssertionError
+	at org.junit.Assert.fail(Assert.java:87)
+	at org.junit.Assert.assertTrue(Assert.java:42)
+	at org.junit.Assert.assertTrue(Assert.java:53)
+	at life.michaelwong.covalent.node.SafFolderSyncJourneyInstrumentedTest.nativeManualSafRunRegistersAcrossRestartAndIsolatesLostGrant(SafFolderSyncJourneyInstrumentedTest.kt:113)
+
+INSTRUMENTATION_STATUS: test=nativeManualSafRunRegistersAcrossRestartAndIsolatesLostGrant
+INSTRUMENTATION_STATUS_CODE: -2
+INSTRUMENTATION_RESULT: stream=
+
+Time: 6.797
+There was 1 failure:
+1) nativeManualSafRunRegistersAcrossRestartAndIsolatesLostGrant(life.michaelwong.covalent.node.SafFolderSyncJourneyInstrumentedTest)
+java.lang.AssertionError
+	at org.junit.Assert.fail(Assert.java:87)
+	at org.junit.Assert.assertTrue(Assert.java:42)
+	at org.junit.Assert.assertTrue(Assert.java:53)
+	at life.michaelwong.covalent.node.SafFolderSyncJourneyInstrumentedTest.nativeManualSafRunRegistersAcrossRestartAndIsolatesLostGrant(SafFolderSyncJourneyInstrumentedTest.kt:113)
+
+FAILURES!!!
+Tests run: 1,  Failures: 1
+
+
+INSTRUMENTATION_CODE: -1

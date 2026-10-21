@@ -1,0 +1,53 @@
+{
+  "format": 1,
+  "serial": "emulator-5610",
+  "avd": "Interlink_Address_API37",
+  "syntheticOnly": true,
+  "passed": true,
+  "phase": "real-saf-folder-journey-passed",
+  "before": {
+    "bootId": "8e6f07a7-a712-48b0-8812-22679d2f12c1",
+    "framework": {
+      "system_server": "610:708",
+      "surfaceflinger": "458:408"
+    }
+  },
+  "sourceHashes": {
+    "apps/android/app/src/main/java/life/michaelwong/covalent/data/CovalentNodeClient.kt": "758015f608bb5739edd0eb8c1f0c3f9a6bff473ebba4ef9fcea37b55ae6ad0f6",
+    "apps/android/app/src/main/java/life/michaelwong/covalent/data/FolderAcceptanceRetry.kt": "a43139540cd552b17e748f7bbb91a7448fdfe09525fa766b7c5ac896ddeabb67",
+    "apps/android/app/src/androidTest/java/life/michaelwong/covalent/node/SafFolderSyncJourneyInstrumentedTest.kt": "f738ecce0301e6f50d655a8a12d98be157f736790483315aff6a0832c19fd257",
+    "apps/android/app/build.gradle.kts": "761975ca9f0aecf88c537f4077ace39a153d6c5e197b3b045f27a865e5573213",
+    "apps/android/companion/build.gradle.kts": "e0604e718b026458fb958162d480d8a00ed424b580f3fbed562142417cf3eb41",
+    "crates/covalent-node/src/sync_api.rs": "91e0b2fb83241a7e2b7e2c1ab45f0fb5459f7dcda9f9d6ac41f70f9006c38f1b",
+    "crates/covalent-node/src/sync_engine/service.rs": "e8bf341aca7341aaae16a83e37b6390b4bd6ab37b95ce5b3381a494d9303edae",
+    "crates/covalent-node/src/sync_engine/sharing.rs": "a6ee38fea66e471eaefe2b9f7520aafcbdd97384a8bcdccb900495b0c3226653",
+    "scripts/android-native-library-directory.py": "bad2fda23d7433117feb219f69bc71b737ecffa3c8b7bf05bea9a284ef7b5edc",
+    "scripts/android-instrumentation-result.sh": "9e6b68c870aea2327c1e8e1c5017febfdf73a408f3c981181db995ecac37bd13"
+  },
+  "previousFailedReceiptSha256": "1c8d45b4cc97090c24c7a3aa79c662c87271c035f852d325d3421ea032362c0c",
+  "apkSha256": "41d00b5fc927d9fbe60d286336eec5bf8259df811880cc29d79dbda588576661",
+  "testApkSha256": "5ae02f07d88abf45ee73336e0962e144341f74429ac13fc26184b3d2407f8fac",
+  "appReinstalled": false,
+  "testUpdated": true,
+  "dataCleared": false,
+  "physicalDeviceAccepted": false,
+  "releaseReady": false,
+  "nativeLibraryDirectory": "/data/app/~~rxZ9fe-qgdCjd3FplN1MRQ==/life.michaelwong.covalent-xznsQxhH9KBvvvJ_oAiJoA==/lib/arm64",
+  "nativeHelpers": {
+    "libcovalentrclone.so": "1db1b5e859edc16ef074e14e980e338b4bbfa8503bce369fc52b5b3f083ef72e",
+    "libengineguardian.so": "2fcc818aa81d0c470ceb632022c924481cee63feef86521d16404856a73f7253"
+  },
+  "instrumentationPidInformational": 23590,
+  "instrumentationExitCode": 0,
+  "seconds": 437.554,
+  "resultValidationExitCode": 0,
+  "after": {
+    "bootId": "8e6f07a7-a712-48b0-8812-22679d2f12c1",
+    "framework": {
+      "system_server": "610:708",
+      "surfaceflinger": "458:408"
+    }
+  },
+  "sourcesUnchanged": true,
+  "previousFailedReceiptUnchanged": true
+}

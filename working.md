@@ -1,5 +1,18 @@
 # Interlink companion and appliance robustness — 2026-10-21
 
+The intermittent post-address Android transfer now retains both endpoints'
+bounded state if its existing deadline fails, correlated to the exact original
+request ID. No retry, input replay, deadline change, permission/data reset or
+production APK change is introduced. The separate owned ARM64 diagnostic
+journey passes in437.554s (JUnit435.768s): real manual/Unicode/address/restart
+transfers, lost-grant repair, settings, pause/resume, deletion and removal. Its
+boot/framework, app APK and captured sources are unchanged. The earlier failed
+journey stays byte-identical; the new failure branch is not exercised. The
+intermittent stall remains unresolved, and release acceptance stays closed. An initial instrumentation build omitted the packaged-engine
+flag and fails before pairing; its corrected build and receipt stay separate.
+See docs/android-address-recovery-diagnostics.md. Primary0564034 CI39635433377
+continues; e01dae1 and this follow-up stay on separate branches meanwhile.
+
 Hosted source0564034 CI39635433377 has a terminal shared-foundation failure:
 three retained historical .source snapshots are classified as undeclared API
 clients. The follow-up gate admits only those three exact paths and SHA-256

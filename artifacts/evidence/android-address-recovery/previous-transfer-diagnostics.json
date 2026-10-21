@@ -1,0 +1,10 @@
+{
+  "serial": "emulator-5608",
+  "readOnly": true,
+  "sameBootAsFailedJourney": true,
+  "exitCode": 0,
+  "retainedEvents": [],
+  "retainedCount": 0,
+  "notCorrelatedToJourney": true,
+  "rawLogRetained": false
+}

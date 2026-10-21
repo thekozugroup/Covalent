@@ -256,20 +256,31 @@ class SafFolderSyncJourneyInstrumentedTest {
             }
             writeSafFile(sourceGrant, "after-address.txt", SAF_ADDRESS_CONTENT)
             val addressShare = sourceShare(connectionA)
+            val addressRequestId = UUID.randomUUID().toString()
             client.runFolderLinkNow(
                 connectionA.baseUrl,
                 connectionA.token,
                 folderId.toString(),
-                UUID.randomUUID().toString(),
+                addressRequestId,
                 expectedGeneration = checkNotNull(addressShare.linkRun).generation,
                 settingsRevision = checkNotNull(addressShare.linkSettings).revision,
             )
-            awaitSafFile(
-                "Manual Run Now after native address refresh",
-                destinationGrant,
-                "after-address.txt",
-                SAF_ADDRESS_CONTENT,
-            )
+            try {
+                awaitSafFile(
+                    "Manual Run Now after native address refresh",
+                    destinationGrant,
+                    "after-address.txt",
+                    SAF_ADDRESS_CONTENT,
+                )
+            } catch (failure: AssertionError) {
+                throw AssertionError(
+                    "${failure.message}\n" +
+                        recoveryDiagnostic("source", connectionA, addressRequestId) +
+                        "\n" +
+                        recoveryDiagnostic("destination", connectionB, addressRequestId),
+                    failure,
+                )
+            }
             val addressRun = awaitValue("address-refreshed SAF run completion") {
                 sourceShare(connectionA).linkRun?.takeIf {
                     it.generation == firstRun.generation + 1 && it.phase == FolderLinkRunPhase.SUCCEEDED

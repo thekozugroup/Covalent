@@ -1,0 +1,20 @@
+{
+  "format": 1,
+  "strictProductionApkUnchanged": true,
+  "fullSafJourneyPassed": true,
+  "seconds": 437.554,
+  "junitSeconds": 435.768,
+  "earlierAddressDeadlineFailurePreserved": true,
+  "intermittentAddressStallFixed": false,
+  "newFailureDiagnosticExercised": false,
+  "originalWrongBuildFlagFailurePreserved": true,
+  "productionSigningAccepted": false,
+  "physicalDeviceAccepted": false,
+  "releaseReady": false,
+  "remaining": [
+    "Intermittent post-address transfer cause",
+    "Hosted Android framework/permission acceptance",
+    "Physical Pi, Solstice and media/cloud checks",
+    "Production companion signing"
+  ]
+}

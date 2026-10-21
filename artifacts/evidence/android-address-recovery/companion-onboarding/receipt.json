@@ -1,0 +1,43 @@
+{
+  "serial": "emulator-5610",
+  "avd": "Interlink_Address_API37",
+  "syntheticOnly": true,
+  "apkSha256": "c76d5b0e1e7c1386b13d1220addc468cdc24f6eeb01e07fab0291118a24794e9",
+  "debugSigner": true,
+  "nativeReceiptSha256": "ded4f236a6a3033d41edc13a6f2258809951a3a0bb6e5268ca1855a7ef9683de",
+  "nativeReceiptUntouched": true,
+  "phase": "onboarding-permission-recovery-passed",
+  "passed": true,
+  "productionSigningAccepted": false,
+  "physicalDeviceAccepted": false,
+  "installedBytesVerified": true,
+  "sources": {
+    "apps/android/companion/src/main/java/life/michaelwong/covalent/InterlinkActivity.kt": "6965680e8c3500b684161bed3de119dd4aeb013b2d9e1417a39a6c51492b1ff4",
+    "apps/android/companion/src/main/java/life/michaelwong/covalent/InterlinkApplication.kt": "ecb48e683868f3dd35531fea7bf469bb6543225bf51e5b025bc33421dc383362",
+    "apps/android/companion/src/main/AndroidManifest.xml": "32256b3ea6fdeab3814350fa85ede77a4aa3ebb9843e88d5830a496366f56503",
+    "apps/android/companion/build.gradle.kts": "e0604e718b026458fb958162d480d8a00ed424b580f3fbed562142417cf3eb41",
+    "apps/android/app/src/main/java/life/michaelwong/covalent/ui/FolderSyncScreen.kt": "dc1a81c3fec7e8b2eb8585647473801f22432a877b56f3bcd698c3cb5e4eac7f"
+  },
+  "companionProductionSourcesChanged": false,
+  "genericMobilecliLaunch": {
+    "passed": false,
+    "reason": "Monkey exits251: SYS_KEYS has no physical keys; verified launcher still foreground",
+    "appCrashEstablished": false
+  },
+  "explicitLaunchPassed": true,
+  "firstInstall": true,
+  "permissionDeniedUiObserved": true,
+  "permissionGrantedUiObserved": true,
+  "nativeUnpairedReadyUiObserved": true,
+  "pairingPerformed": false,
+  "sourceFolderVisibleBeforePairing": true,
+  "sameBootFramework": true,
+  "after": {
+    "bootId": "8e6f07a7-a712-48b0-8812-22679d2f12c1",
+    "framework": {
+      "system_server": "610:708",
+      "surfaceflinger": "458:408"
+    }
+  },
+  "scope": "First launch and one deny/allow permission recovery only; no pairing/transfer/background/large-font assertion"
+}

@@ -1,0 +1,8 @@
+{
+  "command": "sh scripts/validate-foundation.sh",
+  "exitCode": 0,
+  "logSha256": "622e5f65299c4890a76b245e1807c059b9dde87586c384d99cd840951307f153",
+  "logBytes": 4202,
+  "rawLogLocation": "/tmp/covalent-address-diagnostics-foundation.log",
+  "rawLogCommitted": false
+}
