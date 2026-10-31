@@ -1,0 +1,81 @@
+{
+  "format": 1,
+  "baseRevision": "45b08aae05b3e92eb1a46dd61bdf311114dc61e0",
+  "unchangedRustCratesTree": "a8880b050f7c665226fb11288763989d7e78d2a6",
+  "sourceBindingsFile": "source-inputs.json",
+  "sourceBindingsSha256": "8351147fd33b57e09380abd17aa8ec083245f03f8f910d8833ee8a4f50e5d7c8",
+  "rustToolchain": "rustup1.97.1",
+  "tokio": "1.53.3",
+  "advisory": "RUSTSEC-2026-0386",
+  "advisoryDbRevision": "2295466c4e9df26647fd67d8fa1c705ac2fc7f81",
+  "ownAsyncFdCallSites": 0,
+  "strictAudit": {
+    "version": "0.22.2",
+    "oldLockExit": 1,
+    "newLockExit": 0
+  },
+  "cargoDeny": {
+    "version": "0.20.2",
+    "checks": [
+      "advisories",
+      "bans",
+      "licenses",
+      "sources"
+    ],
+    "exit": 0,
+    "configuredDuplicateWarnings": true
+  },
+  "hostWorkspace": {
+    "allFeatures": true,
+    "exit": 0,
+    "nodeLibraryPassed": 312,
+    "maintainedWorkerTestsIgnored": 7,
+    "clippyAllTargetsAllFeaturesWarningsDenied": true,
+    "format": true,
+    "foundation": true,
+    "workflowLint": true
+  },
+  "android": {
+    "target": "aarch64-linux-android",
+    "minSdk": 26,
+    "nodeAndJniLibraryCheck": true,
+    "physicalExecutionThisRevision": false
+  },
+  "containers": {
+    "requestedPlatforms": [
+      "linux/arm64",
+      "linux/amd64"
+    ],
+    "exactBuilderPinsResolved": 12,
+    "python": "3.12.16-r0",
+    "pythonRuntimeVersionAsserted": true,
+    "fullImageBuild": false
+  },
+  "ciAuditArchive": {
+    "archive_sha256": "7fb9497f8594b389e5fce5ef9b92db08432996895b2e0c5a0167a69ed445c428",
+    "member": "cargo-audit-x86_64-unknown-linux-musl-v0.22.2/cargo-audit",
+    "binary_sha256": "66f9c8f530950d106c1869ce27ef5a4008bcea53c7716c3ed8117586337ee7d8",
+    "elf_class": 64,
+    "machine": "x86_64",
+    "workflow_extraction_matches": true,
+    "host_execution": false
+  },
+  "logSha256": {
+    "workspace-tests": "186d4b4072bcf1adc9b9ec52751b50e9152d1082fdfccc7f9b2a065efbe9f3de",
+    "workspace-clippy": "66ccb17d9886bdbfc75b1b41c8e8c4ea5e1db1ee1ad4b953e1636e3543af9672",
+    "android-arm64": "eab8d65b496624471c080ef7507c82d9e4b2814db5c11f0b86f86b8930cb0747",
+    "audit-fixed": "b7a91e1335d2e4269e446c565ff7ece7d4fcbad34cda5d77d1ff0121017102ae",
+    "audit-baseline": "bed95d8a040047fc4bcd73a5f71ec056a9c280eb79b757b722a19855a53c1e57",
+    "deny-fixed": "25288fb5feed88c8e0e1b866003f9973ec3d396434dab130867a3448d23e3394",
+    "foundation": "f714e7f19ee2d72050773524ac1188423694ce965ea1514edef5a3f447c9e3a5",
+    "workflow-lint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "format": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "alpine-arm64-checked": "4d5384993a8f4684199a65eeb4b17a8ee906fbc99a6a7b09368b5d76cfa8708d",
+    "alpine-amd64-checked": "9ea54093f559355f25dd01dd057364558a650a10f5e7f8fc5591edac92519654"
+  },
+  "limits": [
+    "Seven real-worker fixtures require a separately built maintained worker/guardian",
+    "No full image/hosted exact-head acceptance yet",
+    "No phone/Pi access, installation, migration, roaming, removable-media or cloud acceptance in this iteration"
+  ]
+}

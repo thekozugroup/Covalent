@@ -59,9 +59,25 @@ jobs:
       - run: node --test packaging/web/tests/*.test.mjs
       - run: node scripts/check-openapi-routes.mjs
       - run: npx --yes @redocly/cli@2.46.1 lint docs/api/openapi.yaml
-      - uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+      # Run the audit without Check API publication or a writable token, including
+      # fork pull requests. The job result remains the required security gate.
+      - name: Audit Rust dependencies
+        run: |
+          set -euo pipefail
+          audit_version=0.22.2
+          audit_platform=x86_64-unknown-linux-musl
+          audit_archive="${RUNNER_TEMP}/cargo-audit-${audit_platform}-v${audit_version}.tgz"
+          curl --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 \
+            --retry 3 --output "${audit_archive}" \
+            "https://github.com/rustsec/rustsec/releases/download/cargo-audit/v${audit_version}/cargo-audit-${audit_platform}-v${audit_version}.tgz"
+          printf '%s  %s\n' 7fb9497f8594b389e5fce5ef9b92db08432996895b2e0c5a0167a69ed445c428 "${audit_archive}" | sha256sum --check --strict
+          audit_directory="${RUNNER_TEMP}/cargo-audit-${audit_version}"
+          mkdir "${audit_directory}"
+          tar -xzf "${audit_archive}" -C "${audit_directory}" --strip-components=1 \
+            "cargo-audit-${audit_platform}-v${audit_version}/cargo-audit"
+          audit_binary="${audit_directory}/cargo-audit"
+          test "$("${audit_binary}" --version)" = "cargo-audit ${audit_version}"
+          "${audit_binary}" audit --deny warnings
       # The Docker-based action fetched its Rust image before any job step and
       # hit Docker Hub rate limits. Use the same checker version and arguments
       # from its checksum-pinned upstream native release instead.

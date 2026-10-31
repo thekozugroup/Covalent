@@ -1,3 +1,37 @@
+# Appliance build security refresh — 2026-10-31
+
+Updated the Tokio dependency floor and lock from1.53.1 to1.53.3 for
+RUSTSEC-2026-0386. No workspace AsyncFd call sites exist; no unsafe code or
+advisory suppression is added. Other lockfile entries/edges are unchanged.
+Alpine builder/test stages now pin Python3.12.16-r0 with its matching runtime
+assertion. The standalone BusyBox builder also uses the shipping builder's
+OpenSSL3.5.9-r0. Existing source verification, notices and runtime gates remain.
+
+Replaced the audit-check publisher with checksum-pinned native cargo-audit0.22.2,
+using the same read-only permissions for every PR, including forks. Strict audit
+warnings, failed downloads/checksums/version checks and cargo-deny remain fatal.
+No Check API token or permission escalation is required.
+
+Validation: full all-feature workspace tests pass, including312 node library
+tests and actual local QUIC transfer/deduplication tests. Seven maintained-worker
+integration tests are explicitly ignored; not claimed executed. Full workspace
+all-target/all-feature clippy with warnings denied, formatting, foundation,
+workflow lint and Android26 ARM64 node/JNI library checks pass. cargo-audit0.22.2
+rejects the old lock for the exact Tokio advisory and accepts the new lock;
+cargo-deny0.20.2 advisories/bans/licenses/sources passes with its configured
+non-fatal duplicate-version warnings. Twelve exact build packages resolve and
+Python's version assertion passes in disposable containers requested for both
+linux/arm64 and linux/amd64. The Linux audit archive's checksum, member extraction
+and static x86-64 ELF are independently verified; execution here uses the official
+macOS build. Sanitized input/test bindings: artifacts/evidence/security-refresh/.
+
+No phone access, device change, signed release, full container image acceptance
+or gold-image acceptance. Hosted exact-head CI remains the release boundary.
+Task containers and pulled image are removed and independently absent, and the
+pre-existing Colima VM is restored stopped with its images/containers preserved.
+Compiler scratch stays active only through ROM source-pin/adaptation checking;
+cleanup evidence is maintained by the private appliance workspace.
+
 # Appliance controller bond and signed read-only status — 2026-10-31
 
 Added a separate local-owner controller bond and covalent-appliance/1 transport
