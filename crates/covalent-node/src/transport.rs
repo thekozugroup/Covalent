@@ -436,6 +436,7 @@ impl TlsIdentity {
             PAIRING_ALPN,
             crate::sync_control::FOLDER_CONTROL_ALPN,
             crate::sync_control::LINK_CONTROL_ALPN,
+            crate::sync_control::APPLIANCE_CONTROL_ALPN,
         ];
         #[cfg(not(unix))]
         let alpns: &[&[u8]] = &[ALPN, PAIRING_ALPN];
@@ -493,6 +494,8 @@ pub struct QuicNode {
     pairing_service: Option<Arc<NetworkPairingService>>,
     #[cfg(unix)]
     folder_service: Option<Arc<crate::sync_engine::FolderSyncService>>,
+    #[cfg(unix)]
+    controller_bond: Option<Arc<crate::appliance_control::ControllerBondStore>>,
     #[cfg(unix)]
     folder_admission: Arc<crate::sync_control::FolderControlAdmission>,
 }
@@ -628,6 +631,8 @@ impl QuicNode {
             #[cfg(unix)]
             folder_service: None,
             #[cfg(unix)]
+            controller_bond: None,
+            #[cfg(unix)]
             folder_admission: Arc::new(crate::sync_control::FolderControlAdmission::default()),
         })
     }
@@ -654,6 +659,15 @@ impl QuicNode {
         service: Arc<crate::sync_engine::FolderSyncService>,
     ) -> Self {
         self.folder_service = Some(service);
+        self
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn with_controller_bond(
+        mut self,
+        bond: Option<Arc<crate::appliance_control::ControllerBondStore>>,
+    ) -> Self {
+        self.controller_bond = bond;
         self
     }
 
@@ -714,6 +728,8 @@ impl QuicNode {
             #[cfg(unix)]
             let folder_service = self.folder_service.clone();
             #[cfg(unix)]
+            let controller_bond = self.controller_bond.clone();
+            #[cfg(unix)]
             let folder_admission = Arc::clone(&self.folder_admission);
             connections.spawn(async move {
                 let _connection_permit = connection_permit;
@@ -732,7 +748,8 @@ impl QuicNode {
                 #[cfg(unix)]
                 if let Some(alpn) = negotiated_alpn(&connection)
                     && (alpn == crate::sync_control::FOLDER_CONTROL_ALPN
-                        || alpn == crate::sync_control::LINK_CONTROL_ALPN)
+                        || alpn == crate::sync_control::LINK_CONTROL_ALPN
+                        || alpn == crate::sync_control::APPLIANCE_CONTROL_ALPN)
                 {
                     if let Some(service) = folder_service {
                         let _ = crate::sync_control::serve_folder_control_connection(
@@ -742,6 +759,7 @@ impl QuicNode {
                             service,
                             fingerprint,
                             folder_admission,
+                            controller_bond,
                         )
                         .await;
                     } else {

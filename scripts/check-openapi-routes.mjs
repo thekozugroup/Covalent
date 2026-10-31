@@ -681,9 +681,9 @@ function openapiOperations(source) {
   const operations = new Set();
   let currentPath = null;
   for (const line of source.split(/\r?\n/)) {
-    const path = line.match(/^ {2}(\/api\/v1[^:]*):\s*$/)?.[1];
+    const path = line.match(/^ {2}(\/[^:]*):\s*$/)?.[1];
     if (path !== undefined) {
-      currentPath = path;
+      currentPath = path.startsWith("/api/v1") ? path : null;
       continue;
     }
     const method = line.match(/^ {4}([a-z]+):\s*$/)?.[1];

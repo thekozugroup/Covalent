@@ -20,6 +20,7 @@ use sha2::Digest as _;
 pub const FOLDER_CONTROL_ALPN: &[u8] = b"covalent-quic/4";
 /// Never negotiate one-way records with a legacy two-way-only peer.
 pub const LINK_CONTROL_ALPN: &[u8] = b"covalent-quic/5";
+pub const APPLIANCE_CONTROL_ALPN: &[u8] = b"covalent-appliance/1";
 const SCHEMA_VERSION: u16 = 1;
 const REQUEST_DOMAIN: &[u8] = b"covalent/folder-control/request/v1";
 const RESPONSE_DOMAIN: &[u8] = b"covalent/folder-control/response/v1";
@@ -84,9 +85,16 @@ pub enum FolderControlOperation {
         target_id: DeviceId,
         candidate_address: String,
     },
+    ReadApplianceStatus {
+        requester_id: DeviceId,
+        target_id: DeviceId,
+    },
 }
 impl FolderControlOperation {
     fn alpn(&self) -> &'static [u8] {
+        if matches!(self, Self::ReadApplianceStatus { .. }) {
+            return APPLIANCE_CONTROL_ALPN;
+        }
         let one_way = match self {
             Self::SendOffer(offer) => offer.link_policy.is_some(),
             Self::SendAcceptance { acceptance, .. } => {
@@ -101,7 +109,9 @@ impl FolderControlOperation {
             | Self::CommitLinkRun(_)
             | Self::ReportLinkRun(_)
             | Self::CommitEndpointRoster(_) => true,
-            Self::SendRemoval(_) | Self::ProbeAddress { .. } => false,
+            Self::SendRemoval(_) | Self::ProbeAddress { .. } | Self::ReadApplianceStatus { .. } => {
+                false
+            }
         };
         if one_way {
             LINK_CONTROL_ALPN
@@ -122,7 +132,8 @@ impl FolderControlOperation {
             Self::CommitLinkRun(commit) => commit.source_id,
             Self::ReportLinkRun(report) => report.reporter_id,
             Self::CommitEndpointRoster(commit) => commit.source_id,
-            Self::ProbeAddress { requester_id, .. } => *requester_id,
+            Self::ProbeAddress { requester_id, .. }
+            | Self::ReadApplianceStatus { requester_id, .. } => *requester_id,
         }
     }
 
@@ -139,7 +150,9 @@ impl FolderControlOperation {
             Self::CommitLinkRun(commit) => Some(commit.target_id),
             Self::ReportLinkRun(report) => Some(report.source_id),
             Self::CommitEndpointRoster(commit) => Some(commit.target_id),
-            Self::ProbeAddress { target_id, .. } => Some(*target_id),
+            Self::ProbeAddress { target_id, .. } | Self::ReadApplianceStatus { target_id, .. } => {
+                Some(*target_id)
+            }
         }
     }
 }
@@ -170,6 +183,7 @@ pub enum FolderControlPayload {
     AddressProof(SyncEngineBinding),
     LinkSettings(crate::sync_engine::LinkSettingsCommit),
     LinkRun(crate::sync_engine::LinkRunCommit),
+    ApplianceStatus(crate::appliance_control::ApplianceStatus),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -649,6 +663,7 @@ pub async fn serve_folder_control_connection(
     service: std::sync::Arc<crate::sync_engine::FolderSyncService>,
     server_fingerprint: String,
     admission: std::sync::Arc<FolderControlAdmission>,
+    controller_bond: Option<std::sync::Arc<crate::appliance_control::ControllerBondStore>>,
 ) -> Result<(), FolderControlError> {
     tokio::time::timeout(EXCHANGE_TIMEOUT, async move {
         let connection = OneShotServerConnection(connection);
@@ -686,7 +701,20 @@ pub async fn serve_folder_control_connection(
         .map_err(|_| FolderControlError::TimedOut)??;
         let permit = admission.streams.clone().try_acquire_owned().ok();
         let payload = if permit.is_some() {
-            apply_remote(service, request.operation.clone()).await
+            if let FolderControlOperation::ReadApplianceStatus { requester_id, .. } =
+                request.operation
+            {
+                match controller_bond {
+                    Some(bond) => match bond.read_status(&engine, requester_id, &service).await {
+                        Ok(status) => FolderControlPayload::ApplianceStatus(status),
+                        Err(FolderControlError::Rejected) => FolderControlPayload::Rejected,
+                        Err(_) => FolderControlPayload::NeedsAttention,
+                    },
+                    None => FolderControlPayload::Rejected,
+                }
+            } else {
+                apply_remote(service, request.operation.clone()).await
+            }
         } else {
             FolderControlPayload::Busy
         };
@@ -713,6 +741,8 @@ async fn apply_remote(
     operation: FolderControlOperation,
 ) -> FolderControlPayload {
     match operation {
+        // Administrative operations must pass the separate bond gate above.
+        FolderControlOperation::ReadApplianceStatus { .. } => FolderControlPayload::Rejected,
         FolderControlOperation::CommitEndpointRoster(commit) => {
             match service.receive_endpoint_roster(&commit).await {
                 Ok(()) => FolderControlPayload::Ack,
@@ -800,7 +830,10 @@ async fn apply_remote(
     }
 }
 
-fn current_identity(engine: &Engine, peer: DeviceId) -> Result<PublicIdentity, FolderControlError> {
+pub(crate) fn current_identity(
+    engine: &Engine,
+    peer: DeviceId,
+) -> Result<PublicIdentity, FolderControlError> {
     let config = engine
         .config()
         .map_err(|_| FolderControlError::Unavailable)?;

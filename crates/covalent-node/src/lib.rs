@@ -1,6 +1,8 @@
 //! Local authenticated API, embedded accessible console, discovery, and peer transport.
 
 pub mod advertised_address;
+#[cfg(unix)]
+mod appliance_control;
 pub mod discovery;
 mod display_names;
 pub mod first_run_claim;
@@ -531,6 +533,8 @@ pub struct AppState {
     transport_certificate: Option<Arc<Vec<u8>>>,
     network_pairing: Arc<NetworkPairingManager>,
     display_names: Arc<display_names::DisplayNameStore>,
+    #[cfg(unix)]
+    controller_bond: Option<Arc<appliance_control::ControllerBondStore>>,
     first_run_claim: Option<Arc<first_run_claim::FirstRunClaim>>,
     discovery_controller: Option<Arc<discovery::DiscoveryController>>,
     archive_limits: ArchiveLimits,
@@ -581,6 +585,12 @@ impl AppState {
         let display_names = Arc::new(display_names::DisplayNameStore::open(
             data_directory.join("display-names.json"),
         )?);
+        #[cfg(unix)]
+        let controller_bond = appliance_control::ControllerBondStore::open(
+            data_directory.join("controller-bond.json"),
+            engine.public_identity(),
+        )
+        .map(Arc::new);
         Ok(Self {
             engine,
             platform_tier,
@@ -592,6 +602,8 @@ impl AppState {
             transport_certificate: None,
             network_pairing,
             display_names,
+            #[cfg(unix)]
+            controller_bond,
             first_run_claim: None,
             discovery_controller: None,
             archive_limits: ArchiveLimits::default(),
@@ -1339,7 +1351,7 @@ pub fn validate_cleartext_api_bind(address: SocketAddr) -> Result<(), CoreError>
 
 /// Builds the stable versioned local API and static console router.
 pub fn router(state: AppState) -> Router {
-    Router::new()
+    let router = Router::new()
         .route("/", get(index))
         .route("/assets/app.css", get(css))
         .route("/assets/app.js", get(javascript))
@@ -1432,7 +1444,21 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/api/v1/restores/archive/execute",
             post(restore_archive_execute),
+        );
+    #[cfg(unix)]
+    let router = router
+        .route(
+            "/api/v1/appliance/controller",
+            get(appliance_control::bond_status)
+                .post(appliance_control::grant_controller)
+                .delete(appliance_control::revoke_controller)
+                .layer(DefaultBodyLimit::max(4096)),
         )
+        .route(
+            "/api/v1/appliance/status",
+            post(appliance_control::remote_status).layer(DefaultBodyLimit::max(4096)),
+        );
+    router
         .fallback(not_found)
         .method_not_allowed_fallback(method_not_allowed)
         .layer(DefaultBodyLimit::max(MAX_LOCAL_API_BODY_BYTES))

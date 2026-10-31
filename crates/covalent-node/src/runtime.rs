@@ -547,9 +547,9 @@ impl NodeRuntime {
         let quic_node = quic_node.with_pairing_service(Arc::new(pairing_service));
         #[cfg(unix)]
         let quic_node = match &state.folder_sync {
-            crate::sync_engine::FolderSyncRuntimeState::Ready(service) => {
-                quic_node.with_folder_service(Arc::clone(service))
-            }
+            crate::sync_engine::FolderSyncRuntimeState::Ready(service) => quic_node
+                .with_folder_service(Arc::clone(service))
+                .with_controller_bond(state.controller_bond.clone()),
             _ => quic_node,
         };
 

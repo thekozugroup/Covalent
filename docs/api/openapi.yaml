@@ -14,6 +14,133 @@ servers:
 security:
   - localToken: []
 paths:
+  /api/v1/appliance/controller:
+    get:
+      summary: Read the local controller bond and eligible paired public identities
+      operationId: applianceControllerStatus
+      description: Unix hosts only. Sync pairing does not grant administrative authority.
+      responses:
+        "200":
+          description: Current bond generation and confirmed, non-revoked paired candidates.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ControllerBondSnapshot"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "503":
+          $ref: "#/components/responses/Conflict"
+    post:
+      summary: Explicitly approve one paired controller identity on the local appliance
+      operationId: applianceControllerGrant
+      description: >-
+        Requires the local owner's bearer token, the observed generation and the full
+        paired public identity. An existing different controller must first be revoked.
+        No address or tailnet membership grants authority. Request limit is 4096 bytes.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [generation, controller]
+              properties:
+                generation:
+                  type: string
+                  format: uuid
+                controller:
+                  $ref: "#/components/schemas/ControllerPublicIdentity"
+      responses:
+        "200":
+          description: Durable owner-approved bond; exact repeated confirmation is idempotent.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ControllerBond"
+        "400":
+          $ref: "#/components/responses/ClientError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/ClientError"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "413":
+          $ref: "#/components/responses/ClientError"
+        "503":
+          $ref: "#/components/responses/Conflict"
+    delete:
+      summary: Revoke the current controller locally
+      operationId: applianceControllerRevoke
+      description: A stale generation cannot revoke a subsequently approved bond.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [generation]
+              properties:
+                generation:
+                  type: string
+                  format: uuid
+      responses:
+        "200":
+          description: Durable unbound state with a new generation.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ControllerBond"
+        "400":
+          $ref: "#/components/responses/ClientError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "413":
+          $ref: "#/components/responses/ClientError"
+        "503":
+          $ref: "#/components/responses/Conflict"
+  /api/v1/appliance/status:
+    post:
+      summary: Ask a paired appliance for signed, owner-authorized read-only sync status
+      operationId: applianceRemoteStatus
+      description: >-
+        Unix hosts only. Uses the retained paired identity and certificate pin over
+        covalent-appliance/1 QUIC. The remote node must explicitly approve this
+        requester as controller. Returns no paths, credentials, import approval or
+        cloud-backup claim. Does not discover or trust a new address. Request limit
+        is 4096 bytes. A reachable older Pi may still lack this control protocol.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [peerId]
+              properties:
+                peerId:
+                  $ref: "#/components/schemas/DeviceId"
+      responses:
+        "200":
+          description: Signed status from the pinned appliance for this controller identity.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApplianceControlStatus"
+        "400":
+          $ref: "#/components/responses/ClientError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/ClientError"
+        "413":
+          $ref: "#/components/responses/ClientError"
+        "503":
+          $ref: "#/components/responses/Conflict"
   /healthz:
     get:
       summary: Check node process readiness
@@ -1762,6 +1889,73 @@ components:
           schema:
             $ref: "#/components/schemas/PairingConfirmation"
   schemas:
+    ControllerPublicIdentity:
+      type: object
+      additionalProperties: false
+      required: [deviceId, publicKey, fingerprint]
+      properties:
+        deviceId:
+          $ref: "#/components/schemas/DeviceId"
+        publicKey:
+          type: string
+          description: Full paired Ed25519 key, encoded as base64url without padding.
+        fingerprint:
+          type: string
+          description: Derived comparison fingerprint; never used alone as authority.
+    ControllerBond:
+      type: object
+      additionalProperties: false
+      required: [schemaVersion, generation, appliance, controller]
+      properties:
+        schemaVersion:
+          const: 1
+        generation:
+          type: string
+          format: uuid
+        appliance:
+          $ref: "#/components/schemas/ControllerPublicIdentity"
+        controller:
+          oneOf:
+            - $ref: "#/components/schemas/ControllerPublicIdentity"
+            - type: "null"
+    ControllerBondSnapshot:
+      type: object
+      additionalProperties: false
+      required: [bond, pairedDevices]
+      properties:
+        bond:
+          $ref: "#/components/schemas/ControllerBond"
+        pairedDevices:
+          type: array
+          items:
+            $ref: "#/components/schemas/ControllerPublicIdentity"
+    ApplianceControlStatus:
+      type: object
+      additionalProperties: false
+      required: [schemaVersion, applianceId, controllerId, bondGeneration, syncLifecycle, shareRecords, folderHealthFresh, cloudBackupVerificationAvailable, sourceCleanupAvailable]
+      properties:
+        schemaVersion:
+          const: 1
+        applianceId:
+          $ref: "#/components/schemas/DeviceId"
+        controllerId:
+          $ref: "#/components/schemas/DeviceId"
+        bondGeneration:
+          type: string
+          format: uuid
+        syncLifecycle:
+          type: string
+          enum: [stopped, initialScanning, running, stillStopping, needsAttention]
+        shareRecords:
+          type: integer
+          minimum: 0
+          description: Consent records, not a count of completed transfers.
+        folderHealthFresh:
+          type: boolean
+        cloudBackupVerificationAvailable:
+          const: false
+        sourceCleanupAvailable:
+          const: false
     FolderSyncMutationResult:
       type: object
       additionalProperties: false

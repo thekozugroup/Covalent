@@ -1,3 +1,46 @@
+# Appliance controller bond and signed read-only status — 2026-10-31
+
+Added a separate local-owner controller bond and covalent-appliance/1 transport
+on the existing QUIC endpoint. Sync pairing alone does not grant control. The
+owner approves a full paired public identity with a generation; replacement
+requires revocation. Exact grant retries are idempotent, stale consent cannot
+reinstate authority, and peer revocation immediately blocks control. Private
+atomic state and an exclusive lifetime lock refuse damaged/aliased/special
+records and duplicate stores. Missing nullable fields fail closed.
+
+The local bearer API can grant/revoke a bond and request the paired appliance's
+signed, redacted sync status. Requests remain loopback-only, bounded to4KiB;
+the remote wire uses pinned TLS, signatures, freshness, replay admission and
+identity-bound replies. No remote mutation, root IPC access, source deletion or
+cloud-backup claim is introduced. Reuses current dependencies, endpoint and
+stream admission; no extra APK/service/thread is added.
+
+Validation: lint with warnings denied;311 full native-node host tests; Android26
+ARM64 production check and test build;8 selected security/API/actual-QUIC tests
+on the physical Android36 Pi5. Both current-source host and Pi tests pass. API
+coverage matches58 operations and428 references; isolated route fixtures also
+cover a non-versioned path after an API path. The checker no longer assigns
+that path's method to the preceding API. Test source bindings and a sanitized
+receipt are in artifacts/evidence/appliance-control/.
+
+The canonical local workspace preserves the latest existing companion adaptive
+work (base4a89c2f). Its Rust/Cargo inputs matched Pi-pinned1e549763 before this
+change. Original synced work is preserved. Temporary physical test data, binary,
+ports, Ethernet configuration and connections are removed and verified. Task
+scratch ownership and final cleanup are recorded in the private appliance workspace.
+A mixed Homebrew/rustup compiler
+cache was discarded only within task scratch; final checks use one pinned
+rustup1.97.1 toolchain. Shared toolchains/caches are retained.
+
+The installed Pi is unchanged0.2.3; no phone access, app installation, production
+restart, migration or release. Local owner approval UI, companion dashboard,
+privileged settings/feature controls, attachment/preview-bound import consent,
+camera previews, roaming and booted upgrade/recovery remain open. Do not widen
+root IPC permissions based on an ordinary sync grant or this native status bond.
+See docs/appliance-control.md for the exact read-only boundary.
+
+---
+
 # Adaptive companion status and home screen — 2026-10-21
 
 Software-first UI milestone: a retained manual/paused photo link stays configured
