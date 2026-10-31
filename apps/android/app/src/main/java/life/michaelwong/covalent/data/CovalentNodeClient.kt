@@ -175,6 +175,16 @@ class CovalentNodeClient(
         )
     }
 
+    /** Controller context is a paired-identity reference, never remote approval. */
+    internal fun applianceContext(baseUrl: String, token: String) =
+        life.michaelwong.covalent.appliance.parseApplianceContext(requestBoundedObject(
+            baseUrl, "GET", "/api/v1/appliance/controller", token, null, 65_536))
+
+    internal fun applianceStatus(baseUrl: String, token: String, peerId: String, localId: String) =
+        life.michaelwong.covalent.appliance.parseApplianceObservation(requestBoundedObject(
+            baseUrl, "POST", "/api/v1/appliance/status", token,
+            JSONObject().put("peerId", requireUuid(peerId, "appliance")).toString(), 8192), peerId, localId)
+
     /** Reads only the redacted folder-sync projection from the authenticated node. */
     fun folderSyncStatus(baseUrl: String, token: String): FolderSyncStatus =
         request(baseUrl, "GET", "/api/v1/sync/status", token, null).body.toFolderSyncStatus()
@@ -707,6 +717,7 @@ class CovalentNodeClient(
     ): JSONObject {
         val connection = openConnection(baseUrl, path, method, token, "application/json").apply {
             useCaches = false
+            instanceFollowRedirects = false
             setRequestProperty("Cache-Control", "no-store")
             if (payload != null) {
                 doOutput = true

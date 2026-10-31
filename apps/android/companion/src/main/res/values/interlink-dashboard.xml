@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="interlink_pi_heading">YOUR PI</string>
+    <string name="interlink_pi_no_selection_title">Connect your photo Pi</string>
+    <string name="interlink_pi_no_selection">Choose your paired Pi</string>
+    <string name="interlink_pi_checking">Checking connection…</string>
+    <string name="interlink_pi_connected">Connected to your Pi</string>
+    <string name="interlink_pi_approval">Owner approval needed</string>
+    <string name="interlink_pi_unavailable">Pi connection unavailable</string>
+    <string name="interlink_pi_phone_unavailable">Phone connection unavailable</string>
+    <string name="interlink_pi_identity_changed">Pairing needs attention</string>
+    <string name="interlink_pi_unsupported">Pi controls need an update</string>
+    <string name="interlink_pi_saved_unavailable">Saved Pi needs attention</string>
+    <string name="interlink_pi_saved_title">Your saved Pi</string>
+    <string name="interlink_pi_saved_detail">Unlock this phone and refresh. If its saved choice is still unavailable, keep it for recovery before setting up another Pi.</string>
+    <string name="interlink_pi_pair_detail">Pair your Pi in photo links below, then choose it here. Choosing it does not grant control.</string>
+    <string name="interlink_pi_retained_detail">Your Pi choice is retained. Check both devices’ connections and Tailscale, then refresh.</string>
+    <string name="interlink_pi_connected_detail">This phone is approved for your Pi.</string>
+    <string name="interlink_pi_identity_detail">The saved identity no longer matches the pairing on this phone. Review the devices before choosing again.</string>
+    <string name="interlink_pi_approval_detail">Approve this phone as controller during setup on your Pi, then refresh. Sync pairing alone does not grant control.</string>
+    <string name="interlink_pi_unsupported_detail">This Pi does not provide compatible controls yet. Photo links remain available below.</string>
+    <string name="interlink_pi_sync_unavailable">The Pi is connected, but its photo sync service is unavailable.</string>
+    <string name="interlink_pi_sync_stopped">Photo sync service is stopped.</string>
+    <string name="interlink_pi_sync_scanning">The Pi is preparing photo sync.</string>
+    <string name="interlink_pi_sync_running">Photo sync service is running.</string>
+    <string name="interlink_pi_sync_stopping">The Pi is finishing a sync service change.</string>
+    <string name="interlink_pi_sync_attention">Photo sync on the Pi needs attention.</string>
+    <string name="interlink_pi_health_unknown">Fresh sync details are not available yet.</string>
+    <string name="interlink_pi_cloud_unknown">Google Photos backup status is not available here.</string>
+    <string name="interlink_pi_choose">Choose paired Pi</string>
+    <string name="interlink_pi_change">Change selected Pi</string>
+    <string name="interlink_pi_use">Use %1$s?</string>
+    <string name="interlink_pi_choose_detail">Compare this device fingerprint with your Pi. Interlink will remember its paired identity. Existing photo links stay in place; owner approval is still required for control.</string>
+    <string name="interlink_pi_remember">Remember this Pi</string>
+    <string name="interlink_pi_selection_failed">The Pi choice could not be saved. Refresh and choose again. Existing photo links stay in place.</string>
+</resources>

@@ -19,6 +19,13 @@ native cards and adaptive endpoints remain shared with Covalent.
 
 ## Captured implementation
 
+- `interlink-dashboard-light.png` / `interlink-dashboard-dark.png`: current
+  selected-Pi dashboard with synthetic approved status.
+- `interlink-dashboard-offline.png`: the same selected Pi retained while
+  connection status is unavailable.
+- `interlink-dashboard-large-actions.png`: the current dashboard at200%font,
+  scrolled to both accessible actions. Two actual native component tests cover
+  retained selection/stale-status removal and large-text action behavior.
 - `interlink-preview.svg` / `.png`: vector identity board.
 - `interlink-ui-preview.png`: native light-mode screen.
 - `interlink-ui-preview-dark.png`: native dark-mode screen.
@@ -29,6 +36,8 @@ The UI images were captured on one isolated API 36 ARM64 emulator, using the
 actual production theme/scaffold and folder components with synthetic saved,
 offline Pictures data. The visible example-data label belongs only to the debug
 `InterlinkPreviewActivity`. It has no counterpart in release sources.
+The earlier `interlink-ui-preview*` images retain the previous links-only design
+for comparison. Current dashboard behavior is in `docs/interlink-dashboard.md`.
 
 For this visual stage only, a temporary Gradle/manifest fixture used the separate
 `life.michaelwong.interlink.preview` identity and generic Android Application,

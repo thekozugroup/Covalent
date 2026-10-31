@@ -125,6 +125,7 @@ internal fun FolderSyncScreen(
     modifier: Modifier = Modifier,
     onProviderConnectionsChanged: suspend () -> Unit = {},
     photoAppliance: Boolean = false,
+    deviceHeader: (@Composable () -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val hostUnavailableMessage = stringResource(R.string.folder_sync_host_unavailable)
@@ -643,6 +644,7 @@ internal fun FolderSyncScreen(
             contentPadding = PaddingValues(20.dp, 14.dp, 20.dp, 28.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
+        deviceHeader?.let { header -> item(key = "appliance-dashboard") { header() } }
         item {
             Text(
                 if (photoAppliance) "Your photo links" else stringResource(R.string.folder_sync_title),

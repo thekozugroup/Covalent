@@ -2,9 +2,10 @@
 
 The controller bond gives one explicitly approved paired identity permission to
 read the appliance's redacted sync status. Ordinary sync pairing does not grant
-control. This is the first control capability, not the finished headless product:
-companion controls, local approval UI, remote settings and import confirmations
-remain to be implemented. The deployed GPhoto Pi0.2.3 does not speak this protocol.
+control. Interlink now uses it for a retained selected-Pi dashboard; see
+`docs/interlink-dashboard.md`. Local owner approval UI, remote settings and import
+confirmations remain to be implemented. The deployed GPhoto Pi0.2.3 does not
+speak this protocol.
 
 ## Owner approval and durable authority
 
@@ -76,8 +77,9 @@ unavailable. There is no remote mutating operation in this protocol version.
 
 The bond survives route changes because it contains identities, not addresses.
 Routing still uses Covalent's retained authenticated transport bindings; this
-API never trusts a discovered address or tailnet member automatically. Automatic
-LAN/Tailscale recovery, the companion's selected-Pi state and physical roaming
+API never trusts a discovered address or tailnet member automatically. The
+companion's selected-Pi state compares full paired identities and survives
+unavailable routes. Automatic LAN/Tailscale recovery and physical roaming
 remain separate acceptance requirements. The existing per-process replay window
 is suitable only for this read-only capability; future mutating operations need
 durable action identity, attachment/preview binding and interruption semantics.

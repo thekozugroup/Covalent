@@ -1,3 +1,64 @@
+# Interlink selected-Pi dashboard — 2026-10-31
+
+Interlink now calls the existing authenticated read-only controller/status APIs.
+An explicit choice stores the phone and Pi full paired keys, display name and
+last confirmed bond generation in credential-encrypted storage. Selection never
+silently chooses a discovered address, changes pairings or grants Pi authority.
+Confirmation rereads current full pairing; saved-choice CAS/readback prevents a
+late status from replacing a newer choice or publishing connected for it.
+Missing/damaged/future saved state never becomes empty setup. First run waits
+for explicit phone-node setup; disabled/offline/refused routes retain the Pi.
+
+The native header card distinguishes checking, connected, phone/Pi unavailable,
+owner approval, changed/revoked identity, unsupported control and saved-state
+attention. Pi service health is distinct from control reachability. No transfer
+completion or Google Photos backup/deletion claim is inferred. Visible polling
+is lifecycle-bound/serialized, with manual refresh, and installs no new service.
+Read bodies are bounded and refuse redirects; raw server messages stay out of UI.
+The existing photo-link setup remains below, with no migration/retarget of links.
+See docs/interlink-dashboard.md for the exact boundaries and remaining control work.
+
+Full Android JVM237/0 includes11 new control/selection tests. Two final native
+API36 Compose component tests pass on one unchanged emulator framework in4.496s:
+connection-loss/stale-running removal, service-unavailable separation and200%font
+reachable/disabled actions. Light/dark/unavailable/large-text actual previews use
+synthetic data and live canonically in docs/brand. The separate visual APK uses
+an isolated generic Application with native producers omitted; this establishes
+UI behavior, not real node startup/pairing, production signing or native release
+packaging. Normal package/producer gates remain unchanged. Frozen companion
+lintDebug has0 errors/11 existing warning categories. Foundation and OpenAPI
+coverage pass:59 runtime operations,433 references and122 client call sites.
+
+Initial lint attempts overlap source construction and fail in Kotlin FIR/UAST
+analysis. Full test-source compilation plus stable-source lint passes, including
+one final frozen-source run. The first emulator process terminates before boot
+because AVD manager registers inside task ANDROID_USER_HOME/avd. Pointing the
+same AVD launch at that observed registry boots normally. No observation timeout
+causes a restart. The successful guest boot/system_server/surfaceflinger identities
+stay unchanged through instrumentation and all captures. Failures and corrections
+are retained distinctly, not relabelled as passes.
+
+Prior697364c hostedCI41249267431 is terminal: Rust/contracts, Android foundation,
+dependency delta, Mac bundle and Mac integration/UI pass. Its full maintained-
+worker suite passes9/0, zero ignored/filtered, in1202.36s. API37 stops before
+instrumentation: dumpsys window has no SnapshotCache Task block, so the guest
+snapshot switch cannot be verified/called. Both container contracts pass before
+strict Caddy go-jose High scan refusal. These are open acceptance gates; no
+manual rerun, snapshot bypass, scan exemption or billing change is made.
+Rust/Cargo/Go inputs are unchanged by this Android-only feature. No fresh Rust/
+worker/native-device result is inferred; earlier qualified runtime evidence keeps
+its own exact source boundary.
+
+No phone/Pi access or production mutation. Preview/test packages, APKs and owned
+Interlink_Dashboard_36_32899 AVD/data/registration are removed. Emulator39248 and
+netsimd39284 exit normally; boot25d1cb29-8a64-4b85-b02d-fd0a6d853fad stays stable.
+CleanOS interlink-bonded-dashboard-1793487630376507000-32899-0 owns remaining
+compiler/log resources until closeout. Final evidence, source pin/readback and
+cleanup follow privately. Shared ADB76421/5037, SDKs/caches/source/keys, other
+active work and prior migration candidate stay protected. Goal remains active
+for Pi owner setup, privileged settings/import confirmation, route roaming,
+hosted/security/base gates, signed migration/rollback, cloud proof and gold image.
+
 # Safe destination changes and Interlink identity — 2026-10-31
 
 Destination changes now refuse retained unconfirmed-copy proof during consent
