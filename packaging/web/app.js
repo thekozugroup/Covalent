@@ -271,6 +271,10 @@
     ],
 
     // Request contract — this console and the node disagree
+    invalid_request: [
+      "Your backup server couldn't use this request. Reload this page, then try again.",
+      RECOVERY.none,
+    ],
     invalid_contract: [
       "This console and your backup server don't agree on how to talk to each other. Update both to the same version.",
       RECOVERY.none,

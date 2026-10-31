@@ -1,3 +1,20 @@
+# Console recovery request copy — 2026-10-31
+
+Hosted b195719 CI41243265310 passes foundation, formatting, strict clippy,
+full all-feature workspace tests and smoke, then refuses the missing console
+message for the new invalid_request code. Added a reload instruction to the
+existing authored error catalog. All92 console tests pass locally; the same
+existing coverage test fails on unchanged b195719 before the entry is added.
+This follow-up changes no Rust, API, worker, policy or authority byte. It is a
+console message fix, not a device/UI journey or production acceptance.
+
+Below records the runtime qualification. The first task is fully cleaned;
+small follow-up CleanOS gphoto-recovery-console-copy-1793482298507956000-85466-0
+owns console test logs/tmp and exact source-preparation checking until closeout.
+Final source pin, cleanup/evidence and PR readback are retained privately. No
+phone/Pi access or installation. Root-reset proof preservation, owner review,
+current hosted gates and the remaining PRD acceptance remain open.
+
 # Unconfirmed-copy isolation — 2026-10-31
 
 Hosted a7d5788 run41236588580 supplied a contrary collection witness: seven
@@ -23,9 +40,12 @@ never use root repair/reset as an unconfirmed-copy bypass.
 Final full node suite:325 passed. Dependency advisories, bans, licenses and
 sources pass. Android26 ARM64 node/JNI checking and foundation pass. Focused
 real-worker recovery/restart case passes and fails on a7d5788 as expected. Full
-nine-case concurrent transfer suite is running with original file deadlines and
-the real fifteen-minute schedule; final strict clippy is running. Current local
-collection case passes. Do not infer complete acceptance before the full result.
+nine-case concurrent transfer suite passes9/0,0 ignored/filtered in1180.77s, at
+two-test concurrency, original60s file deadlines and the real fifteen-minute
+schedule. Final strict clippy and actual receive-only Pi-adapted lib/native-entry
+check pass with exact8 modifications/4 generated files and two existing entry
+warnings. The48,709,632B owned source cache is independently removed. OpenAPI
+routes and pinned lint pass. No linked/signed bundle or device install is claimed.
 
 The same hosted run passes every named Covalent API37 instrumentation test
 (86 baseline plus the real SAF journey), then Interlink's separate permission
