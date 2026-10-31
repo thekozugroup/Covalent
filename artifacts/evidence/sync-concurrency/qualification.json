@@ -1,0 +1,314 @@
+{
+  "baseRevision": "1778cf95157fa0a47d7721569a5a6425a58b5a70",
+  "workerSourceTree": "9eec016c4843e1d82167cbb932e356ab030adb12",
+  "workerSha256": "f68c6ae032f8af37e4977197e581a67f45e1e67a0b22fe172e1f0ec7e5cb5d74",
+  "inputHashes": {
+    "apps/android/app/src/main/java/life/michaelwong/covalent/data/CovalentNodeClient.kt": "0a05aa5f6c7d96f8b500d14e8f5357c8f60f7a0b5e27a97dcd4598d483759ced",
+    "apps/android/app/src/main/java/life/michaelwong/covalent/data/FolderAcceptanceRetry.kt": "63554a0efb3a6b9aabc26e043d5fd58143fc2d0942ce9d4d9c0d264e117fe07e",
+    "apps/android/app/src/test/java/life/michaelwong/covalent/data/FolderAcceptanceRetryTest.kt": "9cdba637459d35ec01306c54459fcc87e1d2e46482abee6513e0c3aa6147b77f",
+    "crates/covalent-node/src/sync_engine/controller.rs": "44f532debe0b65746c0e8f9bb68476c06a7b1445b339dec860d05e6b9e54a8fd",
+    "crates/covalent-node/src/sync_engine/rclone.rs": "1d7133bab8d58bbf7fc1ee244b69bcb0cbb8cfbdce29d0321cf93102d6bab844",
+    "crates/covalent-node/src/sync_engine/service.rs": "6f4b7db307ae1247220cbc167b411dfc6a4503fbaa888443d71ed9a7a8de2d97",
+    "crates/covalent-node/src/sync_engine/service_tests.rs": "bfa409a36f8bec3054aa5251eeebfe43db6cff38b57e9c0cbe9582e5a7d06618",
+    "crates/covalent-node/tests/one_way_links.rs": "ea70b285cdf67a20ee27859cfc0da0cedaf75173162a343fa250c7359c97028c"
+  },
+  "checks": {
+    "receiver-node-all": {
+      "exitCode": 0,
+      "seconds": 122.46,
+      "logSha256": "e322d61b843b1f93220b9f93ed5d4c4591b2147713a7ea236af5b6845515228d"
+    },
+    "android-native-check": {
+      "exitCode": 0,
+      "seconds": 36.3,
+      "logSha256": "cc5c4780c37d508d301e362322c45d3257b8e536abf6a2f0051f63ea19a64f34"
+    },
+    "clippy": {
+      "exitCode": 0,
+      "seconds": 38.61,
+      "logSha256": "7b66c23d03b1258a19b875ae3cc83b0c283b216fa6800e0bc52704afc2813248"
+    },
+    "foundation": {
+      "exitCode": 0,
+      "seconds": 40.68,
+      "logSha256": "64b346dbf23b8358932d3db809098ed739dbb7c1c117201f5fd4b73b3eb6ec68"
+    },
+    "android-unit": {
+      "exitCode": 0,
+      "seconds": 44.81,
+      "logSha256": "f4f6c808b1bd9630613f030965fe74a09e58d039fd264f5aaca37635e4add0d6"
+    },
+    "receiver-paired": {
+      "exitCode": 101,
+      "seconds": 476.13,
+      "logSha256": "5221c5821bb7fd4b9c3ca896b4256e471471ffab9ce4bf1afd462d29b4a4ccdf"
+    },
+    "complete-worker-suite": {
+      "exitCode": 101,
+      "seconds": 1145.12,
+      "logSha256": "989bde8651c11ee587ae9a296f727aea39cf952705b155dcf0318e9e476d99c0"
+    },
+    "appliance-android-check": {
+      "exitCode": 0,
+      "seconds": 7.68,
+      "logSha256": "1e20dbc26915f71b552fd5432a71e6f6328074e3c52905c4495be77502a5e55b"
+    },
+    "android-instrumentation-compile": {
+      "exitCode": 0,
+      "seconds": 15.32,
+      "logSha256": "586e8790242f32c3faa21d035b0e82bb56552edc3a561eac7b171d283868e2d9"
+    }
+  },
+  "androidJvm": {
+    "tests": 223,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "settingsAndAcceptanceCases": [
+      {
+        "name": "inferredErrorDefaultsNeverAuthorizeReplay",
+        "passed": true
+      },
+      {
+        "name": "immediateSuccessDoesNotWait",
+        "passed": true
+      },
+      {
+        "name": "interruptionDuringBackoffPreservesCancellationAndSendsNothingElse",
+        "passed": true
+      },
+      {
+        "name": "persistentBusyReturnsTheLastRefusalAfterSixAttempts",
+        "passed": true
+      },
+      {
+        "name": "otherErrorsAreNotRetried",
+        "passed": true
+      },
+      {
+        "name": "uncertainTransportAndInvalidResponsesAreNeverReplayed",
+        "passed": true
+      },
+      {
+        "name": "alreadyInterruptedCallerNeverSendsAcceptance",
+        "passed": true
+      },
+      {
+        "name": "transientBusyCompletesOnceAfterBoundedBackoff",
+        "passed": true
+      },
+      {
+        "name": "settingsBusyReusesTheSameChangeAndStopsOnUncertainResponse",
+        "passed": true
+      }
+    ],
+    "scope": "Actual app debug JVM compilation/unit tests, normal non-native debug configuration; not APK/JNI packaging, dedicated companion build or device acceptance",
+    "reportHashes": {
+      "gradle-build/_app/test-results/testDebugUnitTest/TEST-life.michaelwong.covalent.data.DurableTransferJournalTest.xml": "4a8f2102df936ca8b5ef888aa33b7bb17c4cf31c7f11e8159487c6d997815f3d",
+      "gradle-build/_app/test-results/testDebugUnitTest/TEST-life.michaelwong.covalent.AndroidRemediationTest.xml": "18c904db7cc4543e606df32acfba562b2deeb09b5c508bc4de92344134079ecc",
+      "gradle-build/_app/test-results/testDebugUnitTest/TEST-life.michaelwong.covalent.SafArchiveContractTest.xml": "b5f279cf2f789c3fe20b4945bda0bedccc815b7e4effa27cba235e5b80a567e5",
+      "gradle-build/_app/test-results/testDebugUnitTest/TEST-life.michaelwong.covalent.sync.FolderSyncContractsTest.xml": "099349d12d3f1cea92818a7ae38d03bda4422ff33c66ce44290cdfa4548ec969",
+      "gradle-build/_app/test-results/testDebugUnitTest/TEST-life.michaelwong.covalent.AndroidCopyAndConfirmationTest.xml": "bf233cf82488007b0615e8d7ff00aec88e264b06782102732ba60d7ee996b37e",
+      "gradle-build/_app/test-results/testDebugUnitTest/TEST-life.michaelwong.covalent.sync.SafStrictQueryTest.xml": "556caeb9cc10ff988fd8cc080d30643c21a9cbd3bf0db9a560983c4bf10c1c0c",
+      "gradle-build/_app/test-results/testDebugUnitTest/TEST-life.michaelwong.covalent.ContractTest.xml": "6ae1aa11f0107922dcafd55be51edb68c45a003b024552155eaaa1a4051b597d",
+      "gradle-build/_app/test-results/testDebugUnitTest/TEST-life.michaelwong.covalent.sync.FolderSyncStatusReadTest.xml": "07d66d20a3a011ff2d459eb741b6e86e33ba20ae16cdb160d189ede0ed2eac6d",
+      "gradle-build/_app/test-results/testDebugUnitTest/TEST-life.michaelwong.covalent.sync.FolderLinkSettingsChangeStoreTest.xml": "44d2b4ea92c4133c8a4de708a9f265917f952ce73a4a7376b2a606cdb4fa51ef",
+      "gradle-build/_app/test-results/testDebugUnitTest/TEST-life.michaelwong.covalent.ui.FolderSyncPairingTest.xml": "b2a3f7bb9f68400af4a6ef2d8cbc57bbe8b202d1e14c41ca06a3dc7b96973385",
+      "gradle-build/_app/test-results/testDebugUnitTest/TEST-life.michaelwong.covalent.ui.OpenSourceNoticesTest.xml": "792a6f0a4af82defa995dc64025059f364386bcd9523f91f6d9b07767c01b906",
+      "gradle-build/_app/test-results/testDebugUnitTest/TEST-life.michaelwong.covalent.sync.FolderSyncGrantStoreTest.xml": "25753c85b38e6e9af014401ba0d5791900c24b539dce66d965517d9bba984475",
+      "gradle-build/_app/test-results/testDebugUnitTest/TEST-life.michaelwong.covalent.node.FolderSyncLifecycleContractTest.xml": "a5d481592ffdbe771cb3eb70388ee4f8e05515894f92703797e0f94e88264c59",
+      "gradle-build/_app/test-results/testDebugUnitTest/TEST-life.michaelwong.covalent.node.UserUnlockGateTest.xml": "94d45af7c44d7ade2af13b92f6723593a4f4264919cacf6213499113de6df46e",
+      "gradle-build/_app/test-results/testDebugUnitTest/TEST-life.michaelwong.covalent.node.PackagedSyncEngineTest.xml": "38de6e7028f8226556dc9947007d91dd25378a8bb6cd396cdf1b76b9da904555",
+      "gradle-build/_app/test-results/testDebugUnitTest/TEST-life.michaelwong.covalent.NodeErrorCodeCopyTest.xml": "c0ddbdb9a871198adc2687a99f76bfe85edf69bc4f5bb89919407ca951b33d31",
+      "gradle-build/_app/test-results/testDebugUnitTest/TEST-life.michaelwong.covalent.data.FolderAcceptanceRetryTest.xml": "91598b169d61a3441d143aa526bdf718b6f7e5864ba8f05f48deee2b8ffd8460",
+      "gradle-build/_app/test-results/testDebugUnitTest/TEST-life.michaelwong.covalent.node.AndroidConditionFeedTest.xml": "701ff8a560653d200eee44a2f137efc4ed9838a5d2ffc88c4807853a039985f2",
+      "gradle-build/_app/test-results/testDebugUnitTest/TEST-life.michaelwong.covalent.ProductUXContractTest.xml": "4d80ade8db84ea10ae40df26009a8ab152108c1bfce8b39484a4b7254b9df5c3",
+      "gradle-build/_app/test-results/testDebugUnitTest/TEST-life.michaelwong.covalent.node.PeerRouteTest.xml": "7f667a83ef7f4d2ad95fc09b1fc0d60a61ea82b1461dc8ab0406751730b8af5d",
+      "gradle-build/_app/test-results/testDebugUnitTest/TEST-life.michaelwong.covalent.sync.PeerAddressUpdateTest.xml": "8b31f51ea4fbea52454f8e04f46b8944010bb72d1982ccd3c73100e2ce0a4fa8",
+      "gradle-build/_app/test-results/testDebugUnitTest/TEST-life.michaelwong.covalent.RecoveryContractTest.xml": "fb1f92226339d742e7848ca07f87e6da1d36a61fc771ee4a205196edd6596cea",
+      "gradle-build/_app/test-results/testDebugUnitTest/TEST-life.michaelwong.covalent.sync.FolderSyncActionsTest.xml": "36224006a3d110907cd968b751f19c4ea675fa784ae13da7ae09019c13ce585d",
+      "gradle-build/_app/test-results/testDebugUnitTest/TEST-life.michaelwong.covalent.DirectBootContractTest.xml": "f22d77ff0e13b956dd441fc82d32b9290caf856ca0c8aaa3cc0892b8ca4f5c9e",
+      "gradle-build/_app/test-results/testDebugUnitTest/TEST-life.michaelwong.covalent.sync.FolderSyncClientTest.xml": "b66df421e7b963f9be7fb93cac4a1205ae5e88af3a212aa548efc7434b2d9c38",
+      "gradle-build/_app/test-results/testDebugUnitTest/TEST-life.michaelwong.covalent.KeyProtectionContractTest.xml": "4e55d1c2e66dc2bb131195f55d73f2210245c9e16ba818c00b0987852399d112",
+      "gradle-build/_app/test-results/testDebugUnitTest/TEST-life.michaelwong.covalent.SafFailureAndSchedulerTest.xml": "04b013b83e01f29b31699f3d7c88b519189a896edac2f4af368e12d406886852"
+    }
+  },
+  "baselineTiming": {
+    "sourceRevision": "1778cf95157fa0a47d7721569a5a6425a58b5a70",
+    "traceLogSha256": "db732c1a25a3d6cd30a6ceb9deb509c48f83d054cb7f753322470e66d107b3f7",
+    "result": "1 passed, 1 failed, 5 filtered; collection failed despite late delivery; three-node case passed. Original failed result preserved.",
+    "completedWaits": [
+      {
+        "checkpoint": "initial transfer to destination A",
+        "milliseconds": 26807
+      },
+      {
+        "checkpoint": "initial transfer to destination B",
+        "milliseconds": 0
+      },
+      {
+        "checkpoint": "isolated collection transfer",
+        "milliseconds": 28799
+      },
+      {
+        "checkpoint": "isolated collection transfer",
+        "milliseconds": 0
+      },
+      {
+        "checkpoint": "isolated collection transfer",
+        "milliseconds": 0
+      },
+      {
+        "checkpoint": "isolated collection transfer",
+        "milliseconds": 0
+      },
+      {
+        "checkpoint": "destination A barrier after its local write",
+        "milliseconds": 55027
+      },
+      {
+        "checkpoint": "destination B barrier after destination A local write",
+        "milliseconds": 0
+      },
+      {
+        "checkpoint": "healthy collection link while another source is unavailable",
+        "milliseconds": 54534
+      },
+      {
+        "checkpoint": "local-deletion seed at destination A",
+        "milliseconds": 51981
+      },
+      {
+        "checkpoint": "local-deletion seed at destination B",
+        "milliseconds": 0
+      },
+      {
+        "checkpoint": "source edit at destination B",
+        "milliseconds": 47635
+      },
+      {
+        "checkpoint": "destination A barrier after source edit",
+        "milliseconds": 2637
+      },
+      {
+        "checkpoint": "kept-copy seed at destination A",
+        "milliseconds": 50058
+      },
+      {
+        "checkpoint": "kept-copy seed at destination B",
+        "milliseconds": 0
+      },
+      {
+        "checkpoint": "destination A barrier after kept source deletion",
+        "milliseconds": 45128
+      },
+      {
+        "checkpoint": "destination B barrier after kept source deletion",
+        "milliseconds": 0
+      },
+      {
+        "checkpoint": "propagated-deletion seed at destination A",
+        "milliseconds": 40477
+      },
+      {
+        "checkpoint": "propagated-deletion seed at destination B",
+        "milliseconds": 0
+      },
+      {
+        "checkpoint": "destination A barrier after propagated deletion",
+        "milliseconds": 50311
+      },
+      {
+        "checkpoint": "destination B barrier after propagated deletion",
+        "milliseconds": 0
+      },
+      {
+        "checkpoint": "restore seed at destination A",
+        "milliseconds": 59990
+      },
+      {
+        "checkpoint": "restore seed at destination B",
+        "milliseconds": 0
+      },
+      {
+        "checkpoint": "online destination while another destination is offline",
+        "milliseconds": 17292
+      }
+    ],
+    "lateArrivals": [
+      {
+        "checkpoint": "source resumes after its original mount returns",
+        "arrived": true,
+        "milliseconds": 60876
+      }
+    ],
+    "commandSamples": 206,
+    "medianCommandMilliseconds": 1216,
+    "diagnosisScope": "Completed jobs wait for five-second health probes and additional continuous-batch cycles. This establishes avoidable latency; it does not establish corruption, permanent deadlock or a Google Photos property.",
+    "sourceInstrumentationRestored": true
+  },
+  "openBoundaries": [
+    "Source/destination batch coupling and concurrent collection timing",
+    "Actual Android Manual Run Now/admission and device acceptance",
+    "Container Caddy high-severity dependencies",
+    "Safe production migration, linked/signed updates, cloud evidence and gold-image cold boot"
+  ],
+  "functionalRevision": "53d1004147ccee0ebcdfb4076455d8cd0f27bd89",
+  "scope": "Draft software progress; no source-wide/physical/cloud/update/gold acceptance.",
+  "integration": {
+    "fullSuite": {
+      "passed": 6,
+      "failed": 1,
+      "ignored": 0,
+      "filtered": 0,
+      "failure": "collection deletion barrier",
+      "scheduled": "Actual fifteen-minute source due time; transfer verified15143ms after due, workers stopped."
+    },
+    "paired": {
+      "passed": 1,
+      "failed": 1,
+      "filtered": 5,
+      "collection": "Remount and permission-loss recovery pass together with three-node test; remount27594ms.",
+      "failure": "Online destination cannot refresh a stale source inventory while an offline destination holds that folder batch pending."
+    },
+    "conclusion": "Unresolved counterexamples remain authoritative even when the same scenario passes in another run. No file-deadline increase, serial-only acceptance, journal erasure or force-completion."
+  },
+  "piAdaptation": {
+    "revision": "53d1004147ccee0ebcdfb4076455d8cd0f27bd89",
+    "android26Arm64LibAndEntryChecked": true,
+    "warnings": [
+      "Generated destinations::ready and destinations::choose remain unused"
+    ],
+    "linkedProductionBundle": false
+  },
+  "androidJourneyDiagnostics": {
+    "previousHead": "1778cf95157fa0a47d7721569a5a6425a58b5a70",
+    "observed": "Baseline86 instrumentation tests pass; real SAF public Manual Run Now times out with both run generations0 and no pending request. Cause unproven; this differs from the older missing-service failure.",
+    "newInstrumentation": "Counts/booleans/revisions/exception classes for saved request and run-button state; compiled, not executed locally. No UI/grant/credential dump.",
+    "sourceSha256": "52c441cb633457c29fe109fa74bbce489fbac0d62c58533e8e612b9053ad4d76"
+  },
+  "containerSecurity": {
+    "run": 41228352491,
+    "head": "1778cf95157fa0a47d7721569a5a6425a58b5a70",
+    "checkoutMerge": "c30f7f80a555fcdbc4d2c4b0afda55ff42b95d99",
+    "imageBuildAndPackageContracts": "Passed; prior source/reference drift repaired.",
+    "highMatches": [
+      {
+        "id": "GHSA-mgcc-cww5-fp2q",
+        "module": "github.com/go-jose/go-jose/v3",
+        "version": "v3.0.5",
+        "path": "/usr/local/bin/caddy",
+        "fixedVersion": null
+      },
+      {
+        "id": "GHSA-mgcc-cww5-fp2q",
+        "module": "github.com/go-jose/go-jose/v4",
+        "version": "v4.1.4",
+        "path": "/usr/local/bin/caddy",
+        "fixedVersion": "4.1.6"
+      }
+    ],
+    "advisory": "https://github.com/go-jose/go-jose/security/advisories/GHSA-mgcc-cww5-fp2q",
+    "scope": "Independent container release gate; no dismissal or claim that this is the Pi worker."
+  }
+}

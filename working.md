@@ -1,3 +1,54 @@
+# Receiver-copy progress and remaining batch stalls — 2026-10-31
+
+Functional source53d1004147ccee0ebcdfb4076455d8cd0f27bd89 preserves unchanged
+receiving jobs across destination-only configuration/generation updates, holding
+their exact runtime/root/SAF/worker leases. Active root, peer, policy or generation
+changes retain the stop boundary; source authorization still replaces its
+read-only SFTP server. Finished work wakes the existing service without starving
+independent health probes. Active jobs own atomic policy staging; every fresh
+copy retains strict policy validation. SAF reservations unwind on prepare errors,
+avoid double counting within a runtime and remain counted across overlapping
+runtimes. No new dependency, process or persistent schema is introduced.
+
+Android settings reuses the exact request/change ID only after an explicitly
+typed retryable503 busy refusal, with bounded backoff. Unknown responses are not
+replayed. Harness acceptance/settings uses that same protocol contract; original
+file deadlines/concurrency remain.316 node tests,223 actual Android JVM tests,
+full all-target/all-feature clippy, foundation, Android26 ARM64 production node/
+JNI and the actual Pi adaptation library/native-entry check pass. No APK or
+production bundle is linked/installed as acceptance; generated-entry warnings
+remain. Worker tree9eec016c4843e1d82167cbb932e356ab030adb12 and Mac workerf68c6ae
+are unchanged from the qualified worker refresh.
+
+Full seven-case worker run:6 pass,1 fail (collection deletion barrier),0 ignored,
+0 filtered. Real15minute scheduled transfer and natural worker shutdown pass.
+A separate paired run passes collection/remount/permission recovery but fails
+online fanout after the other destination stops. That contrary witness remains
+open even though fanout passes in the complete run. The source owns one active
+folder batch: stale-index failure at an online destination cannot get a fresh
+inventory while another destination stays pending. No journal erase, forced peer
+completion, longer file deadline or serial-only acceptance is used. The first
+wake-only candidate also exposed an unrelated-copy restart and retryable-busy
+fixture failure; its already-failed remainder was explicitly cancelled, not
+claimed passed. Temporary timing traces are fully removed. Baseline remount
+arrived at60876ms after a60000ms deadline; it remains failed.
+
+Prior hosted CI41228352491 on1778cf9 builds/validates both container packages,
+then strict Grype rejects go-josev3.0.5/v4.1.4 in Caddy for GHSA-mgcc-cww5-fp2q.
+No suppression or source-provenance weakening. API37 passes86 baseline tests,
+then the actual SAF Manual Run Now journey fails with both nodes at generation0
+and no pending request. This differs from the older missing-service error.
+New bounded saved-request/button-state diagnostics compile; no local device
+execution or assumed click-race fix is claimed. See docs/sync-runtime-progress.md
+and artifacts/evidence/sync-concurrency/ for exact scope and remaining work.
+
+No phone/Pi access, production installation, media/account/pairing mutation,
+merge, signed release or gold-image claim. Solstice stays outside this work.
+Next: isolate source fanout generations without disturbing pending writers;
+resolve concurrent collection timing and Android manual admission; fix Caddy's
+separate container gate; then continue companion owner/import controls and
+hardware/migration/cloud/gold acceptance. Preserve old journals and originals.
+
 # Maintained worker and concurrent-sync qualification — 2026-10-31
 
 Updated chi5.3.1→5.4.0 and x/net0.60→0.62 (MVS crypto0.58 plus
