@@ -512,6 +512,15 @@ paths:
         Rebinds one existing live share to a newly selected local directory.
         This does not change the signed invitation, peer, folder identifier,
         pause state, or user files. A worker is reaped before an active repair.
+        A destination change is refused with non-retryable
+        folder_sync_recovery_required while recorded unconfirmed writes need
+        review. Consent preflight, commit and the actual policy reset each
+        check this boundary. Renewing the same root preserves its records.
+        That specific refusal guarantees the proposed root was not committed.
+        A previously committed reset that now needs review returns the existing
+        folder_sync_needs_attention error and retains its saved reset intent.
+        An unreadable policy also refuses reset; this operation never approves
+        overwrite, journal clearing or cloud-backup cleanup.
       requestBody:
         required: true
         content:

@@ -55,17 +55,34 @@ consent or the absence of untracked files.
 An authenticated companion review screen and explicit resolution protocol are
 still required. This endpoint cannot approve overwrite, deletion, adoption or
 Google Photos cleanup. A transfer receipt is never cloud-backup confirmation.
-The existing explicit destination-root replacement resets that folder's policy.
-Preserving held evidence or refusing that reset still needs implementation and
-acceptance before production installation. Do not retarget/reset a link to clear
-a hold. This draft is not a production migration or rollback candidate.
+Explicit destination-root replacement refuses recorded unconfirmed writes before
+changing consent, again after the owned worker exits, and at the actual policy
+reset. A late refusal resumes the unchanged configuration where possible. The
+existing folder capability can be renewed without clearing held records. An
+unreadable policy also refuses reset; opening a writerless FIFO cannot block the
+metadata reader. Confirmed ownership can still permit a scoped reset without
+erasing another folder's independent proof.
+
+The local API returns `409 folder_sync_recovery_required` with explicit
+`retryable: false` only when the proposed root was not committed. Android drops
+only the matching pending proposal after that exact version-1 contract, saving
+the acknowledged original choice durably. Reopen then cannot replay the refused
+proposal or unnecessarily block startup. Network failures, unknown contracts,
+failed local saves and an already-committed reset retain the exact saved intent.
+An already-committed reset needing review uses the existing
+`folder_sync_needs_attention` refusal. Never infer pre-commit rejection from a
+generic conflict or non-retryable flag alone.
+
+Do not retarget/reset a link to clear a hold. Explicit owner review/resolution,
+production migration and signed rollback acceptance remain unfinished.
 
 ## Verification scope
 
 The real-worker regression suppresses one completion acknowledgement after an
 actual copy, preserves that destination original after a source deletion, adds
 a second independent local-file collision, then delivers unrelated new files
-before and after both nodes restart. It checks exact admitted proof retention,
+before and after both nodes restart. It checks root-change refusal, exact
+admitted proof retention,
 lack of false ownership, incomplete run status and redacted recovery counts.
 The old implementation fails at the first unrelated-file delivery deadline.
 Original 60-second file deadlines remain in force.
@@ -75,3 +92,5 @@ old-reader refusal, bounded metadata reads, authentication, query rejection,
 unavailable observations, lifecycle-lock isolation and preservation after share
 removal. They do not establish real Pi boot, phone roaming, external storage or
 camera import, production migration, Google Photos confirmation or safe cleanup.
+Android JVM tests cover exact refused-proposal persistence and reopen, stale
+choices, failed saves, explicit retry contracts and uncertain startup replay.

@@ -4,6 +4,7 @@ import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import life.michaelwong.covalent.data.NodeApiException
 import life.michaelwong.covalent.model.FolderHealthFreshness
 import life.michaelwong.covalent.model.FolderShare
 import life.michaelwong.covalent.model.FolderLinkPolicy
@@ -147,6 +148,56 @@ class FolderSyncActionsTest {
             listOf("validate-root", "prepare-repair", "node", "api-repair", "finish-repair", "restart"),
             events,
         )
+    }
+
+    @Test
+    fun definitivePrecommitRefusalKeepsOldRootAndDoesNotReplayAfterReopen() {
+        val events = mutableListOf<String>()
+        val disk = MemoryPersistence()
+        val grants = FolderSyncGrantStore(disk)
+        grants.prepareAcceptance(OFFER, OLD_ROOT)
+        val refusal = NodeApiException(409, 1, "folder_sync_recovery_required", false,
+            "Review required", hasExplicitRetryContract = true)
+        val api = RecordingApi(events, repairError = refusal)
+        assertEquals(refusal, assertThrows(NodeApiException::class.java) {
+            actions(events, grants, api).repair(OFFER, NEW_ROOT)
+        })
+        val reopened = FolderSyncGrantStore(disk)
+        assertFalse(reopened.hasPendingCapabilityChange())
+        assertEquals(OLD_ROOT, reopened.records().single().root)
+        assertFalse(events.contains("restart"))
+        assertTrue(actions(events, reopened, api).replayPendingCapabilityChanges())
+        assertEquals(1, api.repairs.size)
+    }
+
+    @Test
+    fun replayClearsOnlyDefinitiveRefusalsAndPreservesUnknownOrFailedSaveOutcomes() {
+        val definitive = NodeApiException(409, 1, "folder_sync_recovery_required", false,
+            "Review required", hasExplicitRetryContract = true)
+        val outcomes = listOf(
+            definitive to false,
+            definitive to true,
+            NodeApiException(409, 1, definitive.code, false, "Legacy response") to false,
+            NodeApiException(409, 1, definitive.code, true, "Retry", hasExplicitRetryContract = true) to false,
+            NodeApiException(503, 1, definitive.code, false, "Unavailable", hasExplicitRetryContract = true) to false,
+            NodeApiException(409, 2, definitive.code, false, "Future protocol", hasExplicitRetryContract = true) to false,
+            NodeApiException(409, 1, "folder_sync_needs_attention", false, "Uncertain", hasExplicitRetryContract = true) to false,
+        )
+        outcomes.forEachIndexed { index, (failure, failSave) ->
+            val events = mutableListOf<String>()
+            val disk = MemoryPersistence()
+            val grants = FolderSyncGrantStore(disk)
+            grants.prepareAcceptance(OFFER, OLD_ROOT)
+            grants.prepareRepair(OFFER, NEW_ROOT)
+            disk.failWrites = failSave
+            val startup = actions(events, grants, RecordingApi(events, repairError = failure))
+            assertEquals(index == 0, startup.replayPendingCapabilityChanges())
+            val reopened = FolderSyncGrantStore(disk)
+            assertEquals(index != 0, reopened.hasPendingCapabilityChange())
+            assertEquals(OLD_ROOT, reopened.records().single().root)
+            assertEquals(if (index == 0) null else NEW_ROOT, reopened.pendingRepairRoot(OFFER))
+            assertFalse(events.contains("restart"))
+        }
     }
 
     @Test
@@ -467,6 +518,11 @@ class FolderSyncActionsTest {
             pendingRepair = null
         }
         override fun pendingRepairRoot(offerId: String): String? = pendingRepair
+        override fun rejectRepair(offerId: String, root: String) {
+            events += "reject-repair"
+            check(pendingRepair == root)
+            pendingRepair = null
+        }
         override fun prepareRemoval(offerId: String) {
             events += "prepare-remove"
             removalPending = true
@@ -486,6 +542,7 @@ class FolderSyncActionsTest {
         private val events: MutableList<String>,
         private val failAccept: Boolean = false,
         private val failRepair: Boolean = false,
+        private val repairError: NodeApiException? = null,
         private val responseOffer: String = OFFER,
         private val responseStatus: FolderSyncStatus = STATUS,
         private val addressResponseOffer: String? = null,
@@ -563,6 +620,7 @@ class FolderSyncActionsTest {
             events += "api-repair"
             repairs += Triple(connection, offerId, selectedRoot)
             if (failRepair) error("network failure")
+            repairError?.let { throw it }
             beforeRepairReply()
             return mutation(responseOffer)
         }

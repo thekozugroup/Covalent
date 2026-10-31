@@ -30,6 +30,9 @@ const MAX_POLICY_BYTES: u64 = 64 * 1024 * 1024;
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 const MAX_UNRESOLVED_TRANSFERS: usize = 512;
 const MAX_RECOVERY_READ_BYTES: u64 = 8 * 1024 * 1024;
+const POLICY_READ_FLAGS: i32 = rustix::fs::OFlags::NOFOLLOW.bits() as i32
+    | rustix::fs::OFlags::CLOEXEC.bits() as i32
+    | rustix::fs::OFlags::NONBLOCK.bits() as i32;
 
 /// Persisted uncertainty only; this never establishes cloud backup or consent.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -791,10 +794,7 @@ impl RcloneRuntime {
     }
 
     pub(super) fn reset_folder(&self, folder_id: Uuid) -> Result<(), EngineSessionError> {
-        let (policy_path, policy_staged) = policy_paths(&self.policy_directory, folder_id);
-        let mut policy = load_policy(&policy_path, &policy_staged)?;
-        policy.folders.remove(&folder_id);
-        save_policy(&policy_path, &policy_staged, &policy)
+        reset_folder_policy(&self.policy_directory, folder_id)
     }
 
     fn destination_source(
@@ -1734,6 +1734,44 @@ fn policy_paths(directory: &Path, folder_id: Uuid) -> (PathBuf, PathBuf) {
     )
 }
 
+pub(super) fn ensure_folder_reset_safe(
+    installation: &EngineInstallation,
+    folder_id: Uuid,
+) -> Result<(), EngineSessionError> {
+    let directory = installation
+        .database_directory()
+        .map_err(|_| EngineSessionError::RuntimeUnavailable)?;
+    let (path, staged) = policy_paths(&directory, folder_id);
+    require_policy_reset_safe(&load_policy(&path, &staged)?, folder_id)
+}
+
+fn require_policy_reset_safe(
+    policy: &PolicyState,
+    folder_id: Uuid,
+) -> Result<(), EngineSessionError> {
+    let Some(state) = policy.folders.get(&folder_id) else {
+        return if policy.folders.is_empty() {
+            Ok(())
+        } else {
+            Err(EngineSessionError::RuntimeUnavailable)
+        };
+    };
+    if unconfirmed_counts(state, false)?.0 != 0 {
+        return Err(EngineSessionError::PendingCopyRecoveryRequired);
+    }
+    Ok(())
+}
+
+fn reset_folder_policy(directory: &Path, folder_id: Uuid) -> Result<(), EngineSessionError> {
+    let (path, staged) = policy_paths(directory, folder_id);
+    let mut policy = load_policy(&path, &staged)?;
+    // Recheck after worker reap, even if consent preflight observed no hold.
+    // A completed flag alone never establishes ownership of a pending write.
+    require_policy_reset_safe(&policy, folder_id)?;
+    policy.folders.remove(&folder_id);
+    save_policy(&path, &staged, &policy)
+}
+
 fn load_policy(path: &Path, staged: &Path) -> Result<PolicyState, EngineSessionError> {
     load_policy_counted(path, staged, MAX_POLICY_BYTES).0
 }
@@ -1750,9 +1788,7 @@ fn load_policy_counted(
         }
         let file = match OpenOptions::new()
             .read(true)
-            .custom_flags(
-                (rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::CLOEXEC).bits() as i32,
-            )
+            .custom_flags(POLICY_READ_FLAGS)
             .open(path)
         {
             Ok(file) => file,
@@ -2260,6 +2296,108 @@ mod tests {
             suppressions: BTreeSet::new(),
             propagate_source_deletions: true,
         }
+    }
+
+    #[test]
+    fn policy_reset_preserves_uncertain_proof_even_with_a_completed_flag() {
+        let directory = tempfile::tempdir().unwrap();
+        let folder = Uuid::new_v4();
+        let other = Uuid::new_v4();
+        let (path, staged) = policy_paths(directory.path(), folder);
+        let pending = uncertain_fixture("unknown.jpg");
+        let other_state = FolderPolicyState {
+            unresolved: vec![uncertain_fixture("other-original.jpg")],
+            ..Default::default()
+        };
+        for unresolved in [true, false] {
+            for completed in [true, false] {
+                let mut state = FolderPolicyState {
+                    copy_completed: completed,
+                    ..Default::default()
+                };
+                if unresolved {
+                    state.unresolved.push(pending.clone());
+                } else {
+                    state.pending = Some(pending.clone());
+                }
+                save_policy(
+                    &path,
+                    &staged,
+                    &PolicyState {
+                        version: 1,
+                        folders: BTreeMap::from([(folder, state), (other, other_state.clone())]),
+                    },
+                )
+                .unwrap();
+                let before = fs::read(&path).unwrap();
+                assert_eq!(
+                    reset_folder_policy(directory.path(), folder),
+                    Err(EngineSessionError::PendingCopyRecoveryRequired)
+                );
+                assert_eq!(fs::read(&path).unwrap(), before);
+                assert!(!staged.exists());
+            }
+        }
+        // Confirmed ownership permits a scoped reset without erasing another
+        // folder's independent held proof or treating it as our authority.
+        let owned = FolderPolicyState {
+            owned: pending.allowed.clone(),
+            delivered: pending.source.clone(),
+            pending: Some(pending),
+            ..Default::default()
+        };
+        save_policy(
+            &path,
+            &staged,
+            &PolicyState {
+                version: 1,
+                folders: BTreeMap::from([(folder, owned), (other, other_state.clone())]),
+            },
+        )
+        .unwrap();
+        reset_folder_policy(directory.path(), folder).unwrap();
+        let after = load_policy(&path, &staged).unwrap();
+        assert!(!after.folders.contains_key(&folder));
+        assert_eq!(after.folders[&other].unresolved, other_state.unresolved);
+        let before = fs::read(&path).unwrap();
+        assert_eq!(
+            reset_folder_policy(directory.path(), folder),
+            Err(EngineSessionError::RuntimeUnavailable)
+        );
+        assert_eq!(fs::read(&path).unwrap(), before);
+    }
+
+    #[test]
+    fn policy_fifo_is_refused_without_waiting_for_a_writer() {
+        use std::os::unix::fs::FileTypeExt as _;
+        // Check the production open flags before opening a writerless FIFO,
+        // so a missing NONBLOCK fails this test instead of hanging the suite.
+        assert_ne!(
+            POLICY_READ_FLAGS & rustix::fs::OFlags::NONBLOCK.bits() as i32,
+            0
+        );
+        let directory = tempfile::tempdir().unwrap();
+        let folder = Uuid::new_v4();
+        let (path, staged) = policy_paths(directory.path(), folder);
+        assert!(
+            std::process::Command::new("mkfifo")
+                .arg("-m")
+                .arg("600")
+                .arg(&path)
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert_eq!(
+            load_policy(&path, &staged).unwrap_err(),
+            EngineSessionError::RuntimeUnavailable
+        );
+        assert_eq!(
+            reset_folder_policy(directory.path(), folder),
+            Err(EngineSessionError::RuntimeUnavailable)
+        );
+        assert!(fs::symlink_metadata(&path).unwrap().file_type().is_fifo());
+        assert!(!staged.exists());
     }
 
     #[test]

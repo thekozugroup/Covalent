@@ -1453,6 +1453,15 @@ async fn status_without_display_names(
 #[cfg(unix)]
 pub(crate) fn service_error(error: crate::sync_engine::FolderSyncServiceError) -> ApiError {
     use crate::sync_engine::FolderSyncServiceError;
+    if error == FolderSyncServiceError::RecoveryRequired {
+        return ApiError {
+            status: StatusCode::CONFLICT,
+            code: "folder_sync_recovery_required",
+            message: "Some files need review before this folder can change. Keep the current folder until the review is complete.",
+            retryable: false,
+            upload_offset: None,
+        };
+    }
     if matches!(
         error,
         FolderSyncServiceError::SettingsConflict | FolderSyncServiceError::SettingsPending
@@ -1521,8 +1530,14 @@ pub(crate) fn service_error(error: crate::sync_engine::FolderSyncServiceError) -
 }
 
 #[cfg(unix)]
-fn sharing_error(_: crate::sync_engine::SharingError) -> ApiError {
-    service_error(crate::sync_engine::FolderSyncServiceError::Journal)
+fn sharing_error(error: crate::sync_engine::SharingError) -> ApiError {
+    service_error(
+        if error == crate::sync_engine::SharingError::RecoveryRequired {
+            crate::sync_engine::FolderSyncServiceError::RecoveryRequired
+        } else {
+            crate::sync_engine::FolderSyncServiceError::Journal
+        },
+    )
 }
 
 #[cfg(unix)]

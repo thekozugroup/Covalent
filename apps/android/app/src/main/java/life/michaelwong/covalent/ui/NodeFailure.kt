@@ -87,6 +87,7 @@ internal fun nodeErrorCodeMessageRes(code: String): Int? = when (code) {
     "folder_sync_unavailable" -> R.string.node_error_folder_sync_unavailable
     "folder_sync_busy" -> R.string.node_error_folder_sync_busy
     "folder_sync_needs_attention" -> R.string.node_error_folder_sync_needs_attention
+    "folder_sync_recovery_required" -> R.string.node_error_folder_sync_recovery_required
     "link_settings_pending" -> R.string.folder_link_settings_pending_error
     "link_settings_conflict" -> R.string.folder_link_settings_conflict_error
     "link_run_pending" -> R.string.folder_link_run_pending_error
@@ -137,6 +138,7 @@ internal fun nodeErrorCodeMessageRes(code: String): Int? = when (code) {
     "invalid_provider_address" -> R.string.node_error_invalid_provider_address
     "invalid_contract" -> R.string.node_error_invalid_contract
     "invalid_json" -> R.string.node_error_invalid_json
+    "invalid_request" -> R.string.node_error_invalid_request
     "invalid_content_type" -> R.string.node_error_invalid_content_type
     "method_not_allowed" -> R.string.node_error_method_not_allowed
     "route_not_found" -> R.string.node_error_route_not_found

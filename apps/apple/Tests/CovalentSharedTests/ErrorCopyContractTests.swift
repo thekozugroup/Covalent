@@ -126,7 +126,7 @@ import Testing
             unmapped.isEmpty,
             "These codes fall through to status-shaped copy instead of being authored: \(unmapped)"
         )
-        #expect(Self.engineErrorCodes.count == 77, "The reference set changed; reconcile it deliberately.")
+        #expect(Self.engineErrorCodes.count == 79, "The reference set changed; reconcile it deliberately.")
     }
 
     /// Negative control for the mapping probe: a code that is definitely not
@@ -264,6 +264,8 @@ import Testing
             "folder_sync_unavailable",
             "folder_sync_busy",
             "folder_sync_needs_attention",
+            "folder_sync_recovery_required",
+            "invalid_request",
             "link_run_pending",
             "link_run_conflict",
             "link_settings_pending",
@@ -392,6 +394,8 @@ import Testing
         "duplicate_archive_entry",
         "folder_sync_busy",
         "folder_sync_needs_attention",
+        "folder_sync_recovery_required",
+        "invalid_request",
         "folder_sync_unavailable",
         "insufficient_storage",
         "internal_error",

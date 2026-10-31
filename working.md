@@ -1,3 +1,61 @@
+# Safe destination changes and Interlink identity — 2026-10-31
+
+Destination changes now refuse retained unconfirmed-copy proof during consent
+preflight, after exact worker reap and at actual policy reset. Renewing the same
+root keeps the evidence. A late pre-commit refusal reconciles unchanged consent
+instead of unnecessarily leaving that configuration stopped. Private policy
+opens are nonblocking and reject writerless FIFOs. This grants no overwrite,
+adoption, cloud confirmation or deletion authority.
+
+The specific 409 folder_sync_recovery_required contract guarantees the proposed
+root was never committed. Android durably drops only the matching proposal on
+that explicit protocol1/nonretryable response; uncertain outcomes, old contracts,
+failed saves and already-committed reset intents remain replayable. Root guards
+preserve policy bytes, original media and other folders' proof. Owner review
+and explicit resolution are still unfinished.
+
+Interlink now has its own vector link mark, adaptive/themed icons, native
+MaterialExpressiveTheme/MotionScheme, coherent older-Android light/dark roles,
+dynamic colours on Android12+, and a serif wordmark without Back. Actual native
+light/dark/200%-font previews use synthetic saved/offline Pictures data and are
+retained canonically in docs/brand. This visual-only fixture omits native
+producers under a temporary manifest/application identity; it is not runtime,
+pairing, production signing or release-package acceptance. Normal companion
+producer/package gates remain intact. Shared notification branding remains
+future work; see docs/brand/README.md for scope and official design references.
+
+Final node331/0, Android JVM226/0, Swift error-copy14/0, console92/0, denied-warning
+workspace/all-target/all-feature clippy, Android26 ARM64 node/JNI, foundation and
+OpenAPI route checks pass. Companion lintDebug has0 errors/11 warnings (dependency,
+obsolete-SDK and unused-resource notices). The root regression fails unchanged
+2e5dc0a at its intended safety assertion. The real-worker acknowledgement-loss/
+collision/root-refusal/restart case passes on the final runtime in42.20s.
+An earlier full nine-case guard run passes9/0 in1179.69s. The final full nine-case
+run is still executing at this commit after the added precommit/committed-reset
+distinction and explicit-busy setup fix; its terminal source-bound receipt will
+be retained with the appliance audit and PR metadata. Original60s file assertions,
+two-test concurrency and the real15minute scheduled transfer remain unchanged.
+
+Hosted 2e5dc0a CI41244102155 is terminal: worker8/1 fails an explicitly retryable
+503 on POST /sync/folders, so the test setup now uses the existing bounded exact-
+request retry for that route too. Android unit copy coverage fails the missing
+invalid_request mapping now fixed here; API37 stops before instrumentation when
+that prerequisite fails. SharedRust, dependency delta and Mac bundle pass.
+Container contracts pass before Caddy's go-jose High advisory refusal. CodeQL is
+a separate successful run41244102185. No release-ready or fresh hosted-pass
+claim follows these local fixes; no scan exemption or manual rerun is made.
+
+Solstice stays away; no phone/Pi access, account, pairing, originals, network,
+installed services, updater, release or gold image changed. UI AVD
+Interlink_UI_36_94259, emulator5596, preview app/data and temporary APK have been
+removed and independently checked. CleanOS task
+gphoto-destination-proof-guard-1793483003145301000-94259-0 owns remaining compiler/
+worker/log resources until full checks finish; final cleanup, signed source pin,
+adapted native checking and bounded receipts follow privately. Shared ADB76421,
+SDKs/caches, signing keys, other active work and the prior migration candidate
+remain protected. Goal stays active for owner controls/import confirmations,
+roaming, hosted/security gates, migration/cloud and physical-image acceptance.
+
 # Console recovery request copy — 2026-10-31
 
 Hosted b195719 CI41243265310 passes foundation, formatting, strict clippy,

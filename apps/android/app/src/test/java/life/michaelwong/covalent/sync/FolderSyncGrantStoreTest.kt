@@ -40,6 +40,36 @@ class FolderSyncGrantStoreTest {
     }
 
     @Test
+    fun refusedRepairClearsOnlyItsExactProposalAndRequiresDurableSave() {
+        val disk = MemoryPersistence()
+        val store = FolderSyncGrantStore(disk)
+        store.prepareAcceptance(OFFER, OLD_ROOT)
+        store.prepareAcceptance(REPLACEMENT, OTHER_ROOT)
+        store.prepareRepair(OFFER, NEW_ROOT)
+        val before = disk.value
+        for ((offer, root) in listOf(OFFER to OTHER_ROOT, REPLACEMENT to NEW_ROOT, FOLDER to NEW_ROOT)) {
+            assertThrows(IllegalStateException::class.java) { store.rejectRepair(offer, root) }
+            assertEquals(before, disk.value)
+        }
+        disk.failWrites = true
+        assertThrows(IllegalStateException::class.java) { store.rejectRepair(OFFER, NEW_ROOT) }
+        assertEquals(before, disk.value)
+        disk.failWrites = false
+        store.rejectRepair(OFFER, NEW_ROOT)
+        val reopened = FolderSyncGrantStore(disk)
+        assertFalse(reopened.hasPendingCapabilityChange())
+        assertEquals(OLD_ROOT, reopened.records().single { it.offerId == OFFER }.root)
+        assertEquals(OTHER_ROOT, reopened.records().single { it.offerId == REPLACEMENT }.root)
+        val rejected = disk.value
+        assertThrows(IllegalStateException::class.java) { store.rejectRepair(OFFER, NEW_ROOT) }
+        assertEquals(rejected, disk.value)
+        store.prepareRemoval(OFFER)
+        val removed = disk.value
+        assertThrows(IllegalStateException::class.java) { store.rejectRepair(OFFER, NEW_ROOT) }
+        assertEquals(removed, disk.value)
+    }
+
+    @Test
     fun removalTombstoneSurvivesReopenAndClearsTheCapabilityOnlyAfterAck() {
         val disk = MemoryPersistence()
         FolderSyncGrantStore(disk).prepareAcceptance(OFFER, OLD_ROOT)

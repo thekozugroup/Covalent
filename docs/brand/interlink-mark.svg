@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
+  <title>Interlink</title>
+  <g transform="rotate(-35 12 12)" stroke="#153d2e" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M10.5 8H8a4 4 0 0 0 0 8h2.5M13.5 8H16a4 4 0 0 1 0 8h-2.5M8.5 12H15.5"/>
+  </g>
+</svg>

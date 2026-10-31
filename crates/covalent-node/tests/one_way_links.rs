@@ -185,8 +185,10 @@ async fn post_ok(node: &NodeRuntime, path: &str, body: Value) -> Value {
     let mut attempt = 0;
     loop {
         let response = call(node, "POST", path, Some(&body)).await;
-        let busy = matches!(path, "/api/v1/sync/accept" | "/api/v1/sync/settings")
-            && response.status == 503
+        let busy = matches!(
+            path,
+            "/api/v1/sync/folders" | "/api/v1/sync/accept" | "/api/v1/sync/settings"
+        ) && response.status == 503
             && serde_json::from_str::<Value>(&response.body).is_ok_and(|payload| {
                 payload["protocolVersion"] == 1
                     && payload["code"] == "folder_sync_busy"
@@ -201,6 +203,42 @@ async fn post_ok(node: &NodeRuntime, path: &str, body: Value) -> Value {
         assert_eq!(response.status, 200, "POST {path}: {}", response.body);
         return response.json();
     }
+}
+
+async fn assert_root_review_refused(
+    node: &NodeRuntime,
+    folder: Uuid,
+    replacement: &Path,
+    policy_path: &Path,
+) {
+    let current = status(node).await;
+    let offer = folder_shares(&current, folder)[0]["offerId"].clone();
+    let request = json!({"offerId":offer,"selectedRoot":replacement});
+    let before = fs::read(policy_path).unwrap();
+    let delays = [100, 200, 400, 800, 1_600];
+    let mut attempt = 0;
+    let response = loop {
+        let response = call(node, "POST", "/api/v1/sync/repair", Some(&request)).await;
+        let explicit_busy = response.status == 503
+            && serde_json::from_str::<Value>(&response.body).is_ok_and(|body| {
+                body["protocolVersion"] == 1
+                    && body["code"] == "folder_sync_busy"
+                    && body["retryable"] == true
+            });
+        if explicit_busy && attempt < delays.len() {
+            tokio::time::sleep(Duration::from_millis(delays[attempt])).await;
+            attempt += 1;
+        } else {
+            break response;
+        }
+    };
+    assert_eq!(response.status, 409, "{}", response.body);
+    assert_eq!(response.json()["code"], "folder_sync_recovery_required");
+    assert_eq!(response.json()["retryable"], false);
+    assert!(!response.body.contains(replacement.to_str().unwrap()));
+    assert_eq!(fs::read(policy_path).unwrap(), before);
+    assert_eq!(fs::read_dir(replacement).unwrap().count(), 0);
+    eprintln!("ROOT_REVIEW_REFUSED unchanged_policy=true destination_untouched=true");
 }
 
 async fn status(node: &NodeRuntime) -> Value {
@@ -2889,7 +2927,8 @@ async fn unconfirmed_copy_holds_originals_but_allows_new_files_across_restart() 
     let target_data = target_spec.data_directory.clone();
     let source_root = root.path().join("source-files");
     let target_root = root.path().join("target-files");
-    for path in [&source_root, &target_root] {
+    let replacement_root = root.path().join("replacement-files");
+    for path in [&source_root, &target_root, &replacement_root] {
         private_directory(path);
     }
     write(&source_root, "ambiguous.txt", b"initial source bytes\n");
@@ -2947,6 +2986,7 @@ async fn unconfirmed_copy_holds_originals_but_allows_new_files_across_restart() 
         let uncertain = first_policy["folders"][&folder_key]["pending"].clone();
         assert!(!uncertain.is_null());
         assert_eq!(first_policy["folders"][&folder_key]["copyCompleted"], false);
+        assert_root_review_refused(&target, folder, &replacement_root, &policy_path).await;
         // An independent local write must survive even if its source disappears.
         write(
             &target_root,
@@ -3001,6 +3041,7 @@ async fn unconfirmed_copy_holds_originals_but_allows_new_files_across_restart() 
         let recovery = recovery_status(&target).await;
         assert_eq!(recovery["observationsComplete"], true);
         assert_eq!(recovery["folders"][0]["unconfirmedFiles"], 2);
+        assert_root_review_refused(&target, folder, &replacement_root, &policy_path).await;
         assert!(!recovery.to_string().contains("ambiguous.txt"));
         assert!(!recovery.to_string().contains("new-conflict.txt"));
         assert_eq!(

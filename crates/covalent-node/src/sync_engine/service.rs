@@ -91,6 +91,7 @@ pub enum FolderSyncServiceError {
     SettingsPending,
     RunConflict,
     RunPending,
+    RecoveryRequired,
 }
 
 impl fmt::Display for FolderSyncServiceError {
@@ -99,6 +100,7 @@ impl fmt::Display for FolderSyncServiceError {
             Self::Busy => "folder sync is busy",
             Self::InvalidConfiguration => "folder sync service configuration is invalid",
             Self::Journal => "folder sync consent state is unavailable",
+            Self::RecoveryRequired => "unconfirmed files need review before changing this folder",
             Self::WorkerLaunch => "folder sync worker could not start",
             Self::WorkerStop => "folder sync worker could not be reaped",
             Self::WorkerStillStopping => "folder sync worker is still stopping",
@@ -907,10 +909,12 @@ impl FolderSyncService {
         };
         let repaired_folder = prepared.folder_id();
         quiesce(&mut inner, FolderSyncLifecycle::Stopped, false).await?;
-        inner
-            .journal
-            .commit_root_repair(prepared)
-            .map_err(map_journal_error)?;
+        if let Err(error) = inner.journal.commit_root_repair(prepared) {
+            // A late unconfirmed write or changed capability must not replace
+            // consent or leave the unchanged configuration needlessly stopped.
+            let _ = reconcile_committed(&self.shared, &mut inner).await;
+            return Err(map_journal_error(error));
+        }
         inner
             .folder_health
             .retain(|health| health.folder != repaired_folder);
@@ -1966,6 +1970,7 @@ fn map_journal_error(error: SharingError) -> FolderSyncServiceError {
         SharingError::SettingsPending => FolderSyncServiceError::SettingsPending,
         SharingError::RunConflict => FolderSyncServiceError::RunConflict,
         SharingError::RunPending => FolderSyncServiceError::RunPending,
+        SharingError::RecoveryRequired => FolderSyncServiceError::RecoveryRequired,
         _ => FolderSyncServiceError::Journal,
     }
 }
