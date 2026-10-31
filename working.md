@@ -1,3 +1,37 @@
+# Independent continuous fanout — 2026-10-31
+
+Draft separates continuous destination generations while preserving pending
+writers' immutable proof/deadline. Source-only retained state is bounded to one
+entry per destination, with one preparing inventory. Per-peer commits/reports,
+expiry, restart, member revocation, settings cancellation and aggregate summaries
+are handled together. Settings cancellation restores the common generation used
+by manual/scheduled clients. Receiver wire fields remain unchanged. Old source
+rollback refuses retained state; do not strip journals to bypass that refusal.
+Only complete unchanged source authorization permits generation-only server reuse.
+
+Both new regressions fail on prior5747776 at the intended boundary. Focused
+candidate worker test passes two post-inventory edits while a peer is offline,
+unchanged source-server receipt, source reopen/returning-peer catchup and original
+preservation.318 full node tests, full strict clippy and foundation pass. A test
+fixture's mistaken member-only pause assumption was corrected to member removal;
+its earlier317/1 failure is retained. Final full eight-case worker concurrency,
+Android26 ARM64 production node/JNI checking passes; actual Pi adaptation checking is pending. Original
+file deadlines/concurrency and real fifteen-minute scheduled test remain enabled.
+
+Prior hosted41234049724 is terminal: real-worker6/1 fails online fanout;
+both full image/package contracts pass before strict Caddy go-jose High refusal;
+API37 fails at emulator startup missing the settings service, before application
+admission diagnostics. Older generation0 Manual Run Now failure remains separate.
+See docs/sync-runtime-progress.md. No new dependency or advisory suppression.
+
+Solstice is away and ADB inventory is empty. No physical-device, production,
+account, pairing, media, release or gold-image change. CleanOS task
+ gphoto-independent-fanout-1793475630128666000-35596-0 owns the temporary builds,
+worker, fixtures and logs. Go SDK/archive removed after exact worker rebuild;
+remaining compiler/worker resources stay needed for running checks. Shared ADB
+76421/5037, stopped Colima, SDKs, signing keys and old migration candidate remain
+preserved. Final evidence, cleanup, source pin and PR readback follow this stage.
+
 # Receiver-copy progress and remaining batch stalls — 2026-10-31
 
 Functional source53d1004147ccee0ebcdfb4076455d8cd0f27bd89 preserves unchanged

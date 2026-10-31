@@ -2636,3 +2636,203 @@ async fn continuous_real_copy_propagates_source_deletion_without_authored_stop()
     )
     .await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires explicit maintained folder-sync worker and freshly compiled guardian paths"]
+async fn continuous_online_destination_advances_after_inventory_while_another_stays_offline() {
+    fn peer_result(value: &Value, folder: Uuid, peer: &str, result: &str) -> bool {
+        folder_shares(value, folder).iter().any(|share| {
+            share["linkRun"]["destinations"]
+                .as_array()
+                .is_some_and(|items| {
+                    items
+                        .iter()
+                        .any(|item| item["peerId"] == peer && item["result"] == result)
+                })
+        })
+    }
+    let mut binaries = test_binaries();
+    let root = tempfile::Builder::new()
+        .prefix("covalent-offline-fanout-")
+        .tempdir()
+        .unwrap();
+    let server_receipt = root.path().join("source-server-pids");
+    let wrapper = root.path().join("record-source-server");
+    assert!(!binaries.worker.to_string_lossy().contains('\''));
+    assert!(!server_receipt.to_string_lossy().contains('\''));
+    fs::write(&wrapper, format!(
+        "#!/bin/sh\numask 077\nif [ \"$1 $2\" = 'serve sftp' ]; then printf '%s\\n' \"$$\" >> '{}'; fi\nexec '{}' \"$@\"\n",
+        server_receipt.display(), binaries.worker.display())).unwrap();
+    fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o500)).unwrap();
+    binaries.worker_sha256 = Sha256::digest(fs::read(&wrapper).unwrap()).into();
+    binaries.worker = wrapper;
+    eprintln!(
+        "INDEPENDENT_FANOUT_PROVENANCE wrapper_sha256={} guardian_sha256={}",
+        sha256_hex(binaries.worker_sha256),
+        sha256_hex(binaries.guardian_sha256)
+    );
+    let mut source_spec = NodeSpec::new(root.path(), "fanout-source", 0xB1);
+    let online_spec = NodeSpec::new(root.path(), "fanout-online", 0xB2);
+    let mut offline_spec = NodeSpec::new(root.path(), "fanout-offline", 0xB3);
+    let source_root = root.path().join("source-files");
+    let online_root = root.path().join("online-files");
+    let offline_root = root.path().join("offline-files");
+    for path in [&source_root, &online_root, &offline_root] {
+        private_directory(path);
+    }
+    write(&source_root, "seed.txt", b"inventory already admitted\n");
+    write(&online_root, "unowned.txt", b"keep online original\n");
+    write(&offline_root, "unowned.txt", b"keep offline original\n");
+    let registry = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let scenario_registry = Arc::clone(&registry);
+    let scenario = tokio::spawn(async move {
+        let source = start_registered_node(&source_spec, &binaries, &scenario_registry).await;
+        source_spec.peer_address = source.ready_info().peer_address();
+        let online = start_registered_node(&online_spec, &binaries, &scenario_registry).await;
+        let offline = start_registered_node(&offline_spec, &binaries, &scenario_registry).await;
+        offline_spec.peer_address = offline.ready_info().peer_address();
+        let online_id = pair(&source, &online, "Fanout online").await;
+        let offline_id = pair(&source, &offline, "Fanout offline").await;
+        let folder = Uuid::new_v4();
+        for (node, id, destination) in [
+            (&online, &online_id, &online_root),
+            (&offline, &offline_id, &offline_root),
+        ] {
+            offer_and_accept_at_cadence(
+                &source,
+                node,
+                id,
+                folder,
+                &source_root,
+                destination,
+                json!({"mode":"manual"}),
+            )
+            .await;
+        }
+        for (node, count) in [(&source, 2), (&online, 1), (&offline, 1)] {
+            wait_ready_at(node, "manual fanout ready", folder, count, 0, false, false).await;
+        }
+        offline
+            .stop()
+            .await
+            .expect("stop peer before first inventory");
+        post_ok(&source, "/api/v1/sync/settings", json!({
+            "folderId":folder, "changeId":Uuid::new_v4(), "expectedRevision":0,
+            "settings":{
+                "deletionPolicy":{"propagateSourceDeletions":false,"restoreLocalDeletions":false},
+                "paused":false,"cadence":{"mode":"continuous"},
+                "androidConditions":{"wifiOnly":false,"chargingOnly":false}
+            }
+        })).await;
+        wait_file_with_status(
+            &online_root.join("seed.txt"),
+            b"inventory already admitted\n",
+            "initial online inventory",
+            &[&source, &online],
+        )
+        .await;
+        let first = wait_for_status(
+            &source,
+            "online terminal while offline peer remains pending",
+            |value| {
+                peer_result(value, folder, &online_id, "succeeded")
+                    && peer_result(value, folder, &offline_id, "pending")
+            },
+        )
+        .await;
+        let first_server = fs::read_to_string(&server_receipt).unwrap();
+        assert_eq!(
+            first_server.lines().count(),
+            1,
+            "first admission must reuse unchanged source authorization"
+        );
+        let mut previous_generation = folder_shares(&first, folder)[0]["linkRun"]["generation"]
+            .as_u64()
+            .unwrap();
+        for (name, bytes) in [
+            ("fresh-one.txt", b"after first inventory\n".as_slice()),
+            ("fresh-two.txt", b"after second inventory\n".as_slice()),
+        ] {
+            let checkpoint = Instant::now();
+            write(&source_root, name, bytes);
+            wait_file_with_status(
+                &online_root.join(name),
+                bytes,
+                "fresh online file with offline peer",
+                &[&source, &online],
+            )
+            .await;
+            eprintln!(
+                "INDEPENDENT_FANOUT_CHECKPOINT file={name} elapsed_ms={}",
+                checkpoint.elapsed().as_millis()
+            );
+            assert_absent(
+                &offline_root.join(name),
+                "offline peer must remain untouched",
+            );
+            let current = wait_for_status(
+                &source,
+                "fresh online run completed independently",
+                |value| {
+                    peer_result(value, folder, &online_id, "succeeded")
+                        && peer_result(value, folder, &offline_id, "pending")
+                        && folder_shares(value, folder).iter().any(|share| {
+                            share["linkRun"]["generation"]
+                                .as_u64()
+                                .is_some_and(|generation| generation > previous_generation)
+                        })
+                },
+            )
+            .await;
+            previous_generation = folder_shares(&current, folder)[0]["linkRun"]["generation"]
+                .as_u64()
+                .unwrap();
+        }
+        assert_eq!(
+            fs::read_to_string(&server_receipt).unwrap(),
+            first_server,
+            "new inventories must not restart the source server while a peer remains pending"
+        );
+        // Reopen the source's encrypted journal with disjoint generations.
+        source
+            .stop()
+            .await
+            .expect("stop source with retained pending generation");
+        let source = start_registered_node(&source_spec, &binaries, &scenario_registry).await;
+        let offline = start_registered_node(&offline_spec, &binaries, &scenario_registry).await;
+        for (name, bytes) in [
+            ("seed.txt", b"inventory already admitted\n".as_slice()),
+            ("fresh-one.txt", b"after first inventory\n".as_slice()),
+            ("fresh-two.txt", b"after second inventory\n".as_slice()),
+        ] {
+            wait_file_with_status(
+                &offline_root.join(name),
+                bytes,
+                "returning peer catches up after source restart",
+                &[&source, &online, &offline],
+            )
+            .await;
+            assert_eq!(fs::read(source_root.join(name)).unwrap(), bytes);
+            assert_eq!(fs::read(online_root.join(name)).unwrap(), bytes);
+        }
+        assert_eq!(
+            fs::read(online_root.join("unowned.txt")).unwrap(),
+            b"keep online original\n"
+        );
+        assert_eq!(
+            fs::read(offline_root.join("unowned.txt")).unwrap(),
+            b"keep offline original\n"
+        );
+        source.stop().await.unwrap();
+        online.stop().await.unwrap();
+        offline.stop().await.unwrap();
+    });
+    finish_registered_scenario(
+        root,
+        registry,
+        scenario,
+        "independent offline fanout",
+        "INDEPENDENT_FANOUT",
+    )
+    .await;
+}

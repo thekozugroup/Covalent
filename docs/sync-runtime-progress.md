@@ -1,97 +1,102 @@
-# Receiving-copy isolation and remaining batch coupling
+# Independent continuous destinations — draft
 
-This draft improves receiving links without changing accounts, pairing identities,
-policy files, or consent. It remains unready for release: real concurrent tests
-still expose shared source-batch stalls and timing failures.
+An offline destination previously held the source's one folder batch open. New
+photos could then fail an old inventory comparison at an online destination,
+with no new inventory admitted until the offline peer finished or expired.
+Continuous links now admit a later generation for eligible terminal destinations
+while pending destinations keep their exact original generation and proof.
 
-## Implemented
+## Authority and bounds
 
-Completed inventories, copies and initial scans wake their existing service.
-The independent health deadline stays active and retains a full interval after
-a slow probe; completion traffic cannot postpone it. Cancellation still closes
-the owned command lifeline. No service, thread pool or dependency is added.
+The source journal retains disjoint destination sets across generations. Each
+peer occurs once, at most512 destinations total; superseded terminal entries and
+empty old generations are pruned. The newest generation remains the owner's
+admission counter. Only that newest generation can be Preparing, so one real
+full source inventory runs per folder. A pending writer is never superseded.
+Its deadline, proof and completion policy remain unchanged.
 
-Destination-only sessions can replace receiver configuration while unchanged
-jobs retain their exact runtime, roots, grants and worker lease. Active job
-folder configuration, peer binding and generation must remain identical. Changed
-active authority and source/server configuration retain the existing stop
-boundary. Initial metadata scans can be replaced without cancelling those copy
-jobs. The appliance's restricted SAF/receiving-role checks remain in preparation.
+Commits select the peer's own generation; reports select that same destination's
+state. Old reports cannot finish a newer generation. Retained generations share
+normal expiry, restart interruption, membership removal and settings cancellation.
+Duplicate peers, mismatched map/generation keys, retained Preparing states,
+receiver-owned retained state, unknown members and over-limit records fail closed.
 
-An in-flight job owns its policy staging. Duplicate runtime preparation does
-not misclassify that atomic write as damaged state; every new transfer still
-loads and validates policy, and inactive staged records still refuse startup.
-SAF reservations now unwind on preparation errors and count a repeated grant
-once per runtime, while overlapping runtimes keep independent reservations.
+The existing status shape exposes the newest admission generation and all current
+destination results. Its aggregate phase cannot claim success while another
+peer remains active or failed; active timestamps use the earliest active batch.
+No new control or wire fields are sent to receivers.
 
-The Android settings client builds one request/change ID and retries only the
-explicit typed retryable503 busy response, with the existing bounded backoff.
-Uncertain transport, malformed replies and other errors are never replayed.
-The real-worker harness uses that same bounded contract for acceptance/settings;
-its sixty-second file assertions and two-test concurrency are unchanged.
+Manual and scheduled admission retain whole-batch behavior. Explicit settings
+changes cancel every affected generation. If several generations were retained,
+that cancellation publishes one common cancelled generation and drops retained
+state. This lets existing manual clients resume their normal generation checks;
+it does not fabricate a success or replace an active admitted inventory.
 
-## Verification scope
+## Source server and receiving copies
 
-316 host node tests, full all-target/all-feature clippy, foundation,223 actual
-Android app JVM unit tests (including9 busy/replay/cancellation cases), and
-Android26 ARM64 production node/JNI checks pass. No APK installation, full
-native-linked package, physical-device or Google Photos claim follows from them.
+Generation-only updates reuse a source server only when its complete authorized
+settings remain identical and every folder is a source. Root, membership, key,
+route, policy, role and condition changes retain their normal validation and
+stop boundary. Every admitted generation still obtains a fresh complete inventory.
+Mixed-role/legacy configurations keep their existing restart path.
 
-The instrumented baseline delivered a remounted file at60876ms, after its
-original60000ms deadline; its result stays failed. Original checkpoints reached
-59990ms. Temporary production traces and post-failure observation are removed.
+The earlier receiver isolation remains: unchanged copy jobs keep their exact
+runtime/root/SAF/worker leases during unrelated receiver changes; active authority
+changes still stop and reap. Completion wakes do not starve independent health
+probes. New transfers strictly validate policy; an active job owns its atomic
+staging. Grant reservations unwind and count correctly across overlapping owners.
+Android settings retries only the explicit typed retryable busy refusal using
+the exact original request; uncertain requests are not replayed.
 
-A focused final-source two-case concurrent run passes collection/remount,
-including recovery after permission failure, but fails fresh online fanout after
-the other destination stops. Its remount checkpoint is27594ms. The complete
-seven-case run finishes with6 passed,1 failed (collection deletion barrier),
-0 ignored and0 filtered. Its real fifteen-minute scheduled case passes. The
-three-node case passes in that run; the earlier contrary witness remains an
-unresolved source-fanout failure. Isolated passes do not resolve counterexamples. Exact results are retained privately
-with sanitized source/log bindings in artifacts/evidence/sync-concurrency/.
+## Persistent compatibility and rollback
 
-## Why fanout remains blocked
+The optional source-only `retained` map defaults empty, so existing journals load
+without rewriting or erasing them. It is absent when empty. Receiver v1 run
+commits keep their original strict shape. Old source code intentionally refuses
+nonempty retained state through its unknown-field check. Never strip the map to
+force rollback: a writer or its result could be forgotten.
 
-The source owns one authoritative run per folder. Automatic admission skips an
-active run, source inventory is prepared only in the Preparing phase, and the
-whole run remains active while any destination is pending. A changed source
-correctly fails the old inventory comparison at an online destination. If
-another destination is offline, the source cannot admit a fresh inventory for
-the online destination until that shared run ends.
+A forward-version source must first settle or explicitly cancel the retained
+work, persist the ordinary single-generation shape, and stop before an older
+source can be considered. Fixtures establish serialization/refusal behavior;
+this is not signed device rollback, physical boot or migration acceptance. The
+restricted Pi worker remains receive-only and never creates source retained runs.
 
-Do not delete recovery state, increase the file deadline, force a pending peer
-complete, or stop a possibly writing peer merely because its control connection
-is unavailable. Those actions would hide the failure or risk original bytes.
+## Verification
 
-## Next implementation boundary
+The exact new state-machine test and real-worker offline-fanout test both fail
+on prior source5747776 at the intended admission/fresh-file boundary. The baseline
+real test reaps all nodes and removes its synthetic root even on failure. Source
+backups are restored and hashed before candidate checks.
 
-Each destination needs independent progress with an immutable admitted inventory.
-The existing wire already projects a signed run to one target. Investigate
-bounded retained generations for disjoint pending destinations: a new generation
-for an eligible destination must leave another destination's active generation,
-proof, policy and SFTP access intact. At most one source inventory should be
-preparing for a folder at a time. Reuse a source server only while its authorized
-configuration is identical; a fresh inventory must remain a real full proof.
+318 complete host node tests, denied-warning all-target/all-feature workspace
+clippy, and foundation pass. State fixtures cover repeated bounded generations,
+late exact-proof reports, replay, reopen, expiry, interruption, settings changes,
+legacy parsing/refusal, malformed state and member removal. One fixture initially
+assumed that a share's Pause meant member-only pause; it correctly cancels shared
+link settings. The fixture now uses member removal, preserving existing semantics.
+The earlier317/1 result remains recorded, not relabeled as a pass.
 
-Audit targeted delivery/report lookup, per-share summaries, request generation
-checks, restart reconciliation, expiry, membership/settings revocation and
-backlog pruning together. Receiver commits must stay monotonic for that peer;
-old pending reports must be acknowledged by a valid later generation. Do not
-replace an inventory inside an active generation: old receivers can retain a
-report and stop admitting work. Keep malformed state fail-closed and establish
-explicit old-source/rollback behavior before writing new durable fields.
+The focused real worker test delivers two post-inventory files in17035ms and
+17240ms while the other peer remains offline. The source server PID receipt
+stays unchanged across those generations. After source restart, the returning
+peer catches up in16870ms, with source and unrelated destination originals
+verified intact. This focused run precedes the final aggregate-summary fix.
+The final full eight-case concurrent worker suite is running, with the original
+sixty-second file assertions and two-test concurrency, including its real
+fifteen-minute scheduled run. No filtered or serial pass substitutes for it.
+Android26 ARM64 production node/JNI checking passes. Actual appliance adaptation checking remains pending here.
 
-Required evidence: deterministic offline fanout with a source edit after the
-first inventory; two simultaneous receiving links; independent policy/pause/
-revocation changes during real copies; interrupted copies preserving unowned
-bytes; restart/rollback and old-peer fixtures; the complete seven-case real
-worker suite; then actual Pi/companion handoff. Container image scans and the
-physical/cloud/gold gates remain independent.
+## Independent release gates
 
-The previous hosted API37 run passes86 baseline instrumentation tests but fails
-its real SAF public Manual Run Now journey with generation0 on both nodes and
-no pending request. This is distinct from the older emulator missing-service
-failure. New bounded saved-request/button-state diagnostics compile locally;
-they have not executed on a device. The same hosted revision now passes both
-image/package contracts and fails high-severity go-jose matches in Caddy. Those
-release gates remain enabled and separate from the Pi's restricted worker.
+Hosted CI41234049724 on5747776 finishes with six of seven real-worker tests
+passing; online fanout fails. Both image/package contracts pass and strict scans
+refuse High go-josev3/v4 matches in Caddy (GHSA-mgcc-cww5-fp2q). No exemption.
+Its API37 run fails at emulator startup with a missing Android settings service,
+before the new admission diagnostics execute. An older API37 run passes86 base
+tests but fails the real SAF public Manual Run Now journey at generation0; that
+application issue remains unproven. These failures are separate.
+
+No phone/Pi installation, account/pairing/media mutation, full linked signed
+bundle, merge, release or gold image is claimed. Physical sync/import/camera,
+roaming, cloud-confirmed cleanup and update/rollback acceptance remain required.

@@ -3002,3 +3002,421 @@ fn endpoint_roster_rejects_wrong_authority_binding_and_unbounded_metadata() {
     assert!(receiver.receive_endpoint_roster(&valid).is_err());
     assert!(receiver.summaries().unwrap()[0].endpoint_roster.is_none());
 }
+
+fn run_commit_for(source: &mut FolderSharingJournal, target: DeviceId) -> LinkRunCommit {
+    source
+        .outbound_records()
+        .unwrap()
+        .into_iter()
+        .find_map(|delivery| match delivery.record {
+            FolderShareRecord::RunCommit(commit) if commit.target_id == target => Some(commit),
+            _ => None,
+        })
+        .unwrap()
+}
+
+#[test]
+fn continuous_fanout_keeps_bounded_peer_generations_reports_and_restart_authority() {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct LegacySlot {
+        #[serde(rename = "authoritative")]
+        _authoritative: Option<LinkRunState>,
+        #[serde(rename = "pendingRequest")]
+        _pending_request: Option<LinkRunRequest>,
+        #[serde(rename = "rejectedRequest")]
+        _rejected_request: Option<LinkRunRejection>,
+        #[serde(rename = "pendingReport")]
+        _pending_report: Option<LinkRunReport>,
+    }
+    let a = Device::new("Source", 43981);
+    let b = Device::new("Online", 43982);
+    let c = Device::new("Offline", 43983);
+    pair(&a, &b);
+    pair(&a, &c);
+    let mut source = a.journal();
+    let mut online = b.journal();
+    let mut offline = c.journal();
+    let folder = Uuid::new_v4();
+    for (device, target) in [(&b, &mut online), (&c, &mut offline)] {
+        establish_batch_link(
+            &a,
+            device,
+            &mut source,
+            target,
+            folder,
+            batch_settings(LinkCadence::Continuous),
+        );
+    }
+    let mut now = 35_000;
+    assert_eq!(source.admit_due_link_runs(now).unwrap().len(), 1);
+    source
+        .start_link_run(folder, 1, index_snapshot(1), now + 1)
+        .unwrap();
+    let first_online = run_commit_for(&mut source, b.engine.device_id());
+    let first_offline = run_commit_for(&mut source, c.engine.device_id());
+    online.receive_link_run_commit(&first_online).unwrap();
+    offline.receive_link_run_commit(&first_offline).unwrap();
+    let legacy = serde_json::to_value(&source.snapshot.link_runs[&folder]).unwrap();
+    assert!(serde_json::from_value::<LegacySlot>(legacy).is_ok());
+    let report = online
+        .complete_link_run(
+            folder,
+            1,
+            index_snapshot(1),
+            LinkRunDestinationResult::Succeeded,
+            now + 2,
+        )
+        .unwrap();
+    source.receive_link_run_report(&report, now + 3).unwrap();
+    now += 2;
+    for generation in 2..=16 {
+        assert!(source.admit_due_link_runs(now + 14_999).unwrap().is_empty());
+        now += 15_000;
+        let admitted = source.admit_due_link_runs(now).unwrap();
+        assert_eq!(admitted.len(), 1);
+        assert_eq!(admitted[0].generation, generation);
+        assert_eq!(
+            admitted[0].destinations.keys().copied().collect::<Vec<_>>(),
+            vec![b.engine.device_id()]
+        );
+        assert!(
+            source.admit_due_link_runs(now + 20_000).unwrap().is_empty(),
+            "never prepare a second inventory concurrently"
+        );
+        source
+            .start_link_run(folder, generation, index_snapshot(generation), now + 1)
+            .unwrap();
+        let commit = run_commit_for(&mut source, b.engine.device_id());
+        // This remains the original strict v1 wire shape, with one target.
+        let encoded = serde_json::to_value(&commit).unwrap();
+        assert!(encoded.get("retained").is_none());
+        let decoded: LinkRunCommit = serde_json::from_value(encoded).unwrap();
+        online.receive_link_run_commit(&decoded).unwrap();
+        online.receive_link_run_commit(&first_online).unwrap(); // stale replay cannot regress
+        assert_eq!(
+            online.summaries().unwrap()[0]
+                .link_run
+                .as_ref()
+                .unwrap()
+                .generation,
+            generation
+        );
+        let report = online
+            .complete_link_run(
+                folder,
+                generation,
+                index_snapshot(generation),
+                LinkRunDestinationResult::Succeeded,
+                now + 2,
+            )
+            .unwrap();
+        source.receive_link_run_report(&report, now + 3).unwrap();
+        now += 2;
+        let old = run_commit_for(&mut source, c.engine.device_id())
+            .state
+            .unwrap();
+        assert_eq!(old.generation, 1);
+        assert_eq!(
+            old.source_index,
+            first_offline.state.as_ref().unwrap().source_index
+        );
+        assert_eq!(
+            old.destinations[&c.engine.device_id()].result,
+            LinkRunDestinationResult::Pending
+        );
+        let slot = serde_json::to_value(&source.snapshot.link_runs[&folder]).unwrap();
+        assert_eq!(slot["retained"].as_object().unwrap().len(), 1);
+        assert_eq!(
+            slot["authoritative"]["destinations"]
+                .as_object()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(
+            serde_json::from_value::<LegacySlot>(slot).is_err(),
+            "old source rollback must refuse retained state, never forget a writer"
+        );
+        let summary = source.summaries().unwrap()[0].link_run.clone().unwrap();
+        assert_eq!(summary.phase, Some(LinkRunPhase::Running));
+        assert_eq!(
+            summary.deadline_unix_ms,
+            Some(35_000 + LINK_RUN_DEADLINE_MS)
+        );
+        assert_eq!(summary.ended_at_unix_ms, None);
+        let destinations = summary.destinations;
+        assert_eq!(destinations.len(), 2);
+        assert!(
+            destinations
+                .iter()
+                .any(|item| item.peer_id == c.engine.device_id()
+                    && item.result == LinkRunDestinationResult::Pending)
+        );
+    }
+    drop(source);
+    let mut source = a.reopen();
+    let late = offline
+        .complete_link_run(
+            folder,
+            1,
+            index_snapshot(1),
+            LinkRunDestinationResult::Succeeded,
+            now + 1,
+        )
+        .unwrap();
+    let mut wrong = late.clone();
+    wrong.source_index = index_snapshot(999);
+    assert_eq!(
+        source.receive_link_run_report(&wrong, now + 2),
+        Err(SharingError::RunConflict)
+    );
+    let accepted = source.receive_link_run_report(&late, now + 2).unwrap();
+    assert_eq!(accepted.generation, 1);
+    assert_eq!(accepted.phase, LinkRunPhase::Succeeded);
+    offline
+        .receive_link_run_commit(&run_commit_for(&mut source, c.engine.device_id()))
+        .unwrap();
+    assert!(
+        offline
+            .outbound_records()
+            .unwrap()
+            .iter()
+            .all(|delivery| !matches!(delivery.record, FolderShareRecord::RunReport(_)))
+    );
+
+    // Two more generations exercise retained expiry and restart independently.
+    now += 15_001;
+    assert_eq!(source.admit_due_link_runs(now).unwrap()[0].generation, 17);
+    source
+        .start_link_run(folder, 17, index_snapshot(17), now + 1)
+        .unwrap();
+    online
+        .receive_link_run_commit(&run_commit_for(&mut source, b.engine.device_id()))
+        .unwrap();
+    let report = online
+        .complete_link_run(
+            folder,
+            17,
+            index_snapshot(17),
+            LinkRunDestinationResult::Succeeded,
+            now + 2,
+        )
+        .unwrap();
+    source.receive_link_run_report(&report, now + 3).unwrap();
+    let old_deadline = now + LINK_RUN_DEADLINE_MS;
+    now += 15_002;
+    assert_eq!(source.admit_due_link_runs(now).unwrap()[0].generation, 18);
+    assert!(source.expire_link_runs(old_deadline).unwrap());
+    assert_eq!(
+        run_commit_for(&mut source, c.engine.device_id())
+            .state
+            .unwrap()
+            .destinations[&c.engine.device_id()]
+            .result,
+        LinkRunDestinationResult::TimedOut
+    );
+    assert_eq!(
+        source
+            .active_batch_generations(old_deadline, Instant::now())
+            .unwrap()[&folder],
+        18
+    );
+    assert!(
+        source
+            .interrupt_unfinished_link_runs(old_deadline + 1)
+            .unwrap()
+    );
+    assert!(
+        source
+            .active_batch_generations(old_deadline + 1, Instant::now())
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        source.summaries().unwrap()[0]
+            .link_run
+            .as_ref()
+            .unwrap()
+            .phase,
+        Some(LinkRunPhase::Incomplete)
+    );
+
+    source
+        .request_link_settings_at(
+            folder,
+            Uuid::new_v4(),
+            0,
+            batch_settings(LinkCadence::Manual),
+            old_deadline + 2,
+        )
+        .unwrap();
+    let slot = serde_json::to_value(&source.snapshot.link_runs[&folder]).unwrap();
+    assert!(slot.get("retained").is_none());
+    assert!(serde_json::from_value::<LegacySlot>(slot).is_ok());
+    for target in [&mut online, &mut offline] {
+        deliver_link_settings(&mut source, target);
+        target
+            .receive_link_run_commit(&run_commit_for(&mut source, target.engine.device_id()))
+            .unwrap();
+        assert_eq!(
+            target.summaries().unwrap()[0]
+                .link_run
+                .as_ref()
+                .unwrap()
+                .generation,
+            18
+        );
+    }
+    assert!(
+        matches!(source.request_link_run(folder, Uuid::new_v4(), 18, 1, old_deadline + 3).unwrap(),
+        LinkRunAdmission::Accepted(state) if state.generation == 19 && state.destinations.len() == 2)
+    );
+}
+
+#[test]
+fn retained_continuous_runs_refuse_ambiguous_state_and_cancel_removed_members() {
+    let a = Device::new("Source", 43991);
+    let b = Device::new("First", 43992);
+    let c = Device::new("Second", 43993);
+    pair(&a, &b);
+    pair(&a, &c);
+    let mut source = a.journal();
+    let mut first = b.journal();
+    let mut second = c.journal();
+    let folder = Uuid::new_v4();
+    let first_offer = establish_batch_link(
+        &a,
+        &b,
+        &mut source,
+        &mut first,
+        folder,
+        batch_settings(LinkCadence::Continuous),
+    );
+    let second_offer = establish_batch_link(
+        &a,
+        &c,
+        &mut source,
+        &mut second,
+        folder,
+        batch_settings(LinkCadence::Continuous),
+    );
+    source.admit_due_link_runs(35_000).unwrap();
+    source
+        .start_link_run(folder, 1, index_snapshot(1), 35_001)
+        .unwrap();
+    first
+        .receive_link_run_commit(&run_commit_for(&mut source, b.engine.device_id()))
+        .unwrap();
+    let report = first
+        .complete_link_run(
+            folder,
+            1,
+            index_snapshot(1),
+            LinkRunDestinationResult::Succeeded,
+            35_002,
+        )
+        .unwrap();
+    source.receive_link_run_report(&report, 35_003).unwrap();
+    source.admit_due_link_runs(50_002).unwrap();
+    source
+        .start_link_run(folder, 2, index_snapshot(2), 50_003)
+        .unwrap();
+    assert_eq!(link_runs::validate_run_states(&source.snapshot), Ok(()));
+    let encoded = serde_json::to_value(&source.snapshot).unwrap();
+    let folder_key = folder.to_string();
+    let mut duplicate = encoded.clone();
+    let destination = duplicate["linkRuns"][&folder_key]["authoritative"]["destinations"]
+        [&b.engine.device_id().to_string()]
+        .clone();
+    duplicate["linkRuns"][&folder_key]["retained"]["1"]["destinations"]
+        .as_object_mut()
+        .unwrap()
+        .insert(b.engine.device_id().to_string(), destination);
+    let duplicate: Snapshot = serde_json::from_value(duplicate).unwrap();
+    assert_eq!(
+        link_runs::validate_run_states(&duplicate),
+        Err(SharingError::InvalidState)
+    );
+    let mut wrong_generation = encoded.clone();
+    wrong_generation["linkRuns"][&folder_key]["retained"]["1"]["generation"] = 2.into();
+    let wrong_generation: Snapshot = serde_json::from_value(wrong_generation).unwrap();
+    assert_eq!(
+        link_runs::validate_run_states(&wrong_generation),
+        Err(SharingError::InvalidState)
+    );
+    let mut preparing = encoded.clone();
+    preparing["linkRuns"][&folder_key]["retained"]["1"]["phase"] = "preparing".into();
+    preparing["linkRuns"][&folder_key]["retained"]["1"]
+        .as_object_mut()
+        .unwrap()
+        .remove("sourceIndex");
+    let preparing: Snapshot = serde_json::from_value(preparing).unwrap();
+    assert_eq!(
+        link_runs::validate_run_states(&preparing),
+        Err(SharingError::InvalidState)
+    );
+    let mut receiver = serde_json::to_value(&first.snapshot).unwrap();
+    receiver["linkRuns"][&folder_key]["retained"] =
+        encoded["linkRuns"][&folder_key]["retained"].clone();
+    let receiver: Snapshot = serde_json::from_value(receiver).unwrap();
+    assert_eq!(
+        link_runs::validate_run_states(&receiver),
+        Err(SharingError::InvalidState)
+    );
+
+    source.remove(second_offer).unwrap();
+    let current = run_commit_for(&mut source, b.engine.device_id())
+        .state
+        .unwrap();
+    assert_eq!(current.generation, 2);
+    assert_eq!(current.source_index, Some(index_snapshot(2)));
+    assert_eq!(
+        current.destinations[&b.engine.device_id()].result,
+        LinkRunDestinationResult::Pending
+    );
+    assert_eq!(
+        source
+            .active_batch_generations(50_004, Instant::now())
+            .unwrap()[&folder],
+        2
+    );
+    let summary = source
+        .summaries()
+        .unwrap()
+        .into_iter()
+        .find(|share| share.offer_id == first_offer)
+        .unwrap();
+    assert_eq!(
+        summary
+            .link_run
+            .unwrap()
+            .destinations
+            .iter()
+            .find(|item| item.peer_id == c.engine.device_id())
+            .unwrap()
+            .result,
+        LinkRunDestinationResult::Cancelled
+    );
+    source.remove(second_offer).unwrap();
+    drop(source);
+    let mut source = a.reopen();
+    let desired = source.desired_settings_at(50_004, Instant::now()).unwrap();
+    assert_eq!(desired.peers.len(), 1);
+    assert_eq!(desired.folders.len(), 1);
+    source.remove(first_offer).unwrap();
+    assert!(
+        source
+            .active_batch_generations(50_005, Instant::now())
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        source
+            .desired_settings_at(50_005, Instant::now())
+            .unwrap()
+            .folders
+            .is_empty()
+    );
+    assert!(a.files().exists() && b.files().exists() && c.files().exists());
+}

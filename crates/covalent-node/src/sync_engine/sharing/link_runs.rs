@@ -183,12 +183,37 @@ pub struct LinkRunSummary {
 pub(super) struct LinkRunLinkState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     authoritative: Option<LinkRunState>,
+    // Source-only continuous fanout. Each destination occurs in exactly one
+    // generation; no pending destination is superseded by another peer's work.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    retained: BTreeMap<u64, LinkRunState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pending_request: Option<LinkRunRequest>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     rejected_request: Option<LinkRunRejection>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pending_report: Option<LinkRunReport>,
+}
+
+impl LinkRunLinkState {
+    fn states(&self) -> impl Iterator<Item = &LinkRunState> {
+        self.authoritative.iter().chain(self.retained.values())
+    }
+
+    fn states_mut(&mut self) -> impl Iterator<Item = &mut LinkRunState> {
+        self.authoritative
+            .iter_mut()
+            .chain(self.retained.values_mut())
+    }
+
+    fn for_target(&self, target: DeviceId) -> Option<&LinkRunState> {
+        self.states()
+            .find(|state| state.destinations.contains_key(&target))
+    }
+
+    fn any_active(&self) -> bool {
+        self.states().any(|state| state.phase.active())
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -532,7 +557,10 @@ impl FolderSharingJournal {
         let state = next
             .link_runs
             .get_mut(&report.folder_id)
-            .and_then(|slot| slot.authoritative.as_mut())
+            .and_then(|slot| {
+                slot.states_mut()
+                    .find(|state| state.destinations.contains_key(&report.reporter_id))
+            })
             .ok_or(SharingError::InvalidState)?;
         if report.generation < state.generation
             || (report.generation == state.generation && !state.phase.active())
@@ -585,10 +613,10 @@ impl FolderSharingJournal {
             if !source_folders.contains(folder_id) {
                 continue;
             }
-            let Some(state) = slot.authoritative.as_mut() else {
-                continue;
-            };
-            if state.phase.active() && now_unix_ms >= state.deadline_unix_ms {
+            for state in slot
+                .states_mut()
+                .filter(|state| state.phase.active() && now_unix_ms >= state.deadline_unix_ms)
+            {
                 let ended_at = state.deadline_unix_ms;
                 for destination in state.destinations.values_mut() {
                     if destination.result == LinkRunDestinationResult::Pending {
@@ -628,10 +656,7 @@ impl FolderSharingJournal {
             if !source_folders.contains(folder_id) {
                 continue;
             }
-            let Some(state) = slot.authoritative.as_mut() else {
-                continue;
-            };
-            if state.phase.active() {
+            for state in slot.states_mut().filter(|state| state.phase.active()) {
                 if now_unix_ms < state.started_at_unix_ms {
                     return Err(SharingError::InvalidRecord);
                 }
@@ -700,28 +725,14 @@ impl FolderSharingJournal {
                     }
                     LinkCadence::Manual => return None,
                 };
-                let base = self
-                    .snapshot
-                    .link_runs
-                    .get(folder_id)
-                    .and_then(|slot| slot.authoritative.as_ref())
-                    .and_then(|state| state.ended_at_unix_ms)
-                    .unwrap_or(settings.accepted_at_unix_ms);
-                let due_at = base.checked_add(interval_ms)?;
-                (base != 0 && now_unix_ms >= due_at).then_some(*folder_id)
+                (!automatic_destinations(&self.snapshot, *folder_id, now_unix_ms, interval_ms)
+                    .is_empty())
+                .then_some(*folder_id)
             })
             .collect::<Vec<_>>();
         let mut next = self.snapshot.clone();
         let mut admitted = Vec::new();
         for folder_id in due {
-            if next
-                .link_runs
-                .get(&folder_id)
-                .and_then(|slot| slot.authoritative.as_ref())
-                .is_some_and(|state| state.phase.active())
-            {
-                continue;
-            }
             let settings_revision = next.link_settings[&folder_id].revision;
             let request = LinkRunRequest {
                 folder_id,
@@ -753,12 +764,14 @@ impl FolderSharingJournal {
             .map_err(|_| SharingError::PersistenceUncertain)?;
         let mut result = BTreeMap::new();
         for (folder_id, slot) in &self.snapshot.link_runs {
-            let Some(state) = &slot.authoritative else {
-                continue;
-            };
-            if state.phase.active()
-                && now_unix_ms < state.deadline_unix_ms
-                && self.local_run_is_active(*folder_id, state, now_unix_ms, observed_at)
+            if let Some(state) = slot
+                .states()
+                .filter(|state| {
+                    state.phase.active()
+                        && now_unix_ms < state.deadline_unix_ms
+                        && self.local_run_is_active(*folder_id, state, now_unix_ms, observed_at)
+                })
+                .max_by_key(|state| state.generation)
             {
                 result.insert(*folder_id, state.generation);
             }
@@ -837,15 +850,13 @@ impl FolderSharingJournal {
         now_unix_ms: u64,
         observed_at: Instant,
     ) -> bool {
-        self.snapshot
-            .link_runs
-            .get(&folder_id)
-            .and_then(|slot| slot.authoritative.as_ref())
-            .is_some_and(|state| {
+        self.snapshot.link_runs.get(&folder_id).is_some_and(|slot| {
+            slot.states().any(|state| {
                 state.phase.active()
                     && now_unix_ms < state.deadline_unix_ms
                     && self.local_run_is_active(folder_id, state, now_unix_ms, observed_at)
             })
+        })
     }
 
     fn local_run_is_active(
@@ -908,6 +919,54 @@ pub(super) fn current_unix_ms() -> u64 {
         .unwrap_or(u64::MAX)
 }
 
+fn automatic_destinations(
+    snapshot: &Snapshot,
+    folder_id: Uuid,
+    now_unix_ms: u64,
+    interval_ms: u64,
+) -> BTreeSet<DeviceId> {
+    let settings = &snapshot.link_settings[&folder_id];
+    let slot = snapshot.link_runs.get(&folder_id);
+    let continuous = settings.settings.cadence == LinkCadence::Continuous;
+    if slot.is_some_and(|slot| {
+        slot.states()
+            .any(|state| state.phase == LinkRunPhase::Preparing)
+            || (!continuous && slot.any_active())
+    }) {
+        return BTreeSet::new();
+    }
+    snapshot
+        .shares
+        .iter()
+        .filter(|share| {
+            !share.removed
+                && !share.paused
+                && share.commit.is_some()
+                && share.offer.folder_id == folder_id
+                && share.offer.source_device_id == snapshot.owner.device_id
+        })
+        .filter_map(|share| {
+            let target = share.offer.target_device_id;
+            let state = slot.and_then(|slot| slot.for_target(target));
+            let base = if continuous {
+                match state.and_then(|state| state.destinations.get(&target)) {
+                    Some(destination) => destination.ended_at_unix_ms?,
+                    None => settings.accepted_at_unix_ms,
+                }
+            } else {
+                state
+                    .and_then(|state| state.ended_at_unix_ms)
+                    .unwrap_or(settings.accepted_at_unix_ms)
+            };
+            (base != 0
+                && base
+                    .checked_add(interval_ms)
+                    .is_some_and(|due| now_unix_ms >= due))
+            .then_some(target)
+        })
+        .collect()
+}
+
 fn admit_source_request(
     snapshot: &mut Snapshot,
     request: &LinkRunRequest,
@@ -942,7 +1001,11 @@ fn admit_source_request(
         {
             return Ok((LinkRunAdmission::AlreadyRunning(current.clone()), false));
         }
-        if current.phase.active() {
+        if snapshot.link_runs[&request.folder_id].any_active()
+            && !(allow_automatic_continuous
+                && settings.settings.cadence == LinkCadence::Continuous
+                && current.phase != LinkRunPhase::Preparing)
+        {
             return Ok((LinkRunAdmission::AlreadyRunning(current.clone()), false));
         }
     }
@@ -953,6 +1016,16 @@ fn admit_source_request(
     } else {
         None
     };
+    let eligible = (allow_automatic_continuous
+        && settings.settings.cadence == LinkCadence::Continuous)
+        .then(|| {
+            automatic_destinations(
+                snapshot,
+                request.folder_id,
+                now_unix_ms,
+                CONTINUOUS_CHECK_INTERVAL_MS,
+            )
+        });
     let destinations = snapshot
         .shares
         .iter()
@@ -962,6 +1035,9 @@ fn admit_source_request(
                 && share.commit.is_some()
                 && share.offer.folder_id == request.folder_id
                 && share.offer.source_device_id == request.source_id
+                && eligible
+                    .as_ref()
+                    .is_none_or(|eligible| eligible.contains(&share.offer.target_device_id))
         })
         .map(|share| {
             (
@@ -1010,6 +1086,22 @@ fn admit_source_request(
         source_index: None,
         destinations,
     };
+    if let Some(previous) = slot.authoritative.take() {
+        slot.retained.insert(previous.generation, previous);
+    }
+    // Supersede terminal destinations only. Pending writers never enter the
+    // eligible set. Prune the superseded entries so storage is O(destinations).
+    for previous in slot.retained.values_mut() {
+        let before = previous.destinations.len();
+        previous
+            .destinations
+            .retain(|peer, _| !state.destinations.contains_key(peer));
+        if previous.destinations.len() != before {
+            previous.state_revision = next_state_revision(previous.state_revision)?;
+        }
+    }
+    slot.retained
+        .retain(|_, previous| !previous.destinations.is_empty());
     slot.authoritative = Some(state.clone());
     slot.pending_request = None;
     slot.rejected_request = None;
@@ -1111,8 +1203,8 @@ fn commit_for_target(
         .get(&folder_id)
         .ok_or(SharingError::InvalidState)?;
     let state = slot
-        .authoritative
-        .clone()
+        .for_target(target_id)
+        .cloned()
         .map(|mut state| {
             let destination = state
                 .destinations
@@ -1231,10 +1323,7 @@ pub(super) fn cancel_for_settings_change(
     };
     slot.pending_request = None;
     slot.pending_report = None;
-    let Some(state) = slot.authoritative.as_mut() else {
-        return Ok(());
-    };
-    if state.phase.active() {
+    for state in slot.states_mut().filter(|state| state.phase.active()) {
         for destination in state.destinations.values_mut() {
             if destination.result == LinkRunDestinationResult::Pending {
                 destination.result = LinkRunDestinationResult::Cancelled;
@@ -1244,6 +1333,33 @@ pub(super) fn cancel_for_settings_change(
         state.phase = LinkRunPhase::Cancelled;
         state.ended_at_unix_ms = Some(now_unix_ms);
         state.state_revision = next_state_revision(state.state_revision)?;
+    }
+    if !slot.retained.is_empty() {
+        // Leaving continuous mode restores one common generation for existing
+        // manual/scheduled clients. This is an explicit cancellation, never a
+        // fabricated success or a replacement proof for a pending writer.
+        let destinations = slot
+            .states()
+            .flat_map(|state| state.destinations.keys())
+            .map(|peer| {
+                (
+                    *peer,
+                    LinkRunDestinationState {
+                        result: LinkRunDestinationResult::Cancelled,
+                        ended_at_unix_ms: Some(now_unix_ms),
+                    },
+                )
+            })
+            .collect();
+        let state = slot
+            .authoritative
+            .as_mut()
+            .ok_or(SharingError::InvalidState)?;
+        state.destinations = destinations;
+        state.phase = LinkRunPhase::Cancelled;
+        state.ended_at_unix_ms = Some(now_unix_ms);
+        state.state_revision = next_state_revision(state.state_revision)?;
+        slot.retained.clear();
     }
     Ok(())
 }
@@ -1286,26 +1402,22 @@ pub(super) fn reconcile_membership(
         if !source_folders.contains(folder_id) {
             continue;
         }
-        let Some(state) = slot.authoritative.as_mut() else {
-            continue;
-        };
-        if !state.phase.active() {
-            continue;
-        }
-        let mut state_changed = false;
-        for (peer_id, destination) in &mut state.destinations {
-            if destination.result == LinkRunDestinationResult::Pending
-                && !retained.contains(&(*folder_id, *peer_id))
-            {
-                destination.result = LinkRunDestinationResult::Cancelled;
-                destination.ended_at_unix_ms = Some(now_unix_ms);
-                state_changed = true;
+        for state in slot.states_mut().filter(|state| state.phase.active()) {
+            let mut state_changed = false;
+            for (peer_id, destination) in &mut state.destinations {
+                if destination.result == LinkRunDestinationResult::Pending
+                    && !retained.contains(&(*folder_id, *peer_id))
+                {
+                    destination.result = LinkRunDestinationResult::Cancelled;
+                    destination.ended_at_unix_ms = Some(now_unix_ms);
+                    state_changed = true;
+                }
             }
-        }
-        if state_changed {
-            state.state_revision = next_state_revision(state.state_revision)?;
-            finish_if_terminal(state, now_unix_ms);
-            changed = true;
+            if state_changed {
+                state.state_revision = next_state_revision(state.state_revision)?;
+                finish_if_terminal(state, now_unix_ms);
+                changed = true;
+            }
         }
     }
     Ok(changed)
@@ -1318,13 +1430,34 @@ pub(super) fn validate_run_states(snapshot: &Snapshot) -> Result<(), SharingErro
     for (folder_id, slot) in &snapshot.link_runs {
         let source = link_source_in_snapshot(&snapshot.shares, *folder_id)
             .ok_or(SharingError::InvalidState)?;
-        if let Some(state) = &slot.authoritative {
+        if slot.retained.len() >= MAX_SHARES
+            || (!slot.retained.is_empty() && source != snapshot.owner.device_id)
+            || slot.retained.iter().any(|(generation, state)| {
+                *generation != state.generation
+                    || state.phase == LinkRunPhase::Preparing
+                    || slot
+                        .authoritative
+                        .as_ref()
+                        .is_none_or(|latest| *generation >= latest.generation)
+            })
+        {
+            return Err(SharingError::InvalidState);
+        }
+        let mut targets = BTreeSet::new();
+        for state in slot.states() {
             validate_run_state(state)?;
+            for peer in state.destinations.keys() {
+                if !targets.insert(*peer) || targets.len() > MAX_SHARES {
+                    return Err(SharingError::InvalidState);
+                }
+            }
             let current_settings = snapshot
                 .link_settings
                 .get(folder_id)
                 .ok_or(SharingError::InvalidState)?;
             if state.settings_revision > current_settings.revision
+                || (!slot.retained.is_empty()
+                    && current_settings.settings.cadence != LinkCadence::Continuous)
                 || (state.phase.active()
                     && (state.settings_revision != current_settings.revision
                         || !current_settings.confirmed
@@ -1496,14 +1629,45 @@ fn summary_from(
     next_due_at_unix_ms: Option<u64>,
 ) -> LinkRunSummary {
     let state = slot.authoritative.as_ref();
+    let active = slot.any_active();
     LinkRunSummary {
         generation: state.map_or(0, |state| state.generation),
         state_revision: state.map_or(0, |state| state.state_revision),
         settings_revision: state.map_or(current_settings_revision, |state| state.settings_revision),
-        phase: state.map(|state| state.phase),
-        started_at_unix_ms: state.map(|state| state.started_at_unix_ms),
-        deadline_unix_ms: state.map(|state| state.deadline_unix_ms),
-        ended_at_unix_ms: state.and_then(|state| state.ended_at_unix_ms),
+        phase: state.map(|state| {
+            if active && !state.phase.active() {
+                LinkRunPhase::Running
+            } else if !active && !slot.retained.is_empty() {
+                if slot
+                    .states()
+                    .flat_map(|state| state.destinations.values())
+                    .all(|destination| destination.result == LinkRunDestinationResult::Succeeded)
+                {
+                    LinkRunPhase::Succeeded
+                } else {
+                    LinkRunPhase::Incomplete
+                }
+            } else {
+                state.phase
+            }
+        }),
+        started_at_unix_ms: slot
+            .states()
+            .filter(|state| !active || state.phase.active())
+            .map(|state| state.started_at_unix_ms)
+            .min(),
+        deadline_unix_ms: slot
+            .states()
+            .filter(|state| !active || state.phase.active())
+            .map(|state| state.deadline_unix_ms)
+            .min(),
+        ended_at_unix_ms: (!active)
+            .then(|| {
+                slot.states()
+                    .filter_map(|state| state.ended_at_unix_ms)
+                    .max()
+            })
+            .flatten(),
         next_due_at_unix_ms,
         pending_request: slot
             .pending_request
@@ -1513,8 +1677,8 @@ fn summary_from(
                 requester_id: request.requester_id,
             }),
         rejected_request: slot.rejected_request.clone(),
-        destinations: state
-            .into_iter()
+        destinations: slot
+            .states()
             .flat_map(|state| &state.destinations)
             .map(|(peer_id, destination)| LinkRunDestinationSummary {
                 peer_id: *peer_id,

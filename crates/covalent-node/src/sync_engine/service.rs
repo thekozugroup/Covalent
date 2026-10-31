@@ -544,7 +544,9 @@ impl FolderSyncService {
             }
             return Ok(inner.lifecycle);
         }
-        if update_destination_session(&mut inner, &desired, &batches).await {
+        if update_source_generations(&mut inner, &desired, &batches).await
+            || update_destination_session(&mut inner, &desired, &batches).await
+        {
             return Ok(inner.lifecycle);
         }
         if inner.session.is_some() {
@@ -1199,6 +1201,35 @@ async fn update_destination_session(
     true
 }
 
+async fn update_source_generations(
+    inner: &mut ServiceInner,
+    desired: &EngineSessionSettings,
+    batches: &BTreeMap<Uuid, u64>,
+) -> bool {
+    // A source inventory is obtained by run_observation for each admitted run.
+    // Generation-only changes do not change SFTP authorization and must not
+    // disconnect a different destination that is still reading the old run.
+    if inner.session.is_none()
+        || !matches!(
+            inner.lifecycle,
+            FolderSyncLifecycle::Running | FolderSyncLifecycle::InitialScanning
+        )
+        || inner.applied_settings.as_ref() != Some(desired)
+        || desired.folders.is_empty()
+        || desired
+            .folders
+            .iter()
+            .any(|folder| folder.role() != super::config::EngineFolderRole::Source)
+    {
+        return false;
+    }
+    inner.applied_batch_generations = batches.clone();
+    if inner.lifecycle == FolderSyncLifecycle::InitialScanning {
+        advance_initial_scan(inner).await;
+    }
+    true
+}
+
 async fn reconcile_committed(
     shared: &ServiceShared,
     inner: &mut ServiceInner,
@@ -1222,7 +1253,9 @@ async fn reconcile_committed(
             return inner.lifecycle;
         }
     };
-    if update_destination_session(inner, &desired, &batches).await {
+    if update_source_generations(inner, &desired, &batches).await
+        || update_destination_session(inner, &desired, &batches).await
+    {
         return inner.lifecycle;
     }
     // Source authorization changes still replace their read-only SFTP server.
