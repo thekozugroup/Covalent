@@ -39,6 +39,22 @@ class InterlinkDashboardInstrumentedTest {
         compose.onNodeWithText(resources.getString(R.string.interlink_pi_sync_unavailable)).assertIsDisplayed()
     }
 
+    @Test fun approvalShowsBothFingerprintsAndConnectedStateHidesThem() {
+        val state = mutableStateOf(connected().copy(connection = ApplianceConnectionState.APPROVAL_REQUIRED, observation = null))
+        compose.setContent {
+            InterlinkTheme {
+                Column(Modifier.verticalScroll(rememberScrollState())) { InterlinkApplianceCard(state.value, false, {}, {}) }
+            }
+        }
+        compose.onNodeWithTag("interlink-phone-fingerprint").performScrollTo()
+            .assertTextEquals(resources.getString(R.string.interlink_pi_phone_fingerprint, PHONE.fingerprint))
+        compose.onNodeWithTag("interlink-host-fingerprint").performScrollTo()
+            .assertTextEquals(resources.getString(R.string.interlink_pi_host_fingerprint, PI.fingerprint))
+        compose.runOnIdle { state.value = connected() }
+        compose.onNodeWithTag("interlink-phone-fingerprint").assertDoesNotExist()
+        compose.onNodeWithTag("interlink-host-fingerprint").assertDoesNotExist()
+    }
+
     @Test fun largeTextKeepsDeviceNameAndBothActionsReachableAndRejectsDoubleSubmission() {
         val busy = mutableStateOf(false)
         var refreshes = 0;var choices = 0

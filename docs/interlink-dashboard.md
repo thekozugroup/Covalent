@@ -64,8 +64,15 @@ separate Application/package and no sync-native producers. They prove rendering
 and component behavior, not the installed companion's startup, approval/pairing
 or a signed native package. Production build/package gates remain intact.
 
-Initial Pi owner-approval UI, privileged settings, attachment-bound once/remember
-import confirmations and real phone/Pi roaming/control acceptance remain work.
+The approval-required card shows both full-identity comparison fingerprints.
+The Pi platform now has a separate local approval/revocation page in source;
+the installed older Pi still requires a verified upgrade. Three native component
+tests cover fingerprint visibility and hiding after approval, connection loss,
+and large-text actions. The paired keys, not displayed fingerprints, remain the
+authority boundary. The preview is synthetic and never approves a real device.
+
+Privileged settings, attachment-bound once/remember import confirmations and
+real phone/Pi approval/roaming/control acceptance remain work.
 The general photo-link setup still supports existing paired destinations; the
 new selected controller reference does not silently migrate or retarget them.
 Do not claim completed headless control or a gold ROM from this dashboard.

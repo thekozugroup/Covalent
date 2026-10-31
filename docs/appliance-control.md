@@ -3,8 +3,10 @@
 The controller bond gives one explicitly approved paired identity permission to
 read the appliance's redacted sync status. Ordinary sync pairing does not grant
 control. Interlink now uses it for a retained selected-Pi dashboard; see
-`docs/interlink-dashboard.md`. Local owner approval UI, remote settings and import
-confirmations remain to be implemented. The deployed GPhoto Pi0.2.3 does not
+`docs/interlink-dashboard.md`. The private Pi platform now implements an explicit
+local approval/revocation page against this API; it requires a verified appliance
+upgrade. Remote settings and import confirmations remain to be implemented.
+The deployed GPhoto Pi0.2.3 does not
 speak this protocol.
 
 ## Owner approval and durable authority

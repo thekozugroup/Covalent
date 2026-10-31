@@ -18,6 +18,8 @@
     <string name="interlink_pi_connected_detail">This phone is approved for your Pi.</string>
     <string name="interlink_pi_identity_detail">The saved identity no longer matches the pairing on this phone. Review the devices before choosing again.</string>
     <string name="interlink_pi_approval_detail">Approve this phone as controller during setup on your Pi, then refresh. Sync pairing alone does not grant control.</string>
+    <string name="interlink_pi_phone_fingerprint">This phone · %1$s</string>
+    <string name="interlink_pi_host_fingerprint">Your Pi · %1$s</string>
     <string name="interlink_pi_unsupported_detail">This Pi does not provide compatible controls yet. Photo links remain available below.</string>
     <string name="interlink_pi_sync_unavailable">The Pi is connected, but its photo sync service is unavailable.</string>
     <string name="interlink_pi_sync_stopped">Photo sync service is stopped.</string>

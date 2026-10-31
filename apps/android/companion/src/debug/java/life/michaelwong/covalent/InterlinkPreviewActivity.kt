@@ -34,8 +34,8 @@ class InterlinkPreviewActivity : ComponentActivity() {
             peers = listOf(FolderSyncPeer("preview-pi", "Living room Pi")),
             shares = listOf(link), folders = emptyList(),
         )
-        val phone = ApplianceIdentity("11111111-1111-4111-8111-111111111111", "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE", "a".repeat(20))
-        val pi = ApplianceIdentity("22222222-2222-4222-8222-222222222222", "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI", "b".repeat(20))
+        val phone = ApplianceIdentity("11111111-1111-4111-8111-111111111111", "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE", "b".repeat(20))
+        val pi = ApplianceIdentity("22222222-2222-4222-8222-222222222222", "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI", "a".repeat(20))
         val selected = SelectedAppliance(phone, pi, "Living room Pi", "44444444-4444-4444-8444-444444444444")
         val previewMode = intent.getStringExtra("previewMode")
         val dashboard = ApplianceDashboardState(

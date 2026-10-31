@@ -159,6 +159,14 @@ internal fun InterlinkApplianceCard(
                 connected -> R.string.interlink_pi_connected_detail
                 else -> R.string.interlink_pi_retained_detail
             }))
+            if (state.connection == ApplianceConnectionState.APPROVAL_REQUIRED) {
+                state.selection?.let { selection ->
+                    Text(stringResource(R.string.interlink_pi_phone_fingerprint, selection.local.fingerprint),
+                        style = MaterialTheme.typography.bodySmall, modifier = Modifier.testTag("interlink-phone-fingerprint"))
+                    Text(stringResource(R.string.interlink_pi_host_fingerprint, selection.appliance.fingerprint),
+                        style = MaterialTheme.typography.bodySmall, modifier = Modifier.testTag("interlink-host-fingerprint"))
+                }
+            }
             if (connected) {
                 state.observation?.let { observation ->
                     HorizontalDivider()

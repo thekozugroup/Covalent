@@ -1,4 +1,29 @@
-# Interlink selected-Pi dashboard — 2026-10-31
+# Interlink comparison before owner approval — 2026-10-31
+
+The approval-required dashboard now displays this phone and the selected Pi's
+comparison fingerprints; connected status hides them. Full keys remain the
+identity checks. The isolated debug preview uses matching synthetic identities
+with the private Pi owner-approval fixture. No production node, package, phone
+or Pi was installed/approved during this iteration.
+
+Three final API36 native component tests pass in6.677s: both comparison labels
+and their removal, connection-loss/stale-running removal, and200%text actions.
+Frozen companion lint and test-source compilation pass; normal native/package
+gates are untouched. This Android UI-only change does not alter Rust, worker or
+cryptographic transport inputs. Prior JVM237/0 is its earlier run, not rerun.
+Actual screenshot: docs/brand/interlink-owner-approval.png. The visual fixture
+uses a generic Application and omits native producers, as documented below.
+
+At64846fe hostedCI41251837350 passes foundation, Rust/contracts, dependency delta,
+Mac bundle and Mac integration/UI. Both container vulnerability scans fail;
+API37 is still running at this checkpoint. No manual rerun or scan exemption.
+Private Pi source now provides local explicit owner approval and revocation;
+real upgrade/approval, mutating controls, drive consent and roaming remain gates.
+Bound test/source/signature/cleanup evidence is retained in the private platform
+audit artifacts/validation/2026-10-31-controller-approval. The temporary fixture
+packages and owned emulator/AVD are removed after capture, preserving shared ADB.
+
+## Earlier selected-Pi dashboard iteration
 
 Interlink now calls the existing authenticated read-only controller/status APIs.
 An explicit choice stores the phone and Pi full paired keys, display name and

@@ -23,9 +23,12 @@ native cards and adaptive endpoints remain shared with Covalent.
   selected-Pi dashboard with synthetic approved status.
 - `interlink-dashboard-offline.png`: the same selected Pi retained while
   connection status is unavailable.
+- `interlink-owner-approval.png`: the current approval-required dashboard with
+  example phone/Pi comparison fingerprints. No real approval or live node.
 - `interlink-dashboard-large-actions.png`: the current dashboard at200%font,
-  scrolled to both accessible actions. Two actual native component tests cover
+  scrolled to both accessible actions. Three actual native component tests cover
   retained selection/stale-status removal and large-text action behavior.
+  The third also checks both fingerprints and their removal after approval.
 - `interlink-preview.svg` / `.png`: vector identity board.
 - `interlink-ui-preview.png`: native light-mode screen.
 - `interlink-ui-preview-dark.png`: native dark-mode screen.
