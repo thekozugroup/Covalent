@@ -1,27 +1,27 @@
 {
   "schema": 1,
-  "sourceLockSHA256": "681aedb313d202c7d01c4d471f2efa524e55736c21bedc214ae562efb1c35324",
+  "sourceLockSHA256": "4eaffcec7b7ee1f01ec36267b5f731895c2a721c7c1c6a6cd0f5706b487d0a50",
   "targets": {
     "amd64": {
       "noticeBundle": {
         "path": "THIRD-PARTY-NOTICES.txt",
         "bytes": 130945,
-        "sha256": "b7f3059d358a70f3d65873c9ffad78accc1f38568b5eda05a443e5c09416f29f"
+        "sha256": "fd22d9aae5a91344b8a331fe5bf58037dc3ea499864c1360493f5a4f1ce74db0"
       },
       "sourceReadmeSHA256": "ce088c422e53653cc1f2c77feeb01e740629194499d745b4464f5f949b4a5686",
-      "sourceManifestSHA256": "9a5bdc948d950db0a695993732d4a653638fcae2601efa1d6a93d3d0e888c92b",
-      "sourceFiles": 155,
+      "sourceManifestSHA256": "03cecc5e2686fc9af5fc0adda204e06150776bcd3699a2240940879c2a1b2507",
+      "sourceFiles": 156,
       "builderInstalledDatabaseSHA256": "42cfd3516bf53219c041785cc5319b4951484c3d1562d0e18838e81f5e1c60bd"
     },
     "arm64": {
       "noticeBundle": {
         "path": "THIRD-PARTY-NOTICES.txt",
         "bytes": 130956,
-        "sha256": "88ce80f43ef0d622d6681e8ae1af42286d2598844b3655ea5e6916c1f728fc35"
+        "sha256": "c15a208bac276d95fcb38ae2ee6061a965baec6fb7b074fae9a53dd4bd81c308"
       },
       "sourceReadmeSHA256": "ce088c422e53653cc1f2c77feeb01e740629194499d745b4464f5f949b4a5686",
-      "sourceManifestSHA256": "9a5bdc948d950db0a695993732d4a653638fcae2601efa1d6a93d3d0e888c92b",
-      "sourceFiles": 155,
+      "sourceManifestSHA256": "03cecc5e2686fc9af5fc0adda204e06150776bcd3699a2240940879c2a1b2507",
+      "sourceFiles": 156,
       "builderInstalledDatabaseSHA256": "e5a0daace4fae865d4c7525f7f6d36f0c29d48f397ad3c37ae4eeb0c1dc36f85"
     }
   },

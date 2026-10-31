@@ -1,3 +1,48 @@
+# Maintained worker and concurrent-sync qualification — 2026-10-31
+
+Updated chi5.3.1→5.4.0 and x/net0.60→0.62 (MVS crypto0.58 plus
+related x modules), all four module-digest consumers and every macOS binary/
+notice/signing verifier together. Exact Go1.26.10 worker tree is
+9eec016c4843e1d82167cbb932e356ab030adb12. Actual macOS ARM64 and Android26
+ARM64/x64 workers build with full target notices and provenance. Mac packaging,
+ad-hoc signing and repeated byte-identical builds pass. Full node library:
+312 passed; denied-warning clippy, foundation, workflow and collector contracts pass.
+
+Strict source govulncheck1.9.0 reports zero vulnerable imported packages/calls.
+One required-module advisory, GO-2026-5932, concerns OpenPGP code absent from all
+three exact compiled target graphs; no suppression. Stripped binary scans fall
+back to possible module-level symbols and are not misreported as executed-code
+findings or as clean scans. Sanitized hashes and scope: artifacts/evidence/worker-security/.
+
+Previous CI41221509985 passes shared Rust/security, Android foundation and both
+Mac gates. Both container images build but the final guard refuses a stale
+packaged-evidence reference. Regenerated canonical references with the production
+collector, first reproducing every old sealed field exactly; unchanged Caddy/
+Go stage inputs justify preserving their installed-database digests. Added an
+early source/reference hash check. Full exact-current image gates remain required.
+The API37 emulator reaches Interlink permission recovery, then adb reports
+missing-service/exit20 on input tap; no cause or passing acceptance is inferred.
+
+Executed all seven maintained-worker cases: five pass, collection/remount and
+three-node delivery fail under two-test concurrency. Both failing scenarios pass
+separately on the final worker. A paired final-worker reproduction still fails
+(initial transfer and mount return); fresh status shows running batches with
+pending destinations at the original sixty-second file deadline. Cause remains
+open. Added bounded failure status snapshots and the existing redacted error
+sink to the test helper, retaining waits/assertions, and added the complete
+seven-case gate to CI. No serialization, filtered passing acceptance, retry mask,
+production shutdown rewrite or journal deletion is applied.
+
+The scheduled case intentionally waits a real fifteen minutes and passed in the
+full run. An additional redundant diagnostic was cancelled after discovering
+that cadence, without a successful result claim. Stack sampling established no
+shutdown deadlock. Temporary shutdown instrumentation was removed.
+
+No phone access, production installation, media/account/pairing change or release.
+The private appliance source may advance after published source identity and
+adaptation checking; gold/physical/cloud confirmation gates remain open.
+Task-owned SDK/builds/fixtures are tracked privately and cleaned after this stage.
+
 # Runtime provenance follow-up — 2026-10-31
 
 Exact-head hosted CI41220252198 passed the new Python package resolution and

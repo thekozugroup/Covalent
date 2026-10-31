@@ -126,6 +126,24 @@ jobs:
         run: test "$(uname -m)" = arm64
       - run: ./scripts/test-macos-open-source-notices.sh
       - run: ./scripts/test-macos-sync-engine-packaging.sh
+      - name: Verify maintained-worker folder links
+        run: |
+          set -euo pipefail
+          work=$(mktemp -d "${RUNNER_TEMP}/covalent-folder-links.XXXXXX")
+          trap 'chmod -R u+w "$work"; rm -rf "$work"' EXIT
+          ./scripts/build-macos-sync-engine.sh \
+            "${GITHUB_WORKSPACE}/packaging/rclone" "$work/engine"
+          xcrun clang -std=c11 -Os -Wall -Wextra -Werror -arch arm64 \
+            -mmacosx-version-min=15.0 packaging/sync-engine/engine-guardian.c \
+            -o "$work/guardian"
+          COVALENT_TEST_SYNC_WORKER="$work/engine/covalent-rclone" \
+          COVALENT_TEST_SYNC_GUARDIAN="$work/guardian" \
+            cargo test --locked -p covalent-node --test one_way_links \
+              -- --ignored --test-threads=2 --nocapture
+      - name: Scan the selected worker source for vulnerabilities
+        env:
+          GOTOOLCHAIN: local
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 -C packaging/rclone ./...
       - run: brew install xcodegen
       - run: swift test --package-path apps/apple
       - name: Generate Apple dependency inventories

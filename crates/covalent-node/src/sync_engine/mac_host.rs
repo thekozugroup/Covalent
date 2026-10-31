@@ -26,7 +26,7 @@ const ENGINE_VERSION: &str = "v1.75.1";
 const ENGINE_COMMIT: &str = "687d264b689b8c49a67e2e52a8a5e0caa01c04ce";
 const SOURCE_STATE: &str = "upstream-unmodified";
 const UNSIGNED_ENGINE_SHA256: &str =
-    "07cb75e9292c3c3a08322f4e34a6b1e6f91599b43ae917ae64f6d13bfb864922";
+    "f68c6ae032f8af37e4977197e581a67f45e1e67a0b22fe172e1f0ec7e5cb5d74";
 const GUARDIAN_SOURCE_SHA256: &str =
     "c50b5cf10a287c4c061b7891978fd2681b5c96910eb2c69c922beae349140579";
 
@@ -240,17 +240,17 @@ fn validate_manifest(manifest: &PackageManifest) -> Result<(), MacHostError> {
         || manifest.executables.covalent_engine_guardian.architecture != "arm64"
         || manifest.executables.covalent_rclone.architecture != "arm64"
         || manifest.notices.provenance
-            != "e22474484d6fe7a68be02b7685961ecf0c689c357dc540e782f67fe16058df2e"
+            != "2311fc29e78f4f7744ba84ae52b655760f41da3c964e3b5e43a7cc49fc4a763a"
         || manifest.notices.license
             != "9266eae9c6a441de0f6847f19ac8f09b280d55612b079eca03b3d49b822c1a71"
         || manifest.notices.source_build
-            != "f0217883095af8950ae68f1a95f9d3210faa7d566736c85fc410b401124f4618"
+            != "58c53a3874b4a5a5bc5ed5741bc0afda5cc6754f9683f4373abba521bb353f16"
         || manifest.notices.index
-            != "5868a5e73b0ea3be7c54229348a973eafe2f81d8db5f755db5f97cc697a4f75c"
+            != "dc32083ea41b4791c45c87fdab82a60aa0484be48a21b4896551db2cb2c518de"
         || manifest.notices.target_manifest
-            != "5a6294b67083cf9e394b11702a9ec943a9efb2e965a7551999d7a78d25ba4fc8"
+            != "9750fb3ed0f83959bde97152534b819ea513a45d8b76b3427cbc0e290dccfd9c"
         || manifest.notices.combined
-            != "3af0afba1e2feb48c93b2ee6b3204262784b19604133bb518bdcfc904722a223"
+            != "bb71a8751b159f88891759f7eab8dc9514a9a00ce198af426dddf7f991fc6a9a"
     {
         return Err(MacHostError::InvalidPackage);
     }
@@ -370,12 +370,12 @@ mod tests {
             },
             "guardian": { "sourceSha256": GUARDIAN_SOURCE_SHA256 },
             "notices": {
-                "PROVENANCE.txt": "e22474484d6fe7a68be02b7685961ecf0c689c357dc540e782f67fe16058df2e",
+                "PROVENANCE.txt": "2311fc29e78f4f7744ba84ae52b655760f41da3c964e3b5e43a7cc49fc4a763a",
                 "rclone-LICENSE.txt": "9266eae9c6a441de0f6847f19ac8f09b280d55612b079eca03b3d49b822c1a71",
-                "source-build.json": "f0217883095af8950ae68f1a95f9d3210faa7d566736c85fc410b401124f4618",
-                "notices-index.txt": "5868a5e73b0ea3be7c54229348a973eafe2f81d8db5f755db5f97cc697a4f75c",
-                "notices/manifest.json": "5a6294b67083cf9e394b11702a9ec943a9efb2e965a7551999d7a78d25ba4fc8",
-                "notices/THIRD-PARTY-NOTICES.txt": "3af0afba1e2feb48c93b2ee6b3204262784b19604133bb518bdcfc904722a223",
+                "source-build.json": "58c53a3874b4a5a5bc5ed5741bc0afda5cc6754f9683f4373abba521bb353f16",
+                "notices-index.txt": "dc32083ea41b4791c45c87fdab82a60aa0484be48a21b4896551db2cb2c518de",
+                "notices/manifest.json": "9750fb3ed0f83959bde97152534b819ea513a45d8b76b3427cbc0e290dccfd9c",
+                "notices/THIRD-PARTY-NOTICES.txt": "bb71a8751b159f88891759f7eab8dc9514a9a00ce198af426dddf7f991fc6a9a",
             },
             "executables": {
                 GUARDIAN_NAME: { "architecture": "arm64", "signedSha256": signed },

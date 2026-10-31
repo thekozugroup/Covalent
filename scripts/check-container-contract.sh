@@ -24,6 +24,19 @@ alpine_lock="$repo_root/packaging/docker/alpine/runtime-source-lock.json"
 alpine_packaged_lock="$repo_root/packaging/docker/alpine/packaged-evidence-lock.json"
 runtime_digest="sha256:fd791d74b68913cbb027c6546007b3f0d3bc45125f797758156952bc2d6daf40"
 
+# Catch stale reference data before spending a full multi-architecture build.
+python3 -B - "$alpine_lock" "$alpine_packaged_lock" <<'PY'
+import hashlib
+import json
+from pathlib import Path
+import sys
+
+source, packaged = map(Path, sys.argv[1:])
+reviewed = json.loads(packaged.read_bytes())
+if reviewed.get("sourceLockSHA256") != hashlib.sha256(source.read_bytes()).hexdigest():
+    raise SystemExit("Alpine source and packaged evidence locks differ; regenerate both reference targets")
+PY
+
 require_text() {
   expected=$1
   path=$2

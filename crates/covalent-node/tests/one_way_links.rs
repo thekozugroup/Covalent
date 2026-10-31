@@ -89,6 +89,9 @@ fn executable_from_env(name: &str) -> (PathBuf, [u8; 32]) {
 }
 
 fn test_binaries() -> TestBinaries {
+    covalent_node::sync_engine::set_transfer_diagnostic_sink(|message| {
+        eprintln!("{message}");
+    });
     let (worker, worker_sha256) = executable_from_env("COVALENT_TEST_SYNC_WORKER");
     let (guardian, guardian_sha256) = executable_from_env("COVALENT_TEST_SYNC_GUARDIAN");
     TestBinaries {
@@ -482,11 +485,33 @@ async fn update_settings(
 }
 
 async fn wait_file(path: &Path, expected: &[u8], description: &str) {
-    assert!(
-        wait_file_until(path, expected).await,
-        "timed out waiting for {description}: {}",
-        path.display()
-    );
+    wait_file_with_status(path, expected, description, &[]).await;
+}
+
+async fn wait_file_with_status(
+    path: &Path,
+    expected: &[u8],
+    description: &str,
+    nodes: &[&NodeRuntime],
+) {
+    if wait_file_until(path, expected).await {
+        return;
+    }
+    for node in nodes {
+        match tokio::time::timeout(
+            Duration::from_secs(5),
+            call(node, "GET", "/api/v1/sync/status", None),
+        )
+        .await
+        {
+            Ok(response) => eprintln!(
+                "failed transfer status {}: {}",
+                response.status, response.body
+            ),
+            Err(_) => eprintln!("failed transfer status request timed out"),
+        }
+    }
+    panic!("timed out waiting for {description}: {}", path.display());
 }
 
 async fn wait_file_until(path: &Path, expected: &[u8]) -> bool {
@@ -605,16 +630,18 @@ async fn three_node_one_way_links_enforce_deletions_restore_and_shared_settings(
     .await;
 
     write(&source_root, "initial.txt", b"source initial\n");
-    wait_file(
+    wait_file_with_status(
         &destination_a_root.join("initial.txt"),
         b"source initial\n",
         "initial transfer to destination A",
+        &[&source, &destination_a, &destination_b],
     )
     .await;
-    wait_file(
+    wait_file_with_status(
         &destination_b_root.join("initial.txt"),
         b"source initial\n",
         "initial transfer to destination B",
+        &[&source, &destination_a, &destination_b],
     )
     .await;
 
@@ -624,16 +651,18 @@ async fn three_node_one_way_links_enforce_deletions_restore_and_shared_settings(
         b"must stay local\n",
     );
     write(&source_root, "destination-barrier.txt", b"barrier one\n");
-    wait_file(
+    wait_file_with_status(
         &destination_a_root.join("destination-barrier.txt"),
         b"barrier one\n",
         "destination A barrier after its local write",
+        &[&source, &destination_a, &destination_b],
     )
     .await;
-    wait_file(
+    wait_file_with_status(
         &destination_b_root.join("destination-barrier.txt"),
         b"barrier one\n",
         "destination B barrier after destination A local write",
+        &[&source, &destination_a, &destination_b],
     )
     .await;
     assert_absent(
@@ -646,16 +675,18 @@ async fn three_node_one_way_links_enforce_deletions_restore_and_shared_settings(
     );
 
     write(&source_root, "local-delete.txt", b"source version one\n");
-    wait_file(
+    wait_file_with_status(
         &destination_a_root.join("local-delete.txt"),
         b"source version one\n",
         "local-deletion seed at destination A",
+        &[&source, &destination_a, &destination_b],
     )
     .await;
-    wait_file(
+    wait_file_with_status(
         &destination_b_root.join("local-delete.txt"),
         b"source version one\n",
         "local-deletion seed at destination B",
+        &[&source, &destination_a, &destination_b],
     )
     .await;
     fs::remove_file(destination_a_root.join("local-delete.txt"))
@@ -666,16 +697,18 @@ async fn three_node_one_way_links_enforce_deletions_restore_and_shared_settings(
         b"source version two is different\n",
     );
     write(&source_root, "local-delete-barrier.txt", b"barrier two\n");
-    wait_file(
+    wait_file_with_status(
         &destination_b_root.join("local-delete.txt"),
         b"source version two is different\n",
         "source edit at destination B",
+        &[&source, &destination_a, &destination_b],
     )
     .await;
-    wait_file(
+    wait_file_with_status(
         &destination_a_root.join("local-delete-barrier.txt"),
         b"barrier two\n",
         "destination A barrier after source edit",
+        &[&source, &destination_a, &destination_b],
     )
     .await;
     assert_absent(
@@ -688,16 +721,18 @@ async fn three_node_one_way_links_enforce_deletions_restore_and_shared_settings(
         "keep-after-source-delete.txt",
         b"keep this copy\n",
     );
-    wait_file(
+    wait_file_with_status(
         &destination_a_root.join("keep-after-source-delete.txt"),
         b"keep this copy\n",
         "kept-copy seed at destination A",
+        &[&source, &destination_a, &destination_b],
     )
     .await;
-    wait_file(
+    wait_file_with_status(
         &destination_b_root.join("keep-after-source-delete.txt"),
         b"keep this copy\n",
         "kept-copy seed at destination B",
+        &[&source, &destination_a, &destination_b],
     )
     .await;
     fs::remove_file(source_root.join("keep-after-source-delete.txt"))
@@ -707,16 +742,18 @@ async fn three_node_one_way_links_enforce_deletions_restore_and_shared_settings(
         "source-delete-barrier.txt",
         b"barrier three\n",
     );
-    wait_file(
+    wait_file_with_status(
         &destination_a_root.join("source-delete-barrier.txt"),
         b"barrier three\n",
         "destination A barrier after kept source deletion",
+        &[&source, &destination_a, &destination_b],
     )
     .await;
-    wait_file(
+    wait_file_with_status(
         &destination_b_root.join("source-delete-barrier.txt"),
         b"barrier three\n",
         "destination B barrier after kept source deletion",
+        &[&source, &destination_a, &destination_b],
     )
     .await;
     assert_eq!(
@@ -772,31 +809,35 @@ async fn three_node_one_way_links_enforce_deletions_restore_and_shared_settings(
         "propagated-delete.txt",
         b"delete everywhere\n",
     );
-    wait_file(
+    wait_file_with_status(
         &destination_a_root.join("propagated-delete.txt"),
         b"delete everywhere\n",
         "propagated-deletion seed at destination A",
+        &[&source, &destination_a, &destination_b],
     )
     .await;
-    wait_file(
+    wait_file_with_status(
         &destination_b_root.join("propagated-delete.txt"),
         b"delete everywhere\n",
         "propagated-deletion seed at destination B",
+        &[&source, &destination_a, &destination_b],
     )
     .await;
     fs::remove_file(source_root.join("propagated-delete.txt"))
         .expect("delete source file under propagation policy");
     write(&source_root, "propagation-barrier.txt", b"barrier four\n");
-    wait_file(
+    wait_file_with_status(
         &destination_a_root.join("propagation-barrier.txt"),
         b"barrier four\n",
         "destination A barrier after propagated deletion",
+        &[&source, &destination_a, &destination_b],
     )
     .await;
-    wait_file(
+    wait_file_with_status(
         &destination_b_root.join("propagation-barrier.txt"),
         b"barrier four\n",
         "destination B barrier after propagated deletion",
+        &[&source, &destination_a, &destination_b],
     )
     .await;
     wait_absent(
@@ -814,16 +855,18 @@ async fn three_node_one_way_links_enforce_deletions_restore_and_shared_settings(
     let source_restore_file = source_root.join("restore-toggle.txt");
     let destination_a_restore_file = destination_a_root.join("restore-toggle.txt");
     write(&source_root, "restore-toggle.txt", restore_bytes);
-    wait_file(
+    wait_file_with_status(
         &destination_a_restore_file,
         restore_bytes,
         "restore seed at destination A",
+        &[&source, &destination_a, &destination_b],
     )
     .await;
-    wait_file(
+    wait_file_with_status(
         &destination_b_root.join("restore-toggle.txt"),
         restore_bytes,
         "restore seed at destination B",
+        &[&source, &destination_a, &destination_b],
     )
     .await;
     fs::remove_file(&destination_a_restore_file)
@@ -1107,10 +1150,11 @@ async fn three_node_one_way_links_enforce_deletions_restore_and_shared_settings(
         "offline-destination.txt",
         b"online destination continues\n",
     );
-    wait_file(
+    wait_file_with_status(
         &destination_a_root.join("offline-destination.txt"),
         b"online destination continues\n",
         "online destination while another destination is offline",
+        &[&source, &destination_a],
     )
     .await;
     assert_absent(
@@ -1207,7 +1251,13 @@ async fn collection_links_isolate_sources_and_preserve_files_when_a_source_canno
         ),
         (b_target.join("b-only.jpg"), b"only family B\n".as_slice()),
     ] {
-        wait_file(&path, bytes, "isolated collection transfer").await;
+        wait_file_with_status(
+            &path,
+            bytes,
+            "isolated collection transfer",
+            &[&a, &b, &pool],
+        )
+        .await;
     }
     for path in [
         a_root.join("b-only.jpg"),
@@ -1258,10 +1308,11 @@ async fn collection_links_isolate_sources_and_preserve_files_when_a_source_canno
     })
     .await;
     write(&b_root, "online.jpg", b"family B continues\n");
-    wait_file(
+    wait_file_with_status(
         &b_target.join("online.jpg"),
         b"family B continues\n",
         "healthy collection link while another source is unavailable",
+        &[&a, &b, &pool],
     )
     .await;
     assert_eq!(
@@ -1276,10 +1327,11 @@ async fn collection_links_isolate_sources_and_preserve_files_when_a_source_canno
     fs::rename(&saved_root, &a_root).expect("reattach original selected source");
     a = start_node(&a_spec, &binaries).await;
     write(&a_root, "recovered.jpg", b"mount recovered\n");
-    wait_file(
+    wait_file_with_status(
         &a_target.join("recovered.jpg"),
         b"mount recovered\n",
         "source resumes after its original mount returns",
+        &[&a, &pool],
     )
     .await;
     fs::remove_file(a_root.join("IMG_0001.jpg")).expect("delete only family A photo");
@@ -1288,10 +1340,11 @@ async fn collection_links_isolate_sources_and_preserve_files_when_a_source_canno
         "delete-barrier.jpg",
         b"family A deletion observed\n",
     );
-    wait_file(
+    wait_file_with_status(
         &a_target.join("delete-barrier.jpg"),
         b"family A deletion observed\n",
         "collection deletion barrier",
+        &[&a, &b, &pool],
     )
     .await;
     wait_absent(
@@ -1331,10 +1384,11 @@ async fn collection_links_isolate_sources_and_preserve_files_when_a_source_canno
         "scan-failure-barrier.jpg",
         b"family B still works\n",
     );
-    wait_file(
+    wait_file_with_status(
         &b_target.join("scan-failure-barrier.jpg"),
         b"family B still works\n",
         "healthy link during other source scan failure",
+        &[&a, &b, &pool],
     )
     .await;
     assert_eq!(
@@ -1350,10 +1404,11 @@ async fn collection_links_isolate_sources_and_preserve_files_when_a_source_canno
     fs::rename(&missing_photo, a_root.join("a-only.jpg")).expect("restore indexed photo");
     a = start_node(&a_spec, &binaries).await;
     write(&a_root, "scan-recovered.jpg", b"scan recovered\n");
-    wait_file(
+    wait_file_with_status(
         &a_target.join("scan-recovered.jpg"),
         b"scan recovered\n",
         "source recovers after successful scan",
+        &[&a, &b, &pool],
     )
     .await;
     assert_absent(
