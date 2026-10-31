@@ -222,6 +222,27 @@ async fn status(node: &NodeRuntime) -> Value {
     }
 }
 
+async fn recovery_status(node: &NodeRuntime) -> Value {
+    let deadline = Instant::now() + WAIT_LIMIT;
+    loop {
+        let response = call(node, "GET", "/api/v1/sync/recovery", None).await;
+        if response.status == 200 {
+            return response.json();
+        }
+        let body = response.json();
+        assert!(
+            response.status == 503
+                && body["protocolVersion"] == 1
+                && body["code"] == "folder_sync_busy"
+                && body["retryable"] == true
+                && Instant::now() < deadline,
+            "recovery observation failed: {}",
+            response.body
+        );
+        tokio::time::sleep(POLL_INTERVAL).await;
+    }
+}
+
 fn string_field<'a>(value: &'a Value, name: &str) -> &'a str {
     value
         .get(name)
@@ -2833,6 +2854,205 @@ async fn continuous_online_destination_advances_after_inventory_while_another_st
         scenario,
         "independent offline fanout",
         "INDEPENDENT_FANOUT",
+    )
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires explicit maintained folder-sync worker and freshly compiled guardian paths"]
+async fn unconfirmed_copy_holds_originals_but_allows_new_files_across_restart() {
+    let root = tempfile::Builder::new()
+        .prefix("covalent-unconfirmed-progress-")
+        .tempdir()
+        .unwrap();
+    let mut binaries = test_binaries();
+    let marker = root.path().join("lost-copy-ack");
+    let first_log = root.path().join("first-copy-log");
+    let wrapper = root.path().join("lose-first-copy-ack");
+    for path in [&binaries.worker, &marker, &first_log] {
+        assert!(!path.to_string_lossy().contains('\''));
+    }
+    fs::write(&wrapper, format!(
+        "#!/bin/sh\numask 077\ncase \"$1\" in\ncopy|sync)\n if [ ! -e '{}' ]; then\n  '{}' \"$@\" >/dev/null 2>'{}'\n  result=$?\n  if [ \"$result\" -ne 0 ]; then cat '{}' >&2; exit \"$result\"; fi\n  : > '{}'\n  printf '%s\\n' '{{\"level\":\"error\",\"msg\":\"injected lost completion acknowledgement\"}}' >&2\n  exit 5\n fi\n ;;\nesac\nexec '{}' \"$@\"\n",
+        marker.display(), binaries.worker.display(), first_log.display(), first_log.display(),
+        marker.display(), binaries.worker.display())).unwrap();
+    fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o500)).unwrap();
+    binaries.worker_sha256 = Sha256::digest(fs::read(&wrapper).unwrap()).into();
+    binaries.worker = wrapper;
+    eprintln!(
+        "UNCONFIRMED_PROGRESS_PROVENANCE wrapper_sha256={} guardian_sha256={}",
+        sha256_hex(binaries.worker_sha256),
+        sha256_hex(binaries.guardian_sha256)
+    );
+    let mut source_spec = NodeSpec::new(root.path(), "unconfirmed-source", 0xC1);
+    let mut target_spec = NodeSpec::new(root.path(), "unconfirmed-target", 0xC2);
+    let target_data = target_spec.data_directory.clone();
+    let source_root = root.path().join("source-files");
+    let target_root = root.path().join("target-files");
+    for path in [&source_root, &target_root] {
+        private_directory(path);
+    }
+    write(&source_root, "ambiguous.txt", b"initial source bytes\n");
+    write(&target_root, "unrelated.txt", b"unrelated original\n");
+    let registry = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let scenario_registry = Arc::clone(&registry);
+    let scenario = tokio::spawn(async move {
+        let source = start_registered_node(&source_spec, &binaries, &scenario_registry).await;
+        source_spec.peer_address = source.ready_info().peer_address();
+        let target = start_registered_node(&target_spec, &binaries, &scenario_registry).await;
+        target_spec.peer_address = target.ready_info().peer_address();
+        let peer = pair(&source, &target, "Unconfirmed target").await;
+        let folder = Uuid::new_v4();
+        offer_and_accept_at_cadence(
+            &source,
+            &target,
+            &peer,
+            folder,
+            &source_root,
+            &target_root,
+            json!({"mode":"manual"}),
+        )
+        .await;
+        for node in [&source, &target] {
+            wait_ready_at(node, "unconfirmed manual link", folder, 1, 0, false, false).await;
+        }
+        update_settings(&source, folder, 0, Uuid::new_v4(), true, false).await;
+        for node in [&source, &target] {
+            wait_ready_at(
+                node,
+                "unconfirmed deletion policy",
+                folder,
+                1,
+                1,
+                true,
+                false,
+            )
+            .await;
+        }
+        request_batch(&source, folder, 0, 1).await;
+        wait_batch(&source, folder, 1, "incomplete").await;
+        assert_eq!(
+            fs::read(target_root.join("ambiguous.txt")).unwrap(),
+            b"initial source bytes\n"
+        );
+        assert!(
+            marker.exists(),
+            "the actual copy must complete before acknowledgement loss"
+        );
+        let policy_path = target_data
+            .join("folder-sync/database")
+            .join(format!("rclone-policy-{folder}.v1.json"));
+        let first_policy: Value = serde_json::from_slice(&fs::read(&policy_path).unwrap()).unwrap();
+        let folder_key = folder.to_string();
+        let uncertain = first_policy["folders"][&folder_key]["pending"].clone();
+        assert!(!uncertain.is_null());
+        assert_eq!(first_policy["folders"][&folder_key]["copyCompleted"], false);
+        // An independent local write must survive even if its source disappears.
+        write(
+            &target_root,
+            "ambiguous.txt",
+            b"independent local bytes must survive\n",
+        );
+        fs::remove_file(source_root.join("ambiguous.txt")).unwrap();
+        write(
+            &source_root,
+            "new-conflict.txt",
+            b"source version must wait for review\n",
+        );
+        write(
+            &target_root,
+            "new-conflict.txt",
+            b"pre-existing local original\n",
+        );
+        write(&source_root, "fresh.txt", b"new backup continues\n");
+        request_batch(&source, folder, 1, 1).await;
+        wait_file_with_status(
+            &target_root.join("fresh.txt"),
+            b"new backup continues\n",
+            "new file while older copy needs review",
+            &[&source, &target],
+        )
+        .await;
+        wait_batch(&source, folder, 2, "incomplete").await;
+        let policy: Value = serde_json::from_slice(&fs::read(&policy_path).unwrap()).unwrap();
+        let state = &policy["folders"][&folder_key];
+        assert_eq!(state["unresolved"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            state["unresolved"][0]["sourceIndex"],
+            uncertain["sourceIndex"]
+        );
+        assert_eq!(state["unresolved"][0]["source"], uncertain["source"]);
+        assert_eq!(state["unresolved"][0]["allowed"], json!(["ambiguous.txt"]));
+        assert!(state["pending"].is_null());
+        assert!(
+            state["owned"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|path| path != "ambiguous.txt")
+        );
+        assert!(state["delivered"].get("ambiguous.txt").is_none());
+        assert!(state["delivered"].get("fresh.txt").is_some());
+        assert!(state["delivered"].get("new-conflict.txt").is_none());
+        assert_eq!(
+            fs::read(target_root.join("new-conflict.txt")).unwrap(),
+            b"pre-existing local original\n"
+        );
+        let recovery = recovery_status(&target).await;
+        assert_eq!(recovery["observationsComplete"], true);
+        assert_eq!(recovery["folders"][0]["unconfirmedFiles"], 2);
+        assert!(!recovery.to_string().contains("ambiguous.txt"));
+        assert!(!recovery.to_string().contains("new-conflict.txt"));
+        assert_eq!(
+            fs::read(target_root.join("ambiguous.txt")).unwrap(),
+            b"independent local bytes must survive\n"
+        );
+        source.stop().await.unwrap();
+        target.stop().await.unwrap();
+        let source = start_registered_node(&source_spec, &binaries, &scenario_registry).await;
+        let target = start_registered_node(&target_spec, &binaries, &scenario_registry).await;
+        write(
+            &source_root,
+            "fresh-again.txt",
+            b"progress survives reopen\n",
+        );
+        request_batch(&source, folder, 2, 1).await;
+        wait_file_with_status(
+            &target_root.join("fresh-again.txt"),
+            b"progress survives reopen\n",
+            "new file after unresolved state reopen",
+            &[&source, &target],
+        )
+        .await;
+        wait_batch(&source, folder, 3, "incomplete").await;
+        assert_eq!(
+            fs::read(target_root.join("ambiguous.txt")).unwrap(),
+            b"independent local bytes must survive\n"
+        );
+        assert_eq!(
+            fs::read(target_root.join("unrelated.txt")).unwrap(),
+            b"unrelated original\n"
+        );
+        let reopened: Value = serde_json::from_slice(&fs::read(&policy_path).unwrap()).unwrap();
+        assert_eq!(
+            reopened["folders"][&folder_key]["unresolved"],
+            state["unresolved"]
+        );
+        assert_eq!(
+            fs::read(target_root.join("new-conflict.txt")).unwrap(),
+            b"pre-existing local original\n"
+        );
+        let recovery = recovery_status(&target).await;
+        assert_eq!(recovery["folders"][0]["unconfirmedFiles"], 2);
+        source.stop().await.unwrap();
+        target.stop().await.unwrap();
+    });
+    finish_registered_scenario(
+        root,
+        registry,
+        scenario,
+        "unconfirmed progress",
+        "UNCONFIRMED_PROGRESS",
     )
     .await;
 }

@@ -535,6 +535,38 @@ impl FolderSharingJournal {
         self.store.revision()
     }
 
+    pub(super) fn recovery_reader(
+        &self,
+        active: BTreeSet<Uuid>,
+    ) -> Result<super::rclone::RecoveryReader, SharingError> {
+        self.store
+            .payload()
+            .map_err(|_| SharingError::PersistenceUncertain)?;
+        let configuration = self
+            .engine
+            .config()
+            .map_err(|_| SharingError::InvalidState)?;
+        let mut folders = BTreeSet::new();
+        for share in self.snapshot.shares.iter().filter(|share| {
+            !share.removed
+                && share.commit.is_some()
+                && share.offer.link_policy.is_some()
+                && share.offer.target_device_id == self.engine.device_id()
+        }) {
+            let trust = observe_trust(&configuration, share.peer_identity.device_id)?
+                .ok_or(SharingError::UntrustedPeer)?;
+            if !trust.matches(share) {
+                return Err(SharingError::UntrustedPeer);
+            }
+            folders.insert(share.offer.folder_id);
+        }
+        Ok(super::rclone::RecoveryReader::new(
+            Arc::clone(&self.installation),
+            folders,
+            active,
+        ))
+    }
+
     /// Validate an authenticated address proof without changing durable state.
     /// The opaque result is bound to this journal and exact revision.
     pub(crate) fn prepare_peer_address_refresh(

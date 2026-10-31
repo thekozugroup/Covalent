@@ -497,6 +497,13 @@ impl ManagedEngineSession {
         (health, Ok(peers))
     }
 
+    pub(super) fn active_folder_jobs(&self) -> BTreeSet<Uuid> {
+        self.jobs
+            .iter()
+            .filter_map(|(folder, job)| (!job.is_finished()).then_some(*folder))
+            .collect()
+    }
+
     pub(super) async fn run_observation(
         &mut self,
         folder: Uuid,

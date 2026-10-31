@@ -1,3 +1,46 @@
+# Unconfirmed-copy isolation — 2026-10-31
+
+Hosted a7d5788 run41236588580 supplied a contrary collection witness: seven
+worker cases passed, one deletion barrier failed after an unacknowledged copy
+left the destination requiring recovery. The local eight-case pass remains
+valid only for its own run. The destination now holds uncertain unowned paths
+and independent local-file collisions while unrelated new files can advance.
+Full admitted source proofs remain unchanged; held files never acquire deletion
+ownership from later success. The whole link remains incomplete. Restore
+permission releases a hold only when the destination is absent. See
+docs/unconfirmed-copy-recovery.md for safety, API and rollback boundaries.
+
+A local-authenticated read-only recovery endpoint reports bounded redacted
+counts, with null observations when unavailable. It runs metadata reads outside
+the lifecycle lock and preserves admission through cancellation. No companion
+review/mutation, overwrite approval or cloud confirmation is implemented here.
+Two pinned Unicode libraries provide conservative case/normalization holds;
+all pre-existing dependency resolutions remain unchanged.
+Existing explicit destination-root replacement resets folder policy. A hold-safe
+archive/refusal and owner review remain required before any production install;
+never use root repair/reset as an unconfirmed-copy bypass.
+
+Final full node suite:325 passed. Dependency advisories, bans, licenses and
+sources pass. Android26 ARM64 node/JNI checking and foundation pass. Focused
+real-worker recovery/restart case passes and fails on a7d5788 as expected. Full
+nine-case concurrent transfer suite is running with original file deadlines and
+the real fifteen-minute schedule; final strict clippy is running. Current local
+collection case passes. Do not infer complete acceptance before the full result.
+
+The same hosted run passes every named Covalent API37 instrumentation test
+(86 baseline plus the real SAF journey), then Interlink's separate permission
+journey fails at ADB input with a broken pipe. Both container package contracts
+pass before the Caddy go-jose High advisory refusal. These are still open gates;
+no suppression, automatic rerun or production-ready claim is made.
+
+Solstice is away. No phone/Pi connection, production install, account, pairing,
+original media, release or gold image changed this iteration. CleanOS task
+gphoto-uncertain-copy-progress-1793478524895342000-61124-0 owns current temporary
+builds, real worker and fixtures. Its Go SDK/archive are already removed; active
+Rust/worker resources remain until checks finish. Shared ADB76421/5037, stopped
+Colima, SDKs, keys and previous migration candidate are preserved. Final source
+pin, evidence, cleanup and draft PR readback follow successful qualification.
+
 # Independent continuous fanout — 2026-10-31
 
 Draft separates continuous destination generations while preserving pending

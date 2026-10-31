@@ -203,6 +203,32 @@ paths:
           $ref: "#/components/responses/Conflict"
         "503":
           $ref: "#/components/responses/Conflict"
+  /api/v1/sync/recovery:
+    get:
+      summary: Read recorded unconfirmed destination-file counts
+      operationId: folderSyncRecovery
+      description: >-
+        Read-only metadata for accepted current one-way destination links. No paths,
+        credentials or write consent are returned. Counts describe durable records;
+        zero does not prove backup, indexing or absence of untracked files. Active
+        unknown writes, malformed records and exhausted read budget return unavailable
+        rows with null counts. Reading never clears state, starts workers or performs
+        media/network scans. Unknown query parameters are rejected.
+      responses:
+        "200":
+          description: Bounded recorded recovery observations.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FolderSyncRecovery"
+        "400":
+          $ref: "#/components/responses/Conflict"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "503":
+          $ref: "#/components/responses/Conflict"
   /api/v1/sync/folders:
     post:
       summary: Offer a one-way source folder to a paired destination
@@ -2333,6 +2359,48 @@ components:
           format: uuid
         paused:
           type: boolean
+    FolderSyncRecovery:
+      type: object
+      additionalProperties: false
+      required: [schemaVersion, observationsComplete, folders]
+      properties:
+        schemaVersion:
+          const: 1
+        observationsComplete:
+          type: boolean
+          description: All metadata observations are available; never asserts transfer or cloud completion.
+        folders:
+          type: array
+          maxItems: 512
+          items:
+            type: object
+            additionalProperties: false
+            required: [folderId, available, unconfirmedFiles, unconfirmedSourceBytes]
+            properties:
+              folderId:
+                type: string
+                format: uuid
+              available:
+                type: boolean
+              unconfirmedFiles:
+                type: [integer, "null"]
+                minimum: 0
+              unconfirmedSourceBytes:
+                type: [integer, "null"]
+                minimum: 0
+                description: Admitted source sizes, not current target or cloud usage.
+            allOf:
+              - if:
+                  properties:
+                    available: { const: false }
+                then:
+                  properties:
+                    unconfirmedFiles: { type: "null" }
+                    unconfirmedSourceBytes: { type: "null" }
+                else:
+                  properties:
+                    unconfirmedFiles: { type: integer }
+                    unconfirmedSourceBytes: { type: integer }
     FolderSyncStatus:
       type: object
       additionalProperties: false

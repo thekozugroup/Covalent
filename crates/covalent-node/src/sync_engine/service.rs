@@ -5,7 +5,7 @@
 //! the journal made it durable. Worker failure after that point is reported in
 //! the returned lifecycle and never rolls the decision back.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Weak};
@@ -277,6 +277,13 @@ impl Launcher {
 }
 
 impl Session {
+    fn active_folder_jobs(&self) -> BTreeSet<Uuid> {
+        match self {
+            Self::Production(session) => session.active_folder_jobs(),
+            #[cfg(test)]
+            Self::Test(_) => BTreeSet::new(),
+        }
+    }
     async fn run_observation(
         &mut self,
         folder: Uuid,
@@ -394,6 +401,7 @@ struct ServiceShared {
     launcher: Launcher,
     engine: Arc<Engine>,
     progress: Arc<Notify>,
+    recovery_reads: Arc<tokio::sync::Semaphore>,
 }
 
 /// One owner for durable sharing decisions and the exact engine worker.
@@ -477,6 +485,7 @@ impl FolderSyncService {
             launcher,
             engine,
             progress: Arc::new(Notify::new()),
+            recovery_reads: Arc::new(tokio::sync::Semaphore::new(1)),
         });
         let weak = Arc::downgrade(&shared);
         let health_task = tokio::runtime::Handle::try_current()
@@ -1069,6 +1078,50 @@ impl FolderSyncService {
             peer_connections: inner.peer_connections.clone(),
             connection_freshness: inner.connection_freshness,
         })
+    }
+
+    /// Read only bounded private metadata, off the lifecycle lock. The owned
+    /// permit follows the blocking read even if the request is cancelled.
+    pub async fn recovery_status(
+        &self,
+    ) -> Result<Vec<super::FolderRecoverySummary>, FolderSyncServiceError> {
+        let permit = Arc::clone(&self.shared.recovery_reads)
+            .try_acquire_owned()
+            .map_err(|_| FolderSyncServiceError::Busy)?;
+        let (revision, active, reader) = {
+            let inner = self.try_inner()?;
+            let active = inner
+                .session
+                .as_ref()
+                .map(Session::active_folder_jobs)
+                .unwrap_or_default();
+            let reader = inner
+                .journal
+                .recovery_reader(active.clone())
+                .map_err(map_journal_error)?;
+            (inner.journal.revision(), active, reader)
+        };
+        let observed = tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            reader.read()
+        })
+        .await
+        .map_err(|_| FolderSyncServiceError::Journal)?;
+        let inner = self.try_inner()?;
+        let current = inner
+            .session
+            .as_ref()
+            .map(Session::active_folder_jobs)
+            .unwrap_or_default();
+        // Validate current trust again; observations never grant write consent.
+        inner
+            .journal
+            .recovery_reader(current.clone())
+            .map_err(map_journal_error)?;
+        if inner.journal.revision() != revision || active != current {
+            return Err(FolderSyncServiceError::Busy);
+        }
+        Ok(observed)
     }
 
     async fn mutate<T>(
@@ -1926,7 +1979,7 @@ fn map_start_issue(issue: FolderSyncIssue) -> FolderSyncServiceError {
 }
 
 #[cfg(test)]
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::VecDeque;
 #[cfg(test)]
 use std::sync::Mutex as StdMutex;
 
@@ -2104,6 +2157,7 @@ impl TestBackend {
 }
 
 #[cfg(test)]
+#[derive(Debug, Eq, PartialEq)]
 pub(super) struct TestBackendSnapshot {
     pub(super) launches: usize,
     pub(super) active: usize,
@@ -2310,6 +2364,12 @@ impl FolderSyncService {
     pub(super) async fn observe_health_for_test(&self) {
         let mut inner = self.shared.inner.lock().await;
         check_health(&self.shared, &mut inner).await;
+    }
+
+    pub(super) fn recovery_read_permit_for_test(&self) -> tokio::sync::OwnedSemaphorePermit {
+        Arc::clone(&self.shared.recovery_reads)
+            .try_acquire_owned()
+            .unwrap()
     }
 
     pub(super) async fn cached_lifecycle_for_test(&self) -> FolderSyncLifecycle {

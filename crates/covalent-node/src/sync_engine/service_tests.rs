@@ -3122,3 +3122,134 @@ async fn endpoint_roster_changes_and_rejections_do_not_interrupt_healthy_workers
     source.stop().await.unwrap();
     target.stop().await.unwrap();
 }
+
+#[tokio::test]
+async fn recovery_reads_are_redacted_bounded_and_do_not_launch_workers_or_clear_state() {
+    use axum::{
+        extract::{RawQuery, State},
+        http::{HeaderMap, HeaderValue},
+    };
+    use serde_json::json;
+    let first = Device::new("Source", 44981);
+    let second = Device::new("Destination", 44982);
+    pair(&first, &second);
+    let a_backend = Arc::new(TestBackend::default());
+    let b_backend = Arc::new(TestBackend::default());
+    let source = Arc::new(first.service(first.journal(), Arc::clone(&a_backend)));
+    let target = Arc::new(second.service(second.journal(), Arc::clone(&b_backend)));
+    let folder = Uuid::new_v4();
+    let offer = source
+        .offer_with_settings(
+            second.engine.device_id(),
+            folder,
+            "Private label",
+            Some(&first.files()),
+            2000,
+            FolderLinkSettings {
+                cadence: LinkCadence::Manual,
+                paused: false,
+                android_conditions: Default::default(),
+                deletion_policy: covalent_protocol::FolderLinkPolicy::default(),
+            },
+        )
+        .await
+        .unwrap()
+        .into_value();
+    target.receive_offer(offer.clone(), 2001).await.unwrap();
+    let acceptance = target
+        .accept(offer.offer_id, &second.files(), 2002)
+        .await
+        .unwrap()
+        .into_value();
+    let commit = source
+        .receive_acceptance(offer.offer_id, acceptance, 2003)
+        .await
+        .unwrap()
+        .into_value();
+    target.receive_commit(offer.offer_id, commit).await.unwrap();
+    let path = second
+        .installation
+        .database_directory()
+        .unwrap()
+        .join(format!("rclone-policy-{folder}.v1.json"));
+    let private_name = "private-original.jpg";
+    let policy = json!({"version":1,"folders":{folder.to_string():{
+        "owned":[],"delivered":{},"suppressions":[],"copyCompleted":false,
+        "unresolved":[{"sourceIndex":{"indexId":"0x0123456789ABCDEF","sequence":1},
+            "source":{private_name:{"path":private_name,"size":7,"modifiedUnixSeconds":1}},
+            "allowed":[private_name],"suppressions":[],"propagateSourceDeletions":false}]
+    }}});
+    let before = serde_json::to_vec(&policy).unwrap();
+    std::fs::write(&path, &before).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let a_before = a_backend.snapshot();
+    let b_before = b_backend.snapshot();
+    assert!(
+        source.recovery_status().await.unwrap().is_empty(),
+        "outgoing sources do not expose destination metadata"
+    );
+    let token = "recovery-test-local-token-at-least-32-bytes";
+    let app = crate::AppState::new(
+        Arc::clone(&second.engine),
+        crate::PlatformTier::Tier1,
+        token.into(),
+    )
+    .unwrap()
+    .with_folder_sync(FolderSyncRuntimeState::Ready(Arc::clone(&target)));
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "authorization",
+        HeaderValue::from_str(&format!("Bearer {token}")).unwrap(),
+    );
+    for _ in 0..5 {
+        let response =
+            crate::sync_api::recovery(State(app.clone()), headers.clone(), RawQuery(None))
+                .await
+                .unwrap()
+                .0;
+        assert_eq!(response["schemaVersion"], 1);
+        assert_eq!(response["observationsComplete"], true);
+        assert_eq!(response["folders"][0]["folderId"], folder.to_string());
+        assert_eq!(response["folders"][0]["unconfirmedFiles"], 1);
+        assert_eq!(response["folders"][0]["unconfirmedSourceBytes"], 7);
+        for secret in [
+            private_name,
+            token,
+            "Private label",
+            second.root.to_str().unwrap(),
+        ] {
+            assert!(!response.to_string().contains(secret));
+        }
+    }
+    let permit = target.recovery_read_permit_for_test();
+    let refused = tokio::time::timeout(Duration::from_millis(100), target.recovery_status())
+        .await
+        .unwrap();
+    assert!(matches!(refused, Err(FolderSyncServiceError::Busy)));
+    assert!(
+        target.status().await.is_ok(),
+        "metadata read admission never owns the lifecycle lock"
+    );
+    drop(permit);
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+    let unavailable = target.recovery_status().await.unwrap();
+    assert!(!unavailable[0].available);
+    assert_eq!(unavailable[0].unconfirmed_files, None);
+    assert_eq!(unavailable[0].unconfirmed_source_bytes, None);
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+    assert_eq!(a_backend.snapshot(), a_before);
+    assert_eq!(b_backend.snapshot(), b_before);
+    target.remove(offer.offer_id).await.unwrap();
+    assert!(
+        target.recovery_status().await.unwrap().is_empty(),
+        "removed links cannot retain visible recovery scope"
+    );
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        before,
+        "removal never erases recovery records or originals"
+    );
+    source.stop().await.unwrap();
+    target.stop().await.unwrap();
+}

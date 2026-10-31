@@ -1364,6 +1364,7 @@ pub fn router(state: AppState) -> Router {
         .route("/healthz", get(health))
         .route("/api/v1/status", get(status))
         .route("/api/v1/sync/status", get(sync_api::status))
+        .route("/api/v1/sync/recovery", get(sync_api::recovery))
         .route("/api/v1/sync/display-names", post(sync_api::display_name))
         .route("/api/v1/sync/folders", post(sync_api::offer))
         .route("/api/v1/sync/accept", post(sync_api::accept))
@@ -6667,6 +6668,52 @@ mod tests {
         ));
         let engine = Arc::new(Engine::open(options).expect("test engine"));
         AppState::new(engine, PlatformTier::Tier1, TEST_TOKEN.to_owned()).expect("state")
+    }
+
+    #[tokio::test]
+    async fn folder_recovery_requires_auth_and_rejects_query_before_unavailable() {
+        let directory = TempDir::new().unwrap();
+        let state = test_state(&directory);
+        for (method, path, authorized, expected) in [
+            (
+                "GET",
+                "/api/v1/sync/recovery",
+                false,
+                StatusCode::UNAUTHORIZED,
+            ),
+            (
+                "GET",
+                "/api/v1/sync/recovery?path=private-secret",
+                false,
+                StatusCode::UNAUTHORIZED,
+            ),
+            ("GET", "/api/v1/sync/recovery", true, StatusCode::CONFLICT),
+            (
+                "GET",
+                "/api/v1/sync/recovery?path=private-secret",
+                true,
+                StatusCode::BAD_REQUEST,
+            ),
+            (
+                "POST",
+                "/api/v1/sync/recovery",
+                true,
+                StatusCode::METHOD_NOT_ALLOWED,
+            ),
+        ] {
+            let mut request = Request::builder().method(method).uri(path);
+            if authorized {
+                request = request.header(header::AUTHORIZATION, format!("Bearer {TEST_TOKEN}"));
+            }
+            let response = router(state.clone())
+                .oneshot(request.body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), expected);
+            let bytes = response.into_body().collect().await.unwrap().to_bytes();
+            let body = String::from_utf8_lossy(&bytes);
+            assert!(!body.contains("private-secret") && !body.contains(TEST_TOKEN));
+        }
     }
 
     #[tokio::test]

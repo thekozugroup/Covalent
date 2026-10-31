@@ -1,6 +1,6 @@
 //! Authenticated, redacted folder-sync status for native hosts and the console.
 
-use axum::extract::State;
+use axum::extract::{RawQuery, State};
 use axum::http::{HeaderMap, StatusCode};
 use serde::{Deserialize, Serialize};
 
@@ -1268,6 +1268,34 @@ pub(crate) async fn display_name(
         .set(request)
         .map_err(ApiError::from_core)?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+pub(crate) async fn recovery(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    RawQuery(query): RawQuery,
+) -> Result<axum::Json<serde_json::Value>, ApiError> {
+    authorize(&state, &headers)?;
+    if query.is_some_and(|query| !query.is_empty()) {
+        return Err(ApiError {
+            status: StatusCode::BAD_REQUEST,
+            code: "invalid_request",
+            message: "Recovery status does not accept query parameters.",
+            retryable: false,
+            upload_offset: None,
+        });
+    }
+    #[cfg(unix)]
+    {
+        let folders = ready_service(&state)?
+            .recovery_status()
+            .await
+            .map_err(service_error)?;
+        Ok(axum::Json(serde_json::json!({"schemaVersion":1,
+            "observationsComplete":folders.iter().all(|folder| folder.available), "folders":folders})))
+    }
+    #[cfg(not(unix))]
+    Err(unavailable_error())
 }
 
 pub(crate) async fn status(
