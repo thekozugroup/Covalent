@@ -253,16 +253,14 @@ class CovalentNodeClient(
         requireUuid(changeId, "settings change")
         require(changeId != "00000000-0000-0000-0000-000000000000")
         require(expectedRevision >= 0) { "The expected settings revision is invalid." }
-        return post(
-            baseUrl,
-            token,
-            "/api/v1/sync/settings",
-            JSONObject()
-                .put("folderId", folderId)
-                .put("changeId", changeId)
-                .put("expectedRevision", expectedRevision)
-                .put("settings", settings.toJson()),
-        ).toFolderSyncMutation()
+        val request = JSONObject()
+            .put("folderId", folderId)
+            .put("changeId", changeId)
+            .put("expectedRevision", expectedRevision)
+            .put("settings", settings.toJson())
+        return retryFolderLinkSettings {
+            post(baseUrl, token, "/api/v1/sync/settings", request).toFolderSyncMutation()
+        }
     }
 
     fun acceptFolder(

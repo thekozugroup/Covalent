@@ -16,7 +16,7 @@ use covalent_protocol::{
     DeviceId, FolderShareAcceptance, FolderShareCommit, FolderShareOffer, PeerGrant, SignedRoster,
     SyncEngineBinding, TransportBinding,
 };
-use tokio::sync::{Mutex, watch};
+use tokio::sync::{Mutex, Notify, watch};
 use tokio::task::JoinHandle;
 use uuid::Uuid;
 
@@ -393,6 +393,7 @@ struct ServiceShared {
     inner: Mutex<ServiceInner>,
     launcher: Launcher,
     engine: Arc<Engine>,
+    progress: Arc<Notify>,
 }
 
 /// One owner for durable sharing decisions and the exact engine worker.
@@ -475,11 +476,17 @@ impl FolderSyncService {
             }),
             launcher,
             engine,
+            progress: Arc::new(Notify::new()),
         });
         let weak = Arc::downgrade(&shared);
         let health_task = tokio::runtime::Handle::try_current()
             .map_err(|_| FolderSyncServiceError::InvalidConfiguration)?
-            .spawn(health_loop(weak, receiver, health_interval));
+            .spawn(health_loop(
+                weak,
+                receiver,
+                health_interval,
+                Arc::clone(&shared.progress),
+            ));
         Ok(Self {
             shared,
             shutdown,
@@ -535,6 +542,9 @@ impl FolderSyncService {
             if inner.lifecycle == FolderSyncLifecycle::InitialScanning {
                 advance_initial_scan(&mut inner).await;
             }
+            return Ok(inner.lifecycle);
+        }
+        if update_destination_session(&mut inner, &desired, &batches).await {
             return Ok(inner.lifecycle);
         }
         if inner.session.is_some() {
@@ -1141,6 +1151,54 @@ impl Drop for FolderSyncService {
     }
 }
 
+async fn update_destination_session(
+    inner: &mut ServiceInner,
+    desired: &EngineSessionSettings,
+    batches: &BTreeMap<Uuid, u64>,
+) -> bool {
+    if !matches!(
+        inner.lifecycle,
+        FolderSyncLifecycle::Running | FolderSyncLifecycle::InitialScanning
+    ) || desired.folders.is_empty()
+        || (inner.applied_settings.as_ref() == Some(desired)
+            && inner.applied_batch_generations == *batches)
+    {
+        return false;
+    }
+    let unchanged = inner
+        .applied_batch_generations
+        .iter()
+        .filter_map(|(folder, generation)| {
+            (batches.get(folder) == Some(generation)).then_some(*folder)
+        })
+        .collect();
+    let updated = match inner.session.as_mut() {
+        Some(Session::Production(session)) => session
+            .update_destinations(desired.clone(), &unchanged)
+            .await
+            .unwrap_or(false),
+        #[cfg(test)]
+        Some(Session::Test(_)) => false,
+        None => false,
+    };
+    if !updated {
+        return false;
+    }
+    if let Some(mut scan) = inner.initial_scan.take() {
+        scan.abort();
+        let _ = scan.finish().await;
+    }
+    inner.initial_scan = inner.session.as_ref().map(Session::begin_initial_scan);
+    inner.applied_settings = Some(desired.clone());
+    inner.applied_batch_generations = batches.clone();
+    inner.folder_health.clear();
+    inner.health_freshness = FolderHealthFreshness::NeverObserved;
+    inner.peer_connections.clear();
+    inner.connection_freshness = PeerConnectionFreshness::NeverObserved;
+    inner.lifecycle = FolderSyncLifecycle::InitialScanning;
+    true
+}
+
 async fn reconcile_committed(
     shared: &ServiceShared,
     inner: &mut ServiceInner,
@@ -1164,8 +1222,10 @@ async fn reconcile_committed(
             return inner.lifecycle;
         }
     };
-    // ponytail: a new batch restarts the shared worker for a proven full scan.
-    // Use per-folder scan generations if concurrent batches make this costly.
+    if update_destination_session(inner, &desired, &batches).await {
+        return inner.lifecycle;
+    }
+    // Source authorization changes still replace their read-only SFTP server.
     let needs_batch_scan = batches
         .iter()
         .any(|(id, generation)| inner.applied_batch_generations.get(id) != Some(generation));
@@ -1253,6 +1313,13 @@ async fn apply_desired(
             .launch(settings, pending_reset.is_some())
             .await
             .map_err(|_| FolderSyncIssue::WorkerLaunch)?;
+        match &mut session {
+            Session::Production(session) => {
+                session.set_progress_signal(Arc::clone(&shared.progress));
+            }
+            #[cfg(test)]
+            Session::Test(_) => {}
+        }
         if let Some(folder) = pending_reset {
             if session.reset_folder_index(folder).await.is_err() {
                 inner.session = Some(session);
@@ -1378,13 +1445,7 @@ async fn check_health(shared: &ServiceShared, inner: &mut ServiceInner) {
             }
         };
         if inner.applied_settings.as_ref() != Some(&desired) {
-            if quiesce(inner, FolderSyncLifecycle::Stopped, true)
-                .await
-                .is_ok()
-                && let Err(issue) = start_desired(shared, inner).await
-            {
-                inner.lifecycle = FolderSyncLifecycle::NeedsAttention(issue);
-            }
+            reconcile_committed(shared, inner).await;
             return;
         }
         advance_initial_scan(inner).await;
@@ -1406,13 +1467,7 @@ async fn check_health(shared: &ServiceShared, inner: &mut ServiceInner) {
         }
     };
     if inner.applied_settings.as_ref() != Some(&desired) {
-        if quiesce(inner, FolderSyncLifecycle::Stopped, true)
-            .await
-            .is_ok()
-            && let Err(issue) = start_desired(shared, inner).await
-        {
-            inner.lifecycle = FolderSyncLifecycle::NeedsAttention(issue);
-        }
+        reconcile_committed(shared, inner).await;
         return;
     }
     let (observation, connections) = match &mut inner.session {
@@ -1432,13 +1487,7 @@ async fn check_health(shared: &ServiceShared, inner: &mut ServiceInner) {
         }
     };
     if inner.applied_settings.as_ref() != Some(&current) {
-        if quiesce(inner, FolderSyncLifecycle::Stopped, true)
-            .await
-            .is_ok()
-            && let Err(issue) = start_desired(shared, inner).await
-        {
-            inner.lifecycle = FolderSyncLifecycle::NeedsAttention(issue);
-        }
+        reconcile_committed(shared, inner).await;
         return;
     }
     match connections {
@@ -1785,9 +1834,11 @@ async fn health_loop(
     shared: Weak<ServiceShared>,
     mut shutdown: watch::Receiver<bool>,
     cadence: Duration,
+    progress: Arc<Notify>,
 ) {
-    // Leave a full cadence after each completed probe. A slow worker must not
-    // trigger catch-up probes that continuously occupy the mutation lock.
+    // Completion wakes advance work without postponing independent health probes.
+    let probe = tokio::time::sleep(cadence);
+    tokio::pin!(probe);
     loop {
         tokio::select! {
             changed = shutdown.changed() => {
@@ -1795,13 +1846,28 @@ async fn health_loop(
                     break;
                 }
             }
-            _ = tokio::time::sleep(cadence) => {
+            _ = &mut probe => {
                 let Some(shared) = shared.upgrade() else {
                     break;
                 };
                 let mut inner = shared.inner.lock().await;
                 advance_scheduled_runs(&shared, &mut inner, crate::now_unix_ms()).await;
                 check_health(&shared, &mut inner).await;
+                advance_run_completion(&shared, &mut inner).await;
+                // Leave a full cadence after slow probes; never catch up in a loop.
+                probe.as_mut().reset(tokio::time::Instant::now() + cadence);
+            }
+            _ = progress.notified() => {
+                let Some(shared) = shared.upgrade() else {
+                    break;
+                };
+                let mut inner = shared.inner.lock().await;
+                if inner.lifecycle == FolderSyncLifecycle::InitialScanning {
+                    advance_initial_scan(&mut inner).await;
+                    if inner.lifecycle == FolderSyncLifecycle::Running {
+                        check_health(&shared, &mut inner).await;
+                    }
+                }
                 advance_run_completion(&shared, &mut inner).await;
             }
         }
@@ -1830,8 +1896,6 @@ fn map_start_issue(issue: FolderSyncIssue) -> FolderSyncServiceError {
 use std::collections::{BTreeSet, VecDeque};
 #[cfg(test)]
 use std::sync::Mutex as StdMutex;
-#[cfg(test)]
-use tokio::sync::Notify;
 
 #[cfg(test)]
 #[derive(Clone)]
@@ -2199,6 +2263,10 @@ impl FolderSyncService {
             .observe_android_conditions(true, true, Instant::now() - Duration::from_secs(91));
     }
 
+    pub(super) fn signal_progress_for_test(&self) {
+        self.shared.progress.notify_one();
+    }
+
     pub(super) async fn advance_runs_for_test(&self) {
         let mut inner = self.shared.inner.lock().await;
         advance_scheduled_runs(&self.shared, &mut inner, crate::now_unix_ms()).await;
@@ -2211,7 +2279,7 @@ impl FolderSyncService {
         check_health(&self.shared, &mut inner).await;
     }
 
-    pub(super) fn cached_lifecycle_for_test(&self) -> FolderSyncLifecycle {
-        self.shared.inner.try_lock().unwrap().lifecycle
+    pub(super) async fn cached_lifecycle_for_test(&self) -> FolderSyncLifecycle {
+        self.shared.inner.lock().await.lifecycle
     }
 }

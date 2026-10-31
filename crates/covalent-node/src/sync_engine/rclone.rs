@@ -256,6 +256,29 @@ pub(super) struct RclonePeer {
 
 type CommandInputs = (Vec<OsString>, Vec<(OsString, OsString)>);
 
+struct GrantReservations {
+    registry: AndroidSafGrantRegistry,
+    grants: BTreeSet<Uuid>,
+}
+
+impl GrantReservations {
+    fn reserve(&mut self, grant: Uuid) -> Result<(), EngineSessionError> {
+        if !self.grants.contains(&grant) {
+            self.registry.mark_active(grant).map_err(map_grant_error)?;
+            self.grants.insert(grant);
+        }
+        Ok(())
+    }
+}
+
+impl Drop for GrantReservations {
+    fn drop(&mut self) {
+        for grant in &self.grants {
+            self.registry.mark_inactive(*grant);
+        }
+    }
+}
+
 pub(super) struct RcloneRuntime {
     guardian: Arc<VerifiedEngineExecutable>,
     executable: Arc<VerifiedEngineExecutable>,
@@ -380,6 +403,7 @@ impl RcloneRuntime {
         &self.executable
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(super) async fn prepare(
         guardian: Arc<VerifiedEngineExecutable>,
         executable: Arc<VerifiedEngineExecutable>,
@@ -388,6 +412,7 @@ impl RcloneRuntime {
         worker_lease: Weak<EngineWorkerLease>,
         installation: Arc<EngineInstallation>,
         roots: Arc<Vec<FolderRootLease>>,
+        in_flight: &BTreeSet<Uuid>,
     ) -> Result<Self, EngineSessionError> {
         executable
             .recheck()
@@ -417,7 +442,10 @@ impl RcloneRuntime {
             4096,
         )?;
         let grants = executable.android_saf_grants();
-        let mut active_grants = BTreeSet::new();
+        let mut reservations = GrantReservations {
+            registry: grants.clone(),
+            grants: BTreeSet::new(),
+        };
         let mut resolved_folders = BTreeMap::new();
         for folder in &settings.folders {
             if matches!(folder.role(), EngineFolderRole::LegacyTwoWay) {
@@ -427,8 +455,7 @@ impl RcloneRuntime {
                 super::android_saf::parse_token(folder.root()).map_err(map_grant_error)?;
             let resolved = grants.resolve(folder.root()).map_err(map_grant_error)?;
             let backend = if let Some((grant_id, grant)) = resolved {
-                grants.mark_active(grant_id).map_err(map_grant_error)?;
-                active_grants.insert(grant_id);
+                reservations.reserve(grant_id)?;
                 FolderBackend::WebDav {
                     grant_id,
                     address: grant.address,
@@ -477,10 +504,12 @@ impl RcloneRuntime {
         let map_bytes =
             serde_json::to_vec(&map).map_err(|_| EngineSessionError::InvalidConfiguration)?;
         write_private_new(&map_path, &map_bytes, 1024 * 1024)?;
-        for folder_id in resolved_folders.keys() {
+        for folder_id in resolved_folders.keys().filter(|id| !in_flight.contains(id)) {
             let (policy, staged) = policy_paths(&policy_directory, *folder_id);
             load_policy(&policy, &staged)?;
         }
+        // An unchanged in-flight job owns its policy writes. Every new copy still
+        // calls load_policy; do not mistake that owner's atomic staging for damage.
         Ok(Self {
             guardian,
             executable,
@@ -494,7 +523,7 @@ impl RcloneRuntime {
             roots,
             worker_lease,
             grants,
-            active_grants,
+            active_grants: std::mem::take(&mut reservations.grants),
         })
     }
 
@@ -1444,6 +1473,47 @@ fn save_policy(path: &Path, staged: &Path, state: &PolicyState) -> Result<(), En
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn overlapping_runtime_reservations_release_only_their_own_grant() {
+        struct Obscurer;
+        impl super::super::android_saf::PasswordObscurer for Obscurer {
+            fn obscure(
+                &self,
+                password: zeroize::Zeroizing<String>,
+            ) -> Result<zeroize::Zeroizing<String>, AndroidSafGrantError> {
+                Ok(password)
+            }
+        }
+        let registry = AndroidSafGrantRegistry::with_obscurer(Arc::new(Obscurer));
+        let grant = Uuid::new_v4();
+        registry
+            .register(
+                grant,
+                "127.0.0.1:48123".parse().unwrap(),
+                zeroize::Zeroizing::new("test-user".to_owned()),
+                zeroize::Zeroizing::new("test-password".to_owned()),
+            )
+            .unwrap();
+        let mut original = GrantReservations {
+            registry: registry.clone(),
+            grants: BTreeSet::new(),
+        };
+        original.reserve(grant).unwrap();
+        {
+            let mut preparing = GrantReservations {
+                registry: registry.clone(),
+                grants: BTreeSet::new(),
+            };
+            preparing.reserve(grant).unwrap();
+            preparing.reserve(grant).unwrap();
+            assert_eq!(registry.unregister(grant), Err(AndroidSafGrantError::Busy));
+            // A failed preparation drops its reservations while the original runtime remains active.
+        }
+        assert_eq!(registry.unregister(grant), Err(AndroidSafGrantError::Busy));
+        drop(original);
+        registry.unregister(grant).unwrap();
+    }
 
     #[test]
     fn transfer_diagnostics_classify_errors_without_disclosing_messages_or_paths() {

@@ -1884,7 +1884,7 @@ async fn cancelled_stop_has_already_closed_the_exact_lifeline() {
     task.abort();
     let _ = task.await;
     assert_eq!(
-        first_service.cached_lifecycle_for_test(),
+        first_service.cached_lifecycle_for_test().await,
         FolderSyncLifecycle::StillStopping
     );
 
@@ -2051,6 +2051,41 @@ async fn reported_folder_error_is_retained_and_reaps_worker() {
 }
 
 #[tokio::test]
+async fn completion_signals_do_not_postpone_independent_health_checks() {
+    let first = Device::new("Mac", 44297);
+    let second = Device::new("Docker", 44298);
+    pair(&first, &second);
+    let first_backend = Arc::new(TestBackend::default());
+    let source = FolderSyncService::new_for_test(
+        first.journal(),
+        Arc::clone(&first.engine),
+        Arc::clone(&first_backend),
+        Duration::from_millis(50),
+    );
+    let target = second.service(second.journal(), Arc::new(TestBackend::default()));
+    make_ready(&first, &second, &source, &target).await;
+    first_backend.set_health_failure(true);
+    tokio::time::timeout(Duration::from_secs(1), async {
+        tokio::select! {
+            _ = async {
+                loop {
+                    source.signal_progress_for_test();
+                    tokio::time::sleep(Duration::from_millis(1)).await;
+                }
+            } => unreachable!("completion traffic continues until the health check stops the worker"),
+            _ = first_backend.wait_for_stop() => {}
+        }
+    })
+    .await
+    .expect("completion traffic must not keep resetting the health deadline");
+    assert_eq!(
+        source.cached_lifecycle_for_test().await,
+        FolderSyncLifecycle::NeedsAttention(FolderSyncIssue::WorkerHealth)
+    );
+    assert_eq!(first_backend.snapshot().active, 0);
+}
+
+#[tokio::test]
 async fn owned_health_task_detects_failure_without_a_status_request() {
     let first = Device::new("Mac", 44269);
     let second = Device::new("Docker", 44270);
@@ -2080,7 +2115,7 @@ async fn owned_health_task_detects_failure_without_a_status_request() {
     .await
     .unwrap();
     assert_eq!(
-        first_service.cached_lifecycle_for_test(),
+        first_service.cached_lifecycle_for_test().await,
         FolderSyncLifecycle::NeedsAttention(FolderSyncIssue::WorkerHealth)
     );
 }

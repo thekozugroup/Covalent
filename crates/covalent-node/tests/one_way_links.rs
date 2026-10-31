@@ -181,9 +181,26 @@ async fn call(node: &NodeRuntime, method: &str, path: &str, body: Option<&Value>
 }
 
 async fn post_ok(node: &NodeRuntime, path: &str, body: Value) -> Value {
-    let response = call(node, "POST", path, Some(&body)).await;
-    assert_eq!(response.status, 200, "POST {path}: {}", response.body);
-    response.json()
+    let delays = [100, 200, 400, 800, 1_600];
+    let mut attempt = 0;
+    loop {
+        let response = call(node, "POST", path, Some(&body)).await;
+        let busy = matches!(path, "/api/v1/sync/accept" | "/api/v1/sync/settings")
+            && response.status == 503
+            && serde_json::from_str::<Value>(&response.body).is_ok_and(|payload| {
+                payload["protocolVersion"] == 1
+                    && payload["code"] == "folder_sync_busy"
+                    && payload["retryable"] == true
+            });
+        if busy && attempt < delays.len() {
+            // Match the clients' bounded explicit-busy handling; keep the exact request/change ID.
+            tokio::time::sleep(Duration::from_millis(delays[attempt])).await;
+            attempt += 1;
+            continue;
+        }
+        assert_eq!(response.status, 200, "POST {path}: {}", response.body);
+        return response.json();
+    }
 }
 
 async fn status(node: &NodeRuntime) -> Value {
@@ -494,7 +511,12 @@ async fn wait_file_with_status(
     description: &str,
     nodes: &[&NodeRuntime],
 ) {
+    let started = Instant::now();
     if wait_file_until(path, expected).await {
+        eprintln!(
+            "COVALENT_SYNC_TEST verified elapsedMs={} checkpoint={description}",
+            started.elapsed().as_millis()
+        );
         return;
     }
     for node in nodes {
