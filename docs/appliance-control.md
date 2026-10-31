@@ -61,6 +61,14 @@ appliance/controller IDs, schema1, a non-nil bond generation and the supported
 false cleanup/cloud-verification capability flags.
 
 Status reports process lifecycle, share-record count and health freshness.
+The control channel stays available when folder sync is absent or cannot return
+status. It then reports `syncAvailable=false`, lifecycle `unavailable`, an explicit
+null share count and non-fresh health. It never turns missing observations into
+zero completed work. The client rejects contradictory availability/count/freshness
+combinations and a missing count field.
+This transport still lives in the Covalent node: failure of the core node or
+identity startup is a separate recovery boundary. An independent privileged host
+broker and its authenticated control surface remain appliance integration work.
 It contains no local paths, raw errors, tokens, keys or media names. Running,
 fresh health and consent-record counts do not establish transfer completion or
 Google Photos backup. Source cleanup and cloud-backup verification remain

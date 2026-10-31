@@ -1932,7 +1932,26 @@ components:
     ApplianceControlStatus:
       type: object
       additionalProperties: false
-      required: [schemaVersion, applianceId, controllerId, bondGeneration, syncLifecycle, shareRecords, folderHealthFresh, cloudBackupVerificationAvailable, sourceCleanupAvailable]
+      required: [schemaVersion, applianceId, controllerId, bondGeneration, syncAvailable, syncLifecycle, shareRecords, folderHealthFresh, cloudBackupVerificationAvailable, sourceCleanupAvailable]
+      allOf:
+        - if:
+            properties:
+              syncAvailable:
+                const: false
+          then:
+            properties:
+              syncLifecycle:
+                const: unavailable
+              shareRecords:
+                type: "null"
+              folderHealthFresh:
+                const: false
+          else:
+            properties:
+              syncLifecycle:
+                enum: [stopped, initialScanning, running, stillStopping, needsAttention]
+              shareRecords:
+                type: integer
       properties:
         schemaVersion:
           const: 1
@@ -1943,13 +1962,16 @@ components:
         bondGeneration:
           type: string
           format: uuid
+        syncAvailable:
+          type: boolean
+          description: False when the folder service or its status is unavailable; the authenticated control channel remains usable.
         syncLifecycle:
           type: string
-          enum: [stopped, initialScanning, running, stillStopping, needsAttention]
+          enum: [unavailable, stopped, initialScanning, running, stillStopping, needsAttention]
         shareRecords:
-          type: integer
+          type: [integer, "null"]
           minimum: 0
-          description: Consent records, not a count of completed transfers.
+          description: Consent records, not completed transfers; null when sync status is unavailable. Missing is invalid.
         folderHealthFresh:
           type: boolean
         cloudBackupVerificationAvailable:

@@ -660,7 +660,7 @@ pub async fn serve_folder_control_connection(
     connection: quinn::Connection,
     negotiated_alpn: Vec<u8>,
     engine: std::sync::Arc<Engine>,
-    service: std::sync::Arc<crate::sync_engine::FolderSyncService>,
+    service: Option<std::sync::Arc<crate::sync_engine::FolderSyncService>>,
     server_fingerprint: String,
     admission: std::sync::Arc<FolderControlAdmission>,
     controller_bond: Option<std::sync::Arc<crate::appliance_control::ControllerBondStore>>,
@@ -705,7 +705,10 @@ pub async fn serve_folder_control_connection(
                 request.operation
             {
                 match controller_bond {
-                    Some(bond) => match bond.read_status(&engine, requester_id, &service).await {
+                    Some(bond) => match bond
+                        .read_status(&engine, requester_id, service.as_deref())
+                        .await
+                    {
                         Ok(status) => FolderControlPayload::ApplianceStatus(status),
                         Err(FolderControlError::Rejected) => FolderControlPayload::Rejected,
                         Err(_) => FolderControlPayload::NeedsAttention,
@@ -713,7 +716,10 @@ pub async fn serve_folder_control_connection(
                     None => FolderControlPayload::Rejected,
                 }
             } else {
-                apply_remote(service, request.operation.clone()).await
+                match service {
+                    Some(service) => apply_remote(service, request.operation.clone()).await,
+                    None => FolderControlPayload::NeedsAttention,
+                }
             }
         } else {
             FolderControlPayload::Busy

@@ -15,13 +15,19 @@ identity-bound replies. No remote mutation, root IPC access, source deletion or
 cloud-backup claim is introduced. Reuses current dependencies, endpoint and
 stream admission; no extra APK/service/thread is added.
 
-Validation: lint with warnings denied;311 full native-node host tests; Android26
-ARM64 production check and test build;8 selected security/API/actual-QUIC tests
+Validation: lint with warnings denied;312 full native-node host tests; Android26
+ARM64 production check and test build;9 selected security/API/actual-QUIC tests
 on the physical Android36 Pi5. Both current-source host and Pi tests pass. API
 coverage matches58 operations and428 references; isolated route fixtures also
 cover a non-versioned path after an API path. The checker no longer assigns
 that path's method to the preceding API. Test source bindings and a sanitized
 receipt are in artifacts/evidence/appliance-control/.
+
+Recovery follow-up keeps the controller on its dedicated protocol even when the
+folder service is absent. Owner status remains authenticated, reports unavailable
+sync with an explicit null record count, and refuses contradictory signed data.
+Schema cases and actual Pi dispatch exercise this boundary. Core node/identity
+startup failure and independent privileged host control remain separate gaps.
 
 The canonical local workspace preserves the latest existing companion adaptive
 work (base4a89c2f). Its Rust/Cargo inputs matched Pi-pinned1e549763 before this

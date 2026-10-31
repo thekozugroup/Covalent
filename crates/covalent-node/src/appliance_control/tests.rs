@@ -510,6 +510,7 @@ async fn actual_quic_dispatch_requires_the_owner_bond_and_honors_revocation() {
     );
     assert_eq!(status["bondGeneration"], bond["generation"]);
     assert_eq!(status["syncLifecycle"], "stopped");
+    assert_eq!(status["syncAvailable"], true);
     assert_eq!(status["shareRecords"], 0);
     assert_eq!(status["cloudBackupVerificationAvailable"], false);
     assert_eq!(status["sourceCleanupAvailable"], false);
@@ -656,19 +657,33 @@ async fn authenticated_peer_cannot_substitute_status_identity_or_cleanup_capabil
         appliance_id: pi.engine.device_id(),
         controller_id: phone.engine.device_id(),
         bond_generation: Uuid::new_v4(),
+        sync_available: true,
         sync_lifecycle: ApplianceSyncLifecycle::Stopped,
-        share_records: 0,
+        share_records: Some(0),
         folder_health_fresh: false,
         cloud_backup_verification_available: false,
         source_cleanup_available: false,
     };
-    let mut payloads = vec![valid; 6];
+    let mut missing_count = serde_json::to_value(&valid).unwrap();
+    missing_count
+        .as_object_mut()
+        .unwrap()
+        .remove("shareRecords");
+    assert!(serde_json::from_value::<ApplianceStatus>(missing_count).is_err());
+    let mut payloads = vec![valid; 10];
     payloads[0].appliance_id = DeviceId::new();
     payloads[1].controller_id = DeviceId::new();
     payloads[2].schema_version = 2;
     payloads[3].bond_generation = Uuid::nil();
     payloads[4].cloud_backup_verification_available = true;
     payloads[5].source_cleanup_available = true;
+    payloads[6].sync_available = false;
+    payloads[7].sync_lifecycle = ApplianceSyncLifecycle::Unavailable;
+    payloads[8].share_records = None;
+    payloads[9].sync_available = false;
+    payloads[9].sync_lifecycle = ApplianceSyncLifecycle::Unavailable;
+    payloads[9].share_records = None;
+    payloads[9].folder_health_fresh = true;
     let fingerprint = pi.tls.certificate_fingerprint();
     let engine = Arc::clone(&pi.engine);
     let server = tokio::spawn(async move {
@@ -698,7 +713,7 @@ async fn authenticated_peer_cannot_substitute_status_identity_or_cleanup_capabil
         endpoint.close(0_u32.into(), b"test complete");
         endpoint.wait_idle().await;
     });
-    for _ in 0..6 {
+    for _ in 0..10 {
         assert_eq!(
             api(
                 state.clone(),
@@ -723,4 +738,64 @@ async fn authenticated_peer_cannot_substitute_status_identity_or_cleanup_capabil
     })
     .await
     .expect("Owned adversarial test socket still registered");
+}
+
+#[tokio::test]
+async fn owner_control_stays_available_without_any_folder_sync_service() {
+    let pi = Device::new();
+    let phone = Device::new();
+    let other = Device::new();
+    let state = pi.state();
+    let phone_state = phone.state();
+    let other_state = other.state();
+    let node = QuicNode::bind(([127, 0, 0, 1], 0).into(), Arc::clone(&pi.engine), &pi.tls).unwrap();
+    let address = node.local_addr().unwrap();
+    println!("Owned recovery appliance-test UDP endpoint: {address}");
+    pair(&phone, &pi, address);
+    pair(&other, &pi, address);
+    let store = state.controller_bond.as_ref().unwrap();
+    let generation = store.snapshot().unwrap().generation;
+    store
+        .grant(&pi.engine, generation, phone.engine.public_identity())
+        .unwrap();
+    // Deliberately attach no folder service, as in a failed/unconfigured sync boot.
+    let node = node
+        .with_local_provider_enabled(false)
+        .with_controller_bond(state.controller_bond.clone());
+    let shutdown = node.shutdown_handle();
+    let server = tokio::spawn(node.run());
+    let request = serde_json::json!({"peerId": pi.engine.device_id()});
+    let (code, status) = api(
+        phone_state,
+        "POST",
+        "/api/v1/appliance/status",
+        request.clone(),
+        true,
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK);
+    assert_eq!(status["syncAvailable"], false);
+    assert_eq!(status["syncLifecycle"], "unavailable");
+    assert!(status["shareRecords"].is_null());
+    assert_eq!(status["folderHealthFresh"], false);
+    assert_eq!(status["sourceCleanupAvailable"], false);
+    assert_eq!(
+        api(
+            other_state,
+            "POST",
+            "/api/v1/appliance/status",
+            request,
+            true
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+    shutdown.close();
+    server.await.unwrap();
+    shutdown.wait_for_release().await.unwrap();
+    assert!(
+        std::net::UdpSocket::bind(address).is_ok(),
+        "Owned recovery test socket still registered"
+    );
 }

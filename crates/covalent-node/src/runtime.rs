@@ -546,10 +546,12 @@ impl NodeRuntime {
         .context("open pairing Start admission state")?;
         let quic_node = quic_node.with_pairing_service(Arc::new(pairing_service));
         #[cfg(unix)]
+        let quic_node = quic_node.with_controller_bond(state.controller_bond.clone());
+        #[cfg(unix)]
         let quic_node = match &state.folder_sync {
-            crate::sync_engine::FolderSyncRuntimeState::Ready(service) => quic_node
-                .with_folder_service(Arc::clone(service))
-                .with_controller_bond(state.controller_bond.clone()),
+            crate::sync_engine::FolderSyncRuntimeState::Ready(service) => {
+                quic_node.with_folder_service(Arc::clone(service))
+            }
             _ => quic_node,
         };
 

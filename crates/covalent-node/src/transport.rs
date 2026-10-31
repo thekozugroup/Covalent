@@ -751,12 +751,14 @@ impl QuicNode {
                         || alpn == crate::sync_control::LINK_CONTROL_ALPN
                         || alpn == crate::sync_control::APPLIANCE_CONTROL_ALPN)
                 {
-                    if let Some(service) = folder_service {
+                    if folder_service.is_some()
+                        || alpn == crate::sync_control::APPLIANCE_CONTROL_ALPN
+                    {
                         let _ = crate::sync_control::serve_folder_control_connection(
                             connection,
                             alpn,
                             engine,
-                            service,
+                            folder_service,
                             fingerprint,
                             folder_admission,
                             controller_bond,

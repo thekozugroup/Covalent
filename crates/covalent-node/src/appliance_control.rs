@@ -22,14 +22,14 @@ pub(crate) struct ControllerBond {
     schema_version: u16,
     generation: Uuid,
     appliance: PublicIdentity,
-    #[serde(deserialize_with = "required_controller")]
+    #[serde(deserialize_with = "required_nullable")]
     controller: Option<PublicIdentity>,
 }
 
-fn required_controller<'de, D: serde::Deserializer<'de>>(
+fn required_nullable<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(
     deserializer: D,
-) -> Result<Option<PublicIdentity>, D::Error> {
-    Option::<PublicIdentity>::deserialize(deserializer)
+) -> Result<Option<T>, D::Error> {
+    Option::<T>::deserialize(deserializer)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -212,17 +212,17 @@ impl ControllerBondStore {
         &self,
         engine: &Engine,
         requester: DeviceId,
-        service: &crate::sync_engine::FolderSyncService,
+        service: Option<&crate::sync_engine::FolderSyncService>,
     ) -> Result<ApplianceStatus, crate::sync_control::FolderControlError> {
         use crate::sync_control::FolderControlError;
         use crate::sync_engine::{FolderHealthFreshness, FolderSyncLifecycle};
         let before = self
             .authorized(engine, requester)
             .map_err(|_| FolderControlError::Rejected)?;
-        let status = service
-            .status()
-            .await
-            .map_err(|_| FolderControlError::Unavailable)?;
+        let status = match service {
+            Some(service) => service.status().await.ok(),
+            None => None,
+        };
         let after = self
             .authorized(engine, requester)
             .map_err(|_| FolderControlError::Rejected)?;
@@ -234,15 +234,26 @@ impl ControllerBondStore {
             appliance_id: engine.device_id(),
             controller_id: requester,
             bond_generation: after.generation,
-            sync_lifecycle: match status.lifecycle() {
-                FolderSyncLifecycle::Stopped => ApplianceSyncLifecycle::Stopped,
-                FolderSyncLifecycle::InitialScanning => ApplianceSyncLifecycle::InitialScanning,
-                FolderSyncLifecycle::Running => ApplianceSyncLifecycle::Running,
-                FolderSyncLifecycle::StillStopping => ApplianceSyncLifecycle::StillStopping,
-                FolderSyncLifecycle::NeedsAttention(_) => ApplianceSyncLifecycle::NeedsAttention,
-            },
-            share_records: status.shares().len() as u64,
-            folder_health_fresh: status.health_freshness() == FolderHealthFreshness::Fresh,
+            sync_available: status.is_some(),
+            sync_lifecycle: status
+                .as_ref()
+                .map_or(ApplianceSyncLifecycle::Unavailable, |status| {
+                    match status.lifecycle() {
+                        FolderSyncLifecycle::Stopped => ApplianceSyncLifecycle::Stopped,
+                        FolderSyncLifecycle::InitialScanning => {
+                            ApplianceSyncLifecycle::InitialScanning
+                        }
+                        FolderSyncLifecycle::Running => ApplianceSyncLifecycle::Running,
+                        FolderSyncLifecycle::StillStopping => ApplianceSyncLifecycle::StillStopping,
+                        FolderSyncLifecycle::NeedsAttention(_) => {
+                            ApplianceSyncLifecycle::NeedsAttention
+                        }
+                    }
+                }),
+            share_records: status.as_ref().map(|status| status.shares().len() as u64),
+            folder_health_fresh: status
+                .as_ref()
+                .is_some_and(|status| status.health_freshness() == FolderHealthFreshness::Fresh),
             cloud_backup_verification_available: false,
             source_cleanup_available: false,
         })
@@ -257,8 +268,10 @@ pub struct ApplianceStatus {
     pub appliance_id: DeviceId,
     pub controller_id: DeviceId,
     pub bond_generation: Uuid,
+    pub sync_available: bool,
     pub sync_lifecycle: ApplianceSyncLifecycle,
-    pub share_records: u64,
+    #[serde(deserialize_with = "required_nullable")]
+    pub share_records: Option<u64>,
     pub folder_health_fresh: bool,
     pub cloud_backup_verification_available: bool,
     pub source_cleanup_available: bool,
@@ -267,11 +280,31 @@ pub struct ApplianceStatus {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub enum ApplianceSyncLifecycle {
+    Unavailable,
     Stopped,
     InitialScanning,
     Running,
     StillStopping,
     NeedsAttention,
+}
+
+impl ApplianceStatus {
+    fn matches_request(&self, appliance: DeviceId, controller: DeviceId) -> bool {
+        self.schema_version == 1
+            && self.appliance_id == appliance
+            && self.controller_id == controller
+            && !self.bond_generation.is_nil()
+            && !self.cloud_backup_verification_available
+            && !self.source_cleanup_available
+            && if self.sync_available {
+                self.sync_lifecycle != ApplianceSyncLifecycle::Unavailable
+                    && self.share_records.is_some()
+            } else {
+                self.sync_lifecycle == ApplianceSyncLifecycle::Unavailable
+                    && self.share_records.is_none()
+                    && !self.folder_health_fresh
+            }
+    }
 }
 
 fn error(reason: BondError) -> ApiError {
@@ -399,12 +432,7 @@ pub(crate) async fn remote_status(
     .map_err(|_| error(BondError::Unavailable))?;
     match result {
         FolderControlPayload::ApplianceStatus(status)
-            if status.schema_version == 1
-                && status.appliance_id == request.peer_id
-                && status.controller_id == state.engine.device_id()
-                && !status.bond_generation.is_nil()
-                && !status.cloud_backup_verification_available
-                && !status.source_cleanup_available =>
+            if status.matches_request(request.peer_id, state.engine.device_id()) =>
         {
             Ok(axum::Json(status))
         }
