@@ -493,3 +493,23 @@ in `container-supply-chain.yml`: the scan now runs first, and both of the SBOM
 action's upload paths are disabled so the only route to the release page is the
 explicit publish step that runs after the gate. The stray asset was deleted from
 the v0.1.0 draft.
+
+
+## 2026-10-31: bind the musl security revision to its source
+
+CI41220252198 reached the Alpine evidence gate after the Python pin refresh and
+BusyBox tests. Installing the pinned OpenSSL libraries selected musl1.2.5-r24,
+which the older runtime lock correctly rejected. Pin musl and musl-utils together
+to1.2.5-r24 and retain the installed-version assertions and exact package/commit
+comparison. The source lock now binds the full [Alpine security recipe](https://gitlab.alpinelinux.org/alpine/aports/-/commit/fd05fc094264bce4fb76efc6c7f61ba4abfcb609),
+including its APKBUILD checksums, Git blobs/tree and newly referenced patches.
+Unrelated source origins, notice bounds and runtime-removal policy are unchanged.
+
+Actual runtime-base APK databases match the reviewed non-BusyBox runtime records
+on asserted aarch64 and x86_64 containers, excluding the documented build-only
+apk-tools/libapk/zlib removal. Source/notice/bundle generation also passes against
+real checksum-locked sources using explicitly synthetic installed/builder rows;
+that separate check is not a final-image build or runtime acceptance. Rust/Cargo
+inputs are unchanged from3ebbecf. Sanitized bindings and limits are recorded in
+`artifacts/evidence/security-refresh/runtime-provenance.json`. Full exact-head CI
+and immutable image scanning remain release gates.

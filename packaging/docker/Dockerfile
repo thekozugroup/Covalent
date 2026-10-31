@@ -224,9 +224,9 @@ RUN abuild-keygen -a -i -n \
 FROM alpine:3.23@sha256:fd791d74b68913cbb027c6546007b3f0d3bc45125f797758156952bc2d6daf40 AS runtime-base
 COPY --from=ca-bundle-input /ca-bundle.apk /tmp/ca-bundle.apk
 # Alpine published the fixed OpenSSL security revision after the pinned 3.23.5
-# base image was assembled. Install only those two signed repository packages
-# at exact versions: a future repository change can fail this build, but cannot
-# silently select a different runtime. Both libraries are retained because
+# base image was assembled. Install the reviewed OpenSSL and musl security
+# packages at exact versions: a future repository change can fail this build,
+# but cannot silently select a different runtime. Both libraries are retained because
 # apk-tools and BusyBox ssl_client require them even though Covalent and Caddy
 # are statically linked and do not load OpenSSL. BusyBox ssl_client retains both.
 RUN apk --keys-dir /usr/share/apk/keys add --no-cache --no-network /tmp/ca-bundle.apk \
@@ -236,8 +236,12 @@ RUN apk --keys-dir /usr/share/apk/keys add --no-cache --no-network /tmp/ca-bundl
     && apk add --no-cache --upgrade \
       libcrypto3=3.5.9-r0 \
       libssl3=3.5.9-r0 \
+      musl=1.2.5-r24 \
+      musl-utils=1.2.5-r24 \
     && apk info -e 'libcrypto3=3.5.9-r0' \
     && apk info -e 'libssl3=3.5.9-r0' \
+    && apk info -e 'musl=1.2.5-r24' \
+    && apk info -e 'musl-utils=1.2.5-r24' \
     && addgroup -S -g 65532 covalent \
     && adduser -S -D -H -u 65532 -G covalent -s /sbin/nologin covalent \
     && install -d -m 0700 -o 65532 -g 65532 /home/covalent /config /data /restore

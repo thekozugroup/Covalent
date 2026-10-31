@@ -1,3 +1,32 @@
+# Runtime provenance follow-up — 2026-10-31
+
+Exact-head hosted CI41220252198 passed the new Python package resolution and
+BusyBox compilation/wire checks, then refused Alpine runtime evidence because
+the OpenSSL upgrade also selected musl1.2.5-r24 while the source lock described r23.
+The strict guard is preserved. Runtime now explicitly pins both musl and its
+utilities to r24, with installed-version assertions and the complete corresponding
+aports tree fd05fc094264bce4fb76efc6c7f61ba4abfcb609. The reviewed recipe adds
+CVE-2026-6042/CVE-2026-107891 inputs and replaces the older iconv patch input.
+Every recipe Git blob, APKBUILD SHA512, tree digest and source/notice bound is
+checked; unrelated origin records are unchanged.
+
+Actual disposable containers assert their APK architectures for arm64 and amd64.
+All non-BusyBox runtime package metadata matches the lock, accounting explicitly
+for the image's documented removal of apk-tools/libapk/zlib. Local BusyBox
+replacement is excluded from this base-stage comparison; full image acceptance
+remains hosted work. Full source/notice/bundle collection passes using real
+hash-locked sources and explicitly synthetic installed/builder databases.
+This qualifies source packaging, not actual final-image installation. Collector,
+verifier and container-contract tests pass. Rust source/Cargo/toolchain inputs are
+byte-identical to3ebbecf, whose full suite/clippy/Android checks already passed;
+no duplicate Rust rebuild is needed for this container-only follow-up.
+
+Six default-branch Go alerts select already-patched OpenTelemetry minimums on
+this branch. The remaining worker go-chi/chi v5.3.1 alert GHSA-j6qf-3m9c-vwj3
+needs its own reviewed5.4.0 dependency/source-digest refresh and worker validation.
+No route-reachability exemption or alert dismissal is applied. Solstice remains
+offline; no device changes occur.
+
 # Appliance build security refresh — 2026-10-31
 
 Updated the Tokio dependency floor and lock from1.53.1 to1.53.3 for
