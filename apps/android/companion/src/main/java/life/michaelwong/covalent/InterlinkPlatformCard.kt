@@ -92,16 +92,6 @@ internal fun InterlinkPlatformCard(
             }
             if (imports != null && !imports.actionsAvailable) Text(stringResource(R.string.interlink_import_history_unavailable), style = MaterialTheme.typography.bodySmall)
             else if (approval == null) Text(stringResource(R.string.interlink_import_approval_unavailable), style = MaterialTheme.typography.bodySmall)
-            HorizontalDivider()
-            Text(stringResource(R.string.interlink_updates_title), style = MaterialTheme.typography.titleMedium)
-            val updates = snapshot?.updates
-            Text(stringResource(when {
-                updates == null -> R.string.interlink_updates_unavailable
-                !updates.configured -> R.string.interlink_updates_unconfigured
-                updates.busy -> R.string.interlink_updates_busy
-                updates.automatic -> R.string.interlink_updates_automatic
-                else -> R.string.interlink_updates_paused
-            }))
         }
     }
 }

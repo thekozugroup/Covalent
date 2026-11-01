@@ -33,6 +33,7 @@ internal fun InterlinkApplianceDashboard(manager: EmbeddedNodeManager) {
     val api = remember(manager) { NodeApplianceApi(manager::localConnectionForFolderSync) }
     val controller = remember(manager, store, api) { ApplianceDashboardController(store, api) }
     val importsController = remember(manager, store, api) { ApplianceImportsController(store, api) }
+    val updatesController = remember(store, api) { ApplianceUpdatesController(store, api) }
     val scope = rememberCoroutineScope()
     val gate = remember { Mutex() }
     var state by remember { mutableStateOf(ApplianceDashboardState()) }
@@ -44,6 +45,25 @@ internal fun InterlinkApplianceDashboard(manager: EmbeddedNodeManager) {
     var imports by remember { mutableStateOf(PiImportsState()) }
     var importReview by remember { mutableStateOf<PiImportReview?>(null) }
     var importMessage by remember { mutableStateOf<Int?>(null) }
+    var updates by remember { mutableStateOf(PiUpdatesState()) }
+    var updateReview by remember { mutableStateOf<PiUpdateReview?>(null) }
+    var updateMessage by remember { mutableStateOf<Int?>(null) }
+
+    fun performUpdate(selected: SelectedAppliance, operation: () -> PiSavedUpdate) {
+        scope.launch {
+            gate.withLock {
+                busy = true; updateMessage = null; updates = updates.copy(observation = null)
+                try {
+                    check(state.selection == selected)
+                    val result = withContext(Dispatchers.IO) { operation() }
+                    updates = updates.copy(selected = selected,
+                        actions = (listOf(result) + updates.actions.filterNot { it.choice.id == result.choice.id }).sortedByDescending { it.order })
+                } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+                catch (_: Exception) { updateMessage = R.string.interlink_updates_result_unconfirmed }
+                finally { busy = false; refresh++ }
+            }
+        }
+    }
 
     fun performImport(selected: SelectedAppliance, operation: () -> PiSavedImport) {
         scope.launch {
@@ -68,10 +88,13 @@ internal fun InterlinkApplianceDashboard(manager: EmbeddedNodeManager) {
                     busy = true
                     state = state.copy(connection = ApplianceConnectionState.CHECKING, observation = null, platform = null)
                     imports = imports.copy(observation = null)
+                    updates = updates.copy(observation = null)
                     try {
                         state = withContext(Dispatchers.IO) { controller.refresh(manager.folderSyncRequested()) }
                         imports = withContext(Dispatchers.IO) { importsController.readForDashboard(state) }
+                        updates = withContext(Dispatchers.IO) { updatesController.readForDashboard(state) }
                         if (imports.observation?.context?.bond?.let { it != importReview?.context?.bond } == true) importReview = null
+                        if (updates.observation?.context?.let { it != updateReview?.context } == true) updateReview = null
                     }
                     finally { busy = false }
                 }
@@ -81,6 +104,7 @@ internal fun InterlinkApplianceDashboard(manager: EmbeddedNodeManager) {
     }
     LaunchedEffect(state.selection, state.connection) {
         if (importReview?.selected != state.selection || state.connection !in setOf(ApplianceConnectionState.CONNECTED, ApplianceConnectionState.CHECKING)) importReview = null
+        if (updateReview?.selected != state.selection || state.connection !in setOf(ApplianceConnectionState.CONNECTED, ApplianceConnectionState.CHECKING)) updateReview = null
     }
 
     InterlinkApplianceCard(state, busy, { refresh++ }, { choosing = true })
@@ -104,6 +128,31 @@ internal fun InterlinkApplianceDashboard(manager: EmbeddedNodeManager) {
     InterlinkImportRequests(state, imports, busy,
         check = { action -> state.selection?.let { selected -> performImport(selected) { importsController.resolve(selected, action, false) } } },
         withdraw = { action -> state.selection?.let { selected -> performImport(selected) { importsController.resolve(selected, action, true) } } })
+    updateMessage?.let { Text(stringResource(it), color = MaterialTheme.colorScheme.error,
+        modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }) }
+    InterlinkUpdatesCard(state, updates, busy,
+        request = { enabled ->
+            scope.launch {
+                gate.withLock {
+                    busy = true; updateMessage = null
+                    try {
+                        val selected = checkNotNull(state.selection)
+                        check(state.connection == ApplianceConnectionState.CONNECTED)
+                        updateReview = withContext(Dispatchers.IO) { updatesController.review(selected, enabled) }
+                    } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+                    catch (_: Exception) { updateMessage = R.string.interlink_updates_review_failed; refresh++ }
+                    finally { busy = false }
+                }
+            }
+        },
+        check = { action -> state.selection?.let { selected -> performUpdate(selected) { updatesController.resolve(selected, action) } } },
+    )
+    updateReview?.let { shown ->
+        InterlinkUpdateConfirmation(shown, busy, { updateReview = null }) {
+            updateReview = null
+            performUpdate(shown.selected) { updatesController.confirm(shown) }
+        }
+    }
     importReview?.let { shown ->
         InterlinkImportConfirmation(shown, busy, { importReview = null }) { mode ->
             importReview = null
@@ -168,6 +217,12 @@ private fun ApplianceImportsController.readForDashboard(state: ApplianceDashboar
     val selected = state.selection ?: return PiImportsState()
     return try { refresh(selected, state.connection == ApplianceConnectionState.CONNECTED) }
     catch (_: Exception) { try { refresh(selected, false) } catch (_: Exception) { PiImportsState(selected) } }
+}
+
+private fun ApplianceUpdatesController.readForDashboard(state: ApplianceDashboardState): PiUpdatesState {
+    val selected = state.selection ?: return PiUpdatesState()
+    return try { refresh(selected, state.connection == ApplianceConnectionState.CONNECTED) }
+    catch (_: Exception) { try { refresh(selected, false) } catch (_: Exception) { PiUpdatesState(selected) } }
 }
 
 @OptIn(ExperimentalLayoutApi::class)

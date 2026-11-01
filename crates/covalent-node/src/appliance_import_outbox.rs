@@ -1,14 +1,14 @@
 //! Persist before the first send; uncertain commands are checked, never replayed.
 use crate::appliance_imports::{ImportOutcome, ImportReceipt, ImportSource};
+use crate::private_state_file::PrivateStateFile;
 use covalent_core::{
     PublicIdentity,
     appliance_import::{ImportApproval, SignedImportApproval, verify_import_approval},
 };
 use serde::{Deserialize, Serialize};
-use std::{fs::File, io::Read as _, path::PathBuf, sync::Mutex};
+use std::{path::PathBuf, sync::Mutex};
 use uuid::Uuid;
 
-const MAX_BYTES: u64 = 128 * 1024;
 const MAX_RECORDS: usize = 32;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -55,87 +55,21 @@ struct Saved {
 }
 
 pub(crate) struct ImportOutbox {
-    path: PathBuf,
-    _lock: File,
+    file: PrivateStateFile,
     state: Mutex<Option<Saved>>,
 }
 impl ImportOutbox {
     pub(crate) fn open(path: PathBuf, controller: PublicIdentity) -> Option<Self> {
-        use rustix::fs::{FileType, Mode, OFlags, fstat, open};
-        let parent = path.parent()?;
-        if parent.canonicalize().ok()?.as_path() != parent {
-            return None;
-        }
-        let metadata = std::fs::symlink_metadata(parent).ok()?;
-        use std::os::unix::fs::MetadataExt as _;
-        if !metadata.is_dir()
-            || metadata.uid() != rustix::process::geteuid().as_raw()
-            || metadata.mode() & 0o077 != 0
-        {
-            return None;
-        }
-        let lock_path = path.with_extension("lock");
-        let (fd, fresh) = match open(
-            &lock_path,
-            OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-            Mode::RUSR | Mode::WUSR,
-        ) {
-            Ok(fd) => (fd, true),
-            Err(rustix::io::Errno::EXIST) => (
-                open(
-                    &lock_path,
-                    OFlags::WRONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
-                    Mode::empty(),
-                )
-                .ok()?,
-                false,
-            ),
-            Err(_) => return None,
-        };
-        let stat = fstat(&fd).ok()?;
-        if FileType::from_raw_mode(stat.st_mode) != FileType::RegularFile
-            || stat.st_uid != rustix::process::geteuid().as_raw()
-            || stat.st_nlink != 1
-            || stat.st_size != 0
-            || stat.st_mode & 0o077 != 0
-        {
-            return None;
-        }
-        let lock = File::from(fd);
-        fs2::FileExt::try_lock_exclusive(&lock).ok()?;
-        let saved = match open(
-            &path,
-            OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
-            Mode::empty(),
-        ) {
-            Err(rustix::io::Errno::NOENT) if fresh => Saved {
+        let (file, bytes) = PrivateStateFile::open(path).ok()?;
+        let fresh = bytes.is_none();
+        let saved = match bytes {
+            None => Saved {
                 schema_version: 1,
                 controller: controller.clone(),
                 order: 0,
                 actions: Vec::new(),
             },
-            Err(_) => return None,
-            Ok(fd) => {
-                let st = fstat(&fd).ok()?;
-                if FileType::from_raw_mode(st.st_mode) != FileType::RegularFile
-                    || st.st_uid != rustix::process::geteuid().as_raw()
-                    || st.st_nlink != 1
-                    || st.st_mode & 0o077 != 0
-                    || st.st_size < 0
-                    || st.st_size as u64 > MAX_BYTES
-                {
-                    return None;
-                }
-                let mut bytes = Vec::new();
-                File::from(fd)
-                    .take(MAX_BYTES + 1)
-                    .read_to_end(&mut bytes)
-                    .ok()?;
-                if bytes.len() as u64 > MAX_BYTES {
-                    return None;
-                }
-                serde_json::from_slice::<Saved>(&bytes).ok()?
-            }
+            Some(bytes) => serde_json::from_slice::<Saved>(&bytes).ok()?,
         };
         if saved.schema_version != 1
             || saved.controller != controller
@@ -192,8 +126,7 @@ impl ImportOutbox {
             }
         }
         let value = Self {
-            path,
-            _lock: lock,
+            file,
             state: Mutex::new(Some(saved.clone())),
         };
         if fresh {
@@ -204,10 +137,7 @@ impl ImportOutbox {
     }
     fn persist(&self, current: &mut Option<Saved>, next: Saved) -> Result<(), ()> {
         let bytes = serde_json::to_vec(&next).map_err(|_| ())?;
-        if bytes.len() as u64 > MAX_BYTES {
-            return Err(());
-        }
-        if crate::persist_private_file(&self.path, &bytes).is_err() {
+        if self.file.persist(&bytes).is_err() {
             *current = None;
             return Err(());
         }
@@ -215,52 +145,9 @@ impl ImportOutbox {
         Ok(())
     }
     fn ready(&self, current: &mut Option<Saved>) -> Result<(), ()> {
-        use rustix::fs::{FileType, Mode, OFlags, fstat, open};
         let checked = (|| {
             let expected = serde_json::to_vec(current.as_ref().ok_or(())?).map_err(|_| ())?;
-            let parent = self.path.parent().ok_or(())?;
-            if parent.canonicalize().map_err(|_| ())?.as_path() != parent {
-                return Err(());
-            }
-            let fd = open(
-                &self.path,
-                OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
-                Mode::empty(),
-            )
-            .map_err(|_| ())?;
-            let st = fstat(&fd).map_err(|_| ())?;
-            if FileType::from_raw_mode(st.st_mode) != FileType::RegularFile
-                || st.st_uid != rustix::process::geteuid().as_raw()
-                || st.st_nlink != 1
-                || st.st_mode & 0o077 != 0
-                || st.st_size < 0
-                || st.st_size as u64 > MAX_BYTES
-            {
-                return Err(());
-            }
-            let mut bytes = Vec::new();
-            File::from(fd)
-                .take(MAX_BYTES + 1)
-                .read_to_end(&mut bytes)
-                .map_err(|_| ())?;
-            let lock = open(
-                self.path.with_extension("lock"),
-                OFlags::WRONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
-                Mode::empty(),
-            )
-            .map_err(|_| ())?;
-            let old = fstat(&self._lock).map_err(|_| ())?;
-            let actual = fstat(lock).map_err(|_| ())?;
-            if bytes != expected
-                || old.st_dev != actual.st_dev
-                || old.st_ino != actual.st_ino
-                || actual.st_nlink != 1
-                || actual.st_mode & 0o077 != 0
-                || actual.st_size != 0
-            {
-                return Err(());
-            }
-            Ok(())
+            self.file.matches(&expected)
         })();
         if checked.is_err() {
             *current = None;

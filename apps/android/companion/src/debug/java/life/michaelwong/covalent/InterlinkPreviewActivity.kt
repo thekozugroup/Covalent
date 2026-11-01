@@ -65,12 +65,12 @@ class InterlinkPreviewActivity : ComponentActivity() {
         val dashboard = ApplianceDashboardState(
             selection = selected,
             connection = when (previewMode) {
-                "offline", "run-awaiting-confirmation" -> ApplianceConnectionState.UNAVAILABLE
+                "offline", "run-awaiting-confirmation", "updates-offline" -> ApplianceConnectionState.UNAVAILABLE
                 "approval" -> ApplianceConnectionState.APPROVAL_REQUIRED
                 else -> ApplianceConnectionState.CONNECTED
             },
             context = ApplianceContext(phone, listOf(pi)), candidates = listOf(ApplianceCandidate(pi, selected.name)),
-            observation = if (previewMode in setOf("offline", "approval", "run-awaiting-confirmation")) null else
+            observation = if (previewMode in setOf("offline", "approval", "run-awaiting-confirmation", "updates-offline")) null else
                 ApplianceObservation(selected.confirmedGeneration!!, ApplianceSyncState.RUNNING, 1, true),
             platform = if (previewMode != "storage" && !importPreview) null else AppliancePlatformObservation(selected.confirmedGeneration!!, true,
                 PiPlatformSnapshot(true, true, false, listOf(PiImportSource("a".repeat(64), false, "Camera SD card", true, false,
@@ -78,6 +78,10 @@ class InterlinkPreviewActivity : ComponentActivity() {
                     PiUpdateState(true, true, false))),
         )
         setContent {
+            val updateExample = interlinkUpdateExample(selected, pending = previewMode == "updates-pending", enabled = previewMode == "updates-enabled")
+            var updateReview by remember { mutableStateOf(if (previewMode == "updates-confirmation") updateExample.observation!!.context!!.let {
+                PiUpdateReview(selected,it,PiUpdateChoice(it.bond,"99999999-9999-4999-8999-999999999999",it.revision!!,true))
+            } else null) }
             var review by remember { mutableStateOf(if (previewMode in setOf("import-confirmation", "camera-confirmation", "camera-connection-only")) importExample else null) }
             val exampleAction = PiSavedImport(1, importExample.choice(PiImportMode.ONCE), importExample.choice(PiImportMode.ONCE).canonicalPayload(), "example-only",
                 importExample.source, false, null, null)
@@ -91,6 +95,9 @@ class InterlinkPreviewActivity : ComponentActivity() {
                         Text("Example data · visual preview", style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant)
                         InterlinkApplianceCard(dashboard, false, {}, {})
+                        if (previewMode?.startsWith("updates-") == true) InterlinkUpdatesCard(dashboard, updateExample, false,
+                            request = { enabled -> updateExample.observation!!.context!!.let { updateReview=PiUpdateReview(selected,it,
+                                PiUpdateChoice(it.bond,"99999999-9999-4999-8999-999999999999",it.revision!!,enabled)) } }, check = {})
                         if (previewMode == "alert-settings") InterlinkDriveAlertsSetting()
                         if (previewMode == "storage" || importPreview) InterlinkPlatformCard(dashboard, if (importPreview) imports else null) { _, pause ->
                             review = importExample.copy(pause = pause)
@@ -113,6 +120,7 @@ class InterlinkPreviewActivity : ComponentActivity() {
                     }
                 }
                 review?.let { InterlinkImportConfirmation(it, false, { review = null }, { review = null }) }
+                updateReview?.let { InterlinkUpdateConfirmation(it, false, { updateReview = null }, { updateReview = null }) }
             }
         }
     }

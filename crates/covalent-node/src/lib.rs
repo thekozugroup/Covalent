@@ -10,12 +10,16 @@ pub mod appliance_imports;
 #[cfg(unix)]
 pub mod appliance_platform;
 #[cfg(unix)]
+mod appliance_update_outbox;
+#[cfg(unix)]
 pub mod appliance_updates;
 pub mod discovery;
 mod display_names;
 pub mod first_run_claim;
 pub mod network_pairing;
 pub mod pairing_transport;
+#[cfg(unix)]
+mod private_state_file;
 mod recovery_state;
 pub mod runtime;
 mod sync_api;
@@ -559,6 +563,8 @@ pub struct AppState {
     folder_sync: sync_engine::FolderSyncRuntimeState,
     #[cfg(unix)]
     import_outbox: Option<Arc<appliance_import_outbox::ImportOutbox>>,
+    #[cfg(unix)]
+    update_outbox: Option<Arc<appliance_update_outbox::UpdateOutbox>>,
 }
 
 impl AppState {
@@ -638,6 +644,12 @@ impl AppState {
             engine.public_identity(),
         )
         .map(Arc::new);
+        #[cfg(unix)]
+        let update_outbox = appliance_update_outbox::UpdateOutbox::open(
+            data_directory.join("appliance-update-outbox.json"),
+            engine.public_identity(),
+        )
+        .map(Arc::new);
         Ok(Self {
             engine,
             platform_tier,
@@ -653,6 +665,8 @@ impl AppState {
             controller_bond,
             #[cfg(unix)]
             import_outbox,
+            #[cfg(unix)]
+            update_outbox,
             first_run_claim: None,
             discovery_controller: None,
             archive_limits: ArchiveLimits::default(),
@@ -1531,6 +1545,22 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/api/v1/appliance/imports/withdraw",
             post(appliance_control::withdraw_import).layer(DefaultBodyLimit::max(4096)),
+        )
+        .route(
+            "/api/v1/appliance/updates/context",
+            post(appliance_control::update_context).layer(DefaultBodyLimit::max(4096)),
+        )
+        .route(
+            "/api/v1/appliance/updates/actions",
+            get(appliance_control::update_actions),
+        )
+        .route(
+            "/api/v1/appliance/updates/confirm",
+            post(appliance_control::confirm_update).layer(DefaultBodyLimit::max(4096)),
+        )
+        .route(
+            "/api/v1/appliance/updates/check",
+            post(appliance_control::check_update).layer(DefaultBodyLimit::max(4096)),
         );
     router
         .fallback(not_found)

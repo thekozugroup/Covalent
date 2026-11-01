@@ -145,19 +145,6 @@ fn outbox(state: &AppState) -> Result<&crate::appliance_import_outbox::ImportOut
         .as_deref()
         .ok_or_else(|| error(BondError::Unavailable))
 }
-fn target(
-    state: &AppState,
-    peer: DeviceId,
-) -> Result<covalent_protocol::TransportBinding, ApiError> {
-    state
-        .engine
-        .config()
-        .map_err(|_| error(BondError::Unavailable))?
-        .trusted_peer_transports
-        .get(&peer)
-        .cloned()
-        .ok_or_else(|| error(BondError::Rejected))
-}
 async fn context(state: &AppState, peer: DeviceId) -> Result<ImportStatus, ApiError> {
     let pi = crate::sync_control::current_identity(&state.engine, peer)
         .map_err(|_| error(BondError::Rejected))?;

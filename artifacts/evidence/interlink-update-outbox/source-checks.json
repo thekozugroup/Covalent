@@ -1,0 +1,86 @@
+{
+  "androidKotlin": "Companion production and instrumentation sources compile; native producers were excluded for this compile-only stage.",
+  "androidUnitTests": [
+    {
+      "errors": "0",
+      "failures": "0",
+      "name": "life.michaelwong.covalent.appliance.ApplianceUpdatesTest",
+      "skipped": "0",
+      "tests": "9"
+    },
+    {
+      "errors": "0",
+      "failures": "0",
+      "name": "life.michaelwong.covalent.appliance.ApplianceDashboardTest",
+      "skipped": "0",
+      "tests": "11"
+    },
+    {
+      "errors": "0",
+      "failures": "0",
+      "name": "life.michaelwong.covalent.appliance.ApplianceImportsTest",
+      "skipped": "0",
+      "tests": "11"
+    },
+    {
+      "errors": "0",
+      "failures": "0",
+      "name": "life.michaelwong.covalent.appliance.AppliancePlatformTest",
+      "skipped": "0",
+      "tests": "4"
+    },
+    {
+      "errors": "0",
+      "failures": "0",
+      "name": "life.michaelwong.covalent.appliance.ApplianceImportAlertsTest",
+      "skipped": "0",
+      "tests": "13"
+    }
+  ],
+  "nodeClippy": {
+    "allFeatures": true,
+    "allTargets": true,
+    "exitCode": 0,
+    "warningsDenied": true
+  },
+  "nodeUnitTests": {
+    "failed": 0,
+    "filtered": 0,
+    "ignored": 0,
+    "logSha256": "3e3b03ea6c9b34e0557f740b44b0006e2338d29bc2628330804dcdbbaabaa7e4",
+    "passed": 372
+  },
+  "pending": "Normal APK/native production and execution, rendered UI, full current-head hosted/Linux and physical Pi/phone acceptance.",
+  "resources": "Active tracked task interlink-update-outbox-1793565758880390000-63817-0; cleanup required after actual Android UI qualification.",
+  "schema": 1,
+  "sourceHashes": {
+    "apps/android/app/build.gradle.kts": "8c7e1b26e832a27b466d2b862f11433487e88159f97958ff073d016602e85ed1",
+    "apps/android/app/src/main/java/life/michaelwong/covalent/appliance/ApplianceImports.kt": "b8ff02e3dc27d304546335364d734a261c58e11efbeafde410011bb2a238b946",
+    "apps/android/app/src/main/java/life/michaelwong/covalent/appliance/ApplianceUpdates.kt": "3a6faacc22a30804e320c0f2776dd43d1121f7a6952e902c02019748a0be4a90",
+    "apps/android/app/src/main/java/life/michaelwong/covalent/appliance/NodeApplianceApi.kt": "b2cbae3ce83c866a31b89f3bd4c5337b652d520844c0e045adc6696fcf078e48",
+    "apps/android/app/src/main/java/life/michaelwong/covalent/data/CovalentNodeClient.kt": "4b3ab61862a5811795b120313d1e117041fefdcbae10acb1402b7c97f7aa66e2",
+    "apps/android/app/src/test/java/life/michaelwong/covalent/appliance/ApplianceUpdatesTest.kt": "0e46f1f5eb38b67d10b4930b43cf1b283b406cdff7f020675cd8eb3711fe116a",
+    "apps/android/companion/src/androidTest/java/life/michaelwong/covalent/InterlinkDashboardInstrumentedTest.kt": "51fbcf9a5313d24adbdc3d0d7da2e3409ec5cbaca163862f685078b526ee4f25",
+    "apps/android/companion/src/androidTest/java/life/michaelwong/covalent/InterlinkUpdateNativeInstrumentedTest.kt": "beae1409b0231ad19e10cf72acb8209269a8a706b5477882ef87ae1e478c0706",
+    "apps/android/companion/src/androidTest/java/life/michaelwong/covalent/InterlinkUpdatesInstrumentedTest.kt": "8125b7932bbcb7a20e9f16679d023976ca10c4f7aa7f3c46a09afad53e7a6bf7",
+    "apps/android/companion/src/debug/java/life/michaelwong/covalent/InterlinkPreviewActivity.kt": "658d05fdea1e9f509d2c35b898ea21abc81c0ac1ceb716e0c7beedd870569282",
+    "apps/android/companion/src/debug/java/life/michaelwong/covalent/InterlinkUpdateExample.kt": "f234b6a25b68caf66c19a1923ff9daae4bdd7ee5da36d11c595c24aae9309259",
+    "apps/android/companion/src/main/java/life/michaelwong/covalent/InterlinkDashboard.kt": "3b4b24007defd3f7fafd1b7505f3b61c352ec784699878df1eb8754edb635c07",
+    "apps/android/companion/src/main/java/life/michaelwong/covalent/InterlinkPlatformCard.kt": "fcbf21103100d3510d0822cdd1c36d1dba93e4797077207ce33c4ba83931efc1",
+    "apps/android/companion/src/main/java/life/michaelwong/covalent/InterlinkUpdates.kt": "3e50291e2e38a45db3b4d1ed80bf313c4b49c850f8175550657bbae08d40db94",
+    "apps/android/companion/src/main/res/values/interlink-updates.xml": "5b09898591ea07136557cf42f8a94e2512be81f19daea0e55dce7b24f6c2f3ad",
+    "crates/covalent-node/src/appliance_control.rs": "19e84b5743185b1fe0ccf3b85035129ae60fabae21db558e7361684228fc2896",
+    "crates/covalent-node/src/appliance_control/imports.rs": "c358fb46e19300351c76b8918989f128f8573b5a67b7968ea6c7985b12b43172",
+    "crates/covalent-node/src/appliance_control/updates.rs": "4d6346a8a84d28063d2b35f03005003644d5860c81c3d2e3afb615c23cd3caaf",
+    "crates/covalent-node/src/appliance_control/updates_tests.rs": "73a8bffd964348294ec0166af403dfdcb7cfd103ee390206779da7b6882b616a",
+    "crates/covalent-node/src/appliance_import_outbox.rs": "ba4b6a47bea7362f16cd1a1d55604fbf2dcaf14bcc1c598d4c6aa7012a9180c3",
+    "crates/covalent-node/src/appliance_update_outbox.rs": "60b3be331be82df894c5d2b92405506249742d7c449dc7c150c333aa3787a611",
+    "crates/covalent-node/src/lib.rs": "7dcf9ef0ccb5f808452571ff7e22e4ceb0168943c60feb64724b80ae6c8610ba",
+    "crates/covalent-node/src/private_state_file.rs": "5f71e6e2e2cd84a080b916745b6a84594e052991cef161a3bc40b41ab4dddc65",
+    "crates/covalent-node/tests/fixtures/appliance-updates.json": "fe2049296d548a89116bfed2cd64cb69b320dc553d137c3d3ecdf689942b9963",
+    "docs/interlink-update-settings.md": "83cd0c659124d7c03a1208aafacb516ae65ac3dbcc9ef373f31af71c5290d1e1",
+    "scripts/interlink-api37-alert-test.py": "b7e69decc80e59d47022804f98af886bc627058b1923a50319dc2c3082bbe8bc"
+  },
+  "sourceParent": "ebc5076e9d32f78b85cc4d44363c8239a86d3c38",
+  "uiHarness": "All three strict expected-name/crash/skip/result tests pass; five new native test cases added to the required class list."
+}

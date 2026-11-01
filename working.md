@@ -1,3 +1,49 @@
+# Durable update choices and companion controls — 2026-11-01
+
+Previous turn made implementation progress. This turn adds the phone's persisted
+exact-request outbox, bounded authenticated context/actions/confirm/check APIs,
+strict shared Rust/Android contract, selection/identity-safe controller and native
+Material3 Expressive update card/confirmation. Missing acknowledgement never
+repeats apply. Check is read-only. New explicit choices may replace an unknown
+one with a fresh context/action ID; keeping the current boolean can consume a
+new Pi revision. Fresh authenticated changed revision/bond can retire an old
+request without claiming its past outcome. Unknown records are retained at the
+bounded history limit; only resolved history can be pruned.
+
+Import and update journals now share PrivateStateFile's existing private IO
+contract, with parent/owner/type/link/lock checks, byte limits, atomic file/parent
+fsync and exact readback. Malformed or disappeared state is retained/refused,
+never reset; uncertain publication poisons the live view until reopen. The API
+cannot send before durable readback, and a duplicate confirm cannot write again.
+Real paired loopback journeys cover lost replies, process-style reopen, uncertain
+phone publication, explicit replacement, authorization and stale/unconfigured
+contexts. Shared fixture has real node signatures, verified by Rust and used
+as test-only Android resources. No credential, path, URL or install API is added.
+
+All372 final node library tests pass with zero ignored/filtered; strict all-
+target/all-feature node Clippy passes. All48 Android appliance unit cases pass
+(including nine new parser/controller/client checks). Companion production and
+instrumentation Kotlin compile, with native producers excluded at this stage.
+Three strict hosted harness checks pass. Four UI cases plus one guarded real-
+JNI/private-journal host stop/restart case are now mandatory in the native suite.
+These are not yet executed on Android. Normal APK/native build and rendered
+qualification are next; preserve this explicit boundary until their own proof.
+
+Task interlink-update-outbox-1793565758880390000-63817-0 remains active at its
+owned /private/tmp/ai-development path. Compiler targets/tmp/Gradle module outputs
+and project cache are scoped there; shared caches, SDKs/JDK/NDK/Go and ADB5037/5038
+remain. Single-use Gradle PIDs/start are recorded by the task init script. No
+AVD/VM/container/physical-device operation yet. Record exact owned AVD/data/
+registration/PIDs/ports and cleanup before creating one for UI qualification.
+Track full native-producing build separately; compile-only outputs do not prove
+APK payloads. Preserve candidates/recovery/signers/accounts/media/Pictures and
+both existing draft PR heads/bases. Native/source proof starts at
+artifacts/evidence/interlink-update-outbox/source-checks.json.
+
+Actual Pi/phone changes, release/image, API37 graphics-assertion repair and
+hosted Android36 guest-ANR acceptance are not claimed. Do not clear an unfinished
+source-owned sync or enable DCIM to bypass actual-device admission. Goal active.
+
 # Owner-bound update transport qualified — 2026-11-01
 
 Previous goal turn only rechecked branding, with no implementation progress.

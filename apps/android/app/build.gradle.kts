@@ -156,6 +156,8 @@ val covalentRepoRoot: File =
                 "and scripts/build-android-jni.sh."
         )
 val rcloneSourceDir = covalentRepoRoot.resolve("packaging/rclone")
+// Shared Rust/Android control contract fixtures are test resources only.
+android.sourceSets.getByName("test").resources.srcDir(covalentRepoRoot.resolve("crates/covalent-node/tests/fixtures"))
 
 android.buildTypes.getByName("debug").buildConfigField(
     "boolean",

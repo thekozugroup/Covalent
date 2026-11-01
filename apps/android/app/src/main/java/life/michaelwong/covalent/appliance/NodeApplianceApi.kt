@@ -7,7 +7,7 @@ import life.michaelwong.covalent.model.NodeConnection
 internal class NodeApplianceApi(
     private val connection: () -> NodeConnection?,
     private val client: CovalentNodeClient = CovalentNodeClient(),
-) : ApplianceDashboardApi, ApplianceImportsApi {
+) : ApplianceDashboardApi, ApplianceImportsApi, ApplianceUpdatesApi {
     private fun ready() = checkNotNull(connection())
     override fun context() = ready().let { client.applianceContext(it.baseUrl, it.token) }
     override fun pairing() = context()
@@ -20,4 +20,8 @@ internal class NodeApplianceApi(
     override fun confirm(choice: PiImportChoice) = ready().let { client.confirmApplianceImport(it.baseUrl, it.token, choice) }
     override fun check(action: PiSavedImport) = ready().let { client.checkApplianceImport(it.baseUrl, it.token, action) }
     override fun withdraw(action: PiSavedImport) = ready().let { client.withdrawApplianceImport(it.baseUrl, it.token, action) }
+    override fun updateContext(selected: SelectedAppliance) = ready().let { client.applianceUpdates(it.baseUrl, it.token, selected) }
+    override fun updateActions(local: ApplianceIdentity) = ready().let { client.applianceUpdateActions(it.baseUrl, it.token, local) }
+    override fun confirmUpdate(choice: PiUpdateChoice) = ready().let { client.confirmApplianceUpdate(it.baseUrl, it.token, choice) }
+    override fun checkUpdate(action: PiSavedUpdate) = ready().let { client.checkApplianceUpdate(it.baseUrl, it.token, action) }
 }

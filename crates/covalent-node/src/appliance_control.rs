@@ -568,3 +568,18 @@ pub(crate) use imports::{
     check_import, confirm_import, import_actions, import_context, withdraw_import,
 };
 pub use updates::UpdateStatus;
+pub(crate) use updates::{check_update, confirm_update, update_actions, update_context};
+
+fn target(
+    state: &AppState,
+    peer: DeviceId,
+) -> Result<covalent_protocol::TransportBinding, ApiError> {
+    state
+        .engine
+        .config()
+        .map_err(|_| error(BondError::Unavailable))?
+        .trusted_peer_transports
+        .get(&peer)
+        .cloned()
+        .ok_or_else(|| error(BondError::Rejected))
+}

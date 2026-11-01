@@ -1,0 +1,86 @@
+{
+  "applied": {
+    "observedContext": null,
+    "order": 1,
+    "proof": {
+      "payload": "{\"schemaVersion\":1,\"bond\":{\"appliance\":{\"deviceId\":\"5c897ff3-ac9c-4bc5-8026-cf1c7e5ffed1\",\"publicKey\":\"mat9nBIczlbzFCDvwiKDsJwOYoVBvmSe7b3TsoOKLHI\",\"fingerprint\":\"8d6625b7cca1236bcf40\"},\"controller\":{\"deviceId\":\"b0fa36da-5370-4ecb-ad87-f04c729ac45c\",\"publicKey\":\"MIOxL_KyVgJZ06rzICbmNondjAR19k0_gYGpDOMxAtE\",\"fingerprint\":\"6fc75af616fea4c6bc77\"},\"rootGeneration\":\"c5a463b9-9d09-470f-b997-d5210f9c1e05\",\"nativeGeneration\":\"3a9b4e54-16f1-474a-bea2-811272f8ce08\"},\"actionId\":\"f4de1b39-7f17-44c5-93ca-09ceb0ee85fc\",\"expectedRevision\":\"912405b3-a8df-4310-90af-fa387f0f0634\",\"enabled\":true}",
+      "signature": "M5hJdr0XDX4fcB653QjCxEVT1Z-HS85jtwv5AB95r_ZruMwQEuGvYEr1GhZhYB-QIcyUH3h4JUph58v9OzgiBw"
+    },
+    "receipt": {
+      "actionId": "f4de1b39-7f17-44c5-93ca-09ceb0ee85fc",
+      "enabled": true,
+      "payloadDigest": "6aa9a9e5d8afda35111a263a8f510cd5c76707f1d3bcf4c02f1515cbb6aba4ff",
+      "revision": "d00dbcef-2994-4994-aeda-8285456898e5",
+      "schemaVersion": 1,
+      "state": "applied"
+    }
+  },
+  "current": {
+    "applianceId": "5c897ff3-ac9c-4bc5-8026-cf1c7e5ffed1",
+    "bondGeneration": "3a9b4e54-16f1-474a-bea2-811272f8ce08",
+    "context": {
+      "bond": {
+        "appliance": {
+          "deviceId": "5c897ff3-ac9c-4bc5-8026-cf1c7e5ffed1",
+          "fingerprint": "8d6625b7cca1236bcf40",
+          "publicKey": "mat9nBIczlbzFCDvwiKDsJwOYoVBvmSe7b3TsoOKLHI"
+        },
+        "controller": {
+          "deviceId": "b0fa36da-5370-4ecb-ad87-f04c729ac45c",
+          "fingerprint": "6fc75af616fea4c6bc77",
+          "publicKey": "MIOxL_KyVgJZ06rzICbmNondjAR19k0_gYGpDOMxAtE"
+        },
+        "nativeGeneration": "3a9b4e54-16f1-474a-bea2-811272f8ce08",
+        "rootGeneration": "c5a463b9-9d09-470f-b997-d5210f9c1e05"
+      },
+      "busy": false,
+      "configured": true,
+      "enabled": true,
+      "revision": "d00dbcef-2994-4994-aeda-8285456898e5",
+      "schemaVersion": 1
+    },
+    "controllerId": "b0fa36da-5370-4ecb-ad87-f04c729ac45c",
+    "schemaVersion": 1,
+    "updatesAvailable": true,
+    "updatesSupported": true
+  },
+  "initial": {
+    "applianceId": "5c897ff3-ac9c-4bc5-8026-cf1c7e5ffed1",
+    "bondGeneration": "3a9b4e54-16f1-474a-bea2-811272f8ce08",
+    "context": {
+      "bond": {
+        "appliance": {
+          "deviceId": "5c897ff3-ac9c-4bc5-8026-cf1c7e5ffed1",
+          "fingerprint": "8d6625b7cca1236bcf40",
+          "publicKey": "mat9nBIczlbzFCDvwiKDsJwOYoVBvmSe7b3TsoOKLHI"
+        },
+        "controller": {
+          "deviceId": "b0fa36da-5370-4ecb-ad87-f04c729ac45c",
+          "fingerprint": "6fc75af616fea4c6bc77",
+          "publicKey": "MIOxL_KyVgJZ06rzICbmNondjAR19k0_gYGpDOMxAtE"
+        },
+        "nativeGeneration": "3a9b4e54-16f1-474a-bea2-811272f8ce08",
+        "rootGeneration": "c5a463b9-9d09-470f-b997-d5210f9c1e05"
+      },
+      "busy": false,
+      "configured": true,
+      "enabled": false,
+      "revision": "912405b3-a8df-4310-90af-fa387f0f0634",
+      "schemaVersion": 1
+    },
+    "controllerId": "b0fa36da-5370-4ecb-ad87-f04c729ac45c",
+    "schemaVersion": 1,
+    "updatesAvailable": true,
+    "updatesSupported": true
+  },
+  "pending": {
+    "observedContext": null,
+    "order": 1,
+    "proof": {
+      "payload": "{\"schemaVersion\":1,\"bond\":{\"appliance\":{\"deviceId\":\"5c897ff3-ac9c-4bc5-8026-cf1c7e5ffed1\",\"publicKey\":\"mat9nBIczlbzFCDvwiKDsJwOYoVBvmSe7b3TsoOKLHI\",\"fingerprint\":\"8d6625b7cca1236bcf40\"},\"controller\":{\"deviceId\":\"b0fa36da-5370-4ecb-ad87-f04c729ac45c\",\"publicKey\":\"MIOxL_KyVgJZ06rzICbmNondjAR19k0_gYGpDOMxAtE\",\"fingerprint\":\"6fc75af616fea4c6bc77\"},\"rootGeneration\":\"c5a463b9-9d09-470f-b997-d5210f9c1e05\",\"nativeGeneration\":\"3a9b4e54-16f1-474a-bea2-811272f8ce08\"},\"actionId\":\"f4de1b39-7f17-44c5-93ca-09ceb0ee85fc\",\"expectedRevision\":\"912405b3-a8df-4310-90af-fa387f0f0634\",\"enabled\":true}",
+      "signature": "M5hJdr0XDX4fcB653QjCxEVT1Z-HS85jtwv5AB95r_ZruMwQEuGvYEr1GhZhYB-QIcyUH3h4JUph58v9OzgiBw"
+    },
+    "receipt": null
+  },
+  "schemaVersion": 1
+}

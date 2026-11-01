@@ -92,7 +92,7 @@ internal fun parsePiImports(json: JSONObject, selected: SelectedAppliance): PiIm
     return PiImportsObservation(generation, supported, PiImportContext(bond, volumes, value.strictBoolean("sourcesTruncated"), sources, space, if (version == 2L) cameras else null))
 }
 
-private fun parseImportBond(value: JSONObject): PiImportBond {
+internal fun parseImportBond(value: JSONObject): PiImportBond {
     value.exactKeys("appliance", "controller", "rootGeneration", "nativeGeneration")
     return PiImportBond(value.getJSONObject("appliance").identity(), value.getJSONObject("controller").identity(),
         value.strictString("rootGeneration"), value.strictString("nativeGeneration"))

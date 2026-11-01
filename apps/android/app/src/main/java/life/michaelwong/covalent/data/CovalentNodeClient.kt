@@ -223,6 +223,22 @@ class CovalentNodeClient(
             JSONObject().put("actionId", action.choice.id).toString(), 8192), action.choice.bond.controller)
             .also { require(it.choice == action.choice && it.payload == action.payload && it.signature == action.signature && it.source == action.source && it.order == action.order && it.withdrawalRequested) }
 
+    internal fun applianceUpdates(baseUrl: String, token: String, selected: life.michaelwong.covalent.appliance.SelectedAppliance) =
+        life.michaelwong.covalent.appliance.parsePiUpdates(requestBoundedObject(baseUrl, "POST", "/api/v1/appliance/updates/context", token,
+            JSONObject().put("peerId", selected.appliance.deviceId).toString(), 4096), selected)
+
+    internal fun applianceUpdateActions(baseUrl: String, token: String, local: life.michaelwong.covalent.appliance.ApplianceIdentity) =
+        life.michaelwong.covalent.appliance.parsePiUpdateActions(requestBoundedObject(baseUrl, "GET", "/api/v1/appliance/updates/actions", token, null, 131_072), local)
+
+    internal fun confirmApplianceUpdate(baseUrl: String, token: String, choice: life.michaelwong.covalent.appliance.PiUpdateChoice) =
+        life.michaelwong.covalent.appliance.parsePiSavedUpdate(requestBoundedObject(baseUrl, "POST", "/api/v1/appliance/updates/confirm", token,
+            choice.canonicalPayload(), 4096), choice.bond.controller).also { require(it.choice == choice) }
+
+    internal fun checkApplianceUpdate(baseUrl: String, token: String, action: life.michaelwong.covalent.appliance.PiSavedUpdate) =
+        life.michaelwong.covalent.appliance.parsePiSavedUpdate(requestBoundedObject(baseUrl, "POST", "/api/v1/appliance/updates/check", token,
+            JSONObject().put("actionId", action.choice.id).toString(), 4096), action.choice.bond.controller)
+            .also { require(it.choice == action.choice && it.payload == action.payload && it.signature == action.signature && it.order == action.order) }
+
     /** Reads only the redacted folder-sync projection from the authenticated node. */
     fun folderSyncStatus(baseUrl: String, token: String): FolderSyncStatus =
         request(baseUrl, "GET", "/api/v1/sync/status", token, null).body.toFolderSyncStatus()

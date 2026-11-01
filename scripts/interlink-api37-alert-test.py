@@ -18,7 +18,8 @@ IDENTITIES = ("no_backup/covalent-node/identity.json", "no_backup/covalent-node/
               "no_backup/covalent-node-secrets/kek-envelope.v1")
 CLASSES = ("InterlinkImportAlertsInstrumentedTest", "InterlinkDashboardInstrumentedTest",
            "InterlinkImportsInstrumentedTest", "InterlinkNotificationInstrumentedTest",
-           "InterlinkRunStatusInstrumentedTest", "ui.InterlinkLayoutInstrumentedTest")
+           "InterlinkRunStatusInstrumentedTest", "InterlinkUpdatesInstrumentedTest",
+           "InterlinkUpdateNativeInstrumentedTest", "ui.InterlinkLayoutInstrumentedTest")
 
 
 def require(ok, message):
@@ -173,6 +174,7 @@ def main():
         require("\n" not in test_path and run("shell", "sha256sum", test_path).split()[0] == sha(test), "Installed test APK differs")
         output = run("shell", "am", "instrument", "-w", "-r", "-e", "class",
                      ",".join("life.michaelwong.covalent." + c for c in CLASSES),
+                     "-e", "interlinkOwnedFixture", "true",
                      PACKAGE + ".test/androidx.test.runner.AndroidJUnitRunner", timeout=300)
         (args.evidence_dir / "instrumentation.log").write_text(output + "\n")
         require(instrument_passed(output), "Native alert/component instrumentation failed; original log retained")

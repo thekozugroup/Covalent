@@ -122,7 +122,6 @@ class InterlinkDashboardInstrumentedTest {
         }
         compose.onNodeWithTag("interlink-source-counts").performScrollTo().assertIsDisplayed()
         compose.onNodeWithText(resources.getString(R.string.interlink_preview_incomplete)).performScrollTo().assertIsDisplayed()
-        compose.onNodeWithText(resources.getString(R.string.interlink_updates_automatic)).performScrollTo().assertIsDisplayed()
         compose.runOnIdle { state.value = connected().copy(platform = platform.copy(snapshot = snapshot.copy(sources = listOf(source.copy(preview = PiPreviewState.UNAVAILABLE, count = null, bytes = null))))) }
         compose.onNodeWithTag("interlink-source-counts").assertDoesNotExist()
         compose.onNodeWithText(resources.getString(R.string.interlink_preview_unavailable)).performScrollTo().assertIsDisplayed()

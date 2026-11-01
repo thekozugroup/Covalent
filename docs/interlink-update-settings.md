@@ -4,9 +4,10 @@ The first privileged settings feature is an explicit choice to enable or pause
 Pi automatic updates from the approved Interlink phone. The signed core command,
 Pi atomic policy transaction and root verifier exist. The node now carries fixed
 context/apply/lookup operations over its authenticated appliance QUIC channel,
-with an explicitly installed privileged host bridge. The phone outbox/readback
-and Material3 Expressive control are still pending; no local mutation API or
-companion switch is exposed before that recovery boundary is implemented.
+with an explicitly installed privileged host bridge. The phone now has a durable exact-request outbox, bounded authenticated local
+APIs and a Material3 Expressive confirmation/control surface. Source compilation
+and host contracts pass; normal-package Android execution and installed Pi/phone
+acceptance are separate gates.
 
 ## Authentication and transport
 
@@ -51,11 +52,35 @@ revision, including a no-op. An exact latest duplicate reads its receipt; an old
 request cannot overwrite a newer policy. Local changes invalidate old revisions.
 Owner revocation blocks both apply and lookup. Credentials remain local.
 
-Next persist the phone's exact signed request before sending, recover a lost
-reply by lookup, and show freshly confirmed state and an unconfirmed outcome.
-An unconfigured updater must request setup rather than claim enabled. Existing
-idle, signature, recovery, account-preservation and source-retention gates remain
-authoritative. Enabling scheduling cannot choose or immediately install a release.
+The phone persists and independently reads back the exact signed request before
+its only apply attempt. An exact duplicate confirm returns the saved record;
+restart, refresh and check never resend apply. A missing acknowledgement stays
+unconfirmed. Read-only lookup can recover the matching latest Pi receipt. New
+explicit choices use a fresh Pi context/revision and a new stable action ID;
+they may replace an unconfirmed choice without replaying it. Even keeping the
+current boolean is an explicit signed choice that consumes a revision on the Pi.
+If an older queued choice wins a race, read fresh settings and confirm again;
+the app never automatically sends a new mutation to hide that race.
+
+Fresh authenticated state can prove a prior request cannot change current policy:
+the full approval bond changed, or the nonnil Pi revision differs from the saved
+request revision. The outbox retains that observation without claiming the old
+request failed or never ran. A notObserved receipt with the original revision
+alone cannot resolve or cancel a request. Applied receipts remain monotonic.
+Only resolved history can be pruned at the32-record bound; unknown commands are
+not discarded. Missing/damaged/foreign/linked state stays retained and refused.
+The existing import and update journals share the same private-file locking,
+size/owner/link guards, file/parent fsync, atomic publication and exact readback.
+No source, account, sync pairing or import record is reset by update controls.
+
+The companion checks saved selection and full paired identities before and after
+IO, rechecks the review context before confirm, and signs only through its local
+node. The switch follows freshly read Pi state. Offline, unapproved, unsupported,
+unconfigured, busy and unreadable-history states cannot change policy. An
+unconfirmed choice offers read-only Check status and an explicit Keep current
+setting choice. No root setting, key, credential or arbitrary operation is sent
+from the presentation layer. Token setup and all update/install/idle/recovery
+policies remain unchanged.
 
 ## Acceptance boundary
 
