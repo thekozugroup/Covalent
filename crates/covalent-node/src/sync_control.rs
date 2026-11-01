@@ -46,6 +46,8 @@ pub enum FolderControlError {
     Busy,
     TimedOut,
     Unavailable,
+    /// An authenticated peer closed a versioned import read before any reply bytes.
+    NoResponse,
 }
 impl fmt::Display for FolderControlError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -55,6 +57,7 @@ impl fmt::Display for FolderControlError {
             Self::Busy => "folder control is busy",
             Self::TimedOut => "folder control timed out",
             Self::Unavailable => "folder control is unavailable",
+            Self::NoResponse => "folder control peer sent no response",
         })
     }
 }
@@ -96,6 +99,12 @@ pub enum FolderControlOperation {
     ReadApplianceImports {
         requester_id: DeviceId,
         target_id: DeviceId,
+        #[serde(
+            default,
+            deserialize_with = "import_context_version",
+            skip_serializing_if = "Option::is_none"
+        )]
+        context_version: Option<u16>,
     },
     ApplianceImport {
         requester_id: DeviceId,
@@ -104,6 +113,9 @@ pub enum FolderControlOperation {
         proof: covalent_core::appliance_import::SignedImportApproval,
         withdrawal_signature: Option<String>,
     },
+}
+fn import_context_version<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<u16>, D::Error> {
+    u16::deserialize(d).map(Some)
 }
 impl FolderControlOperation {
     fn alpn(&self) -> &'static [u8] {
@@ -504,7 +516,7 @@ mod tests;
 // QUIC plumbing is intentionally one-shot: each control mutation opens one
 // connection, one bidirectional stream, sends one frame and receives one frame.
 // It never reuses storage-v3 state or falls back to another ALPN.
-const EXCHANGE_TIMEOUT: Duration = Duration::from_secs(45);
+pub(crate) const EXCHANGE_TIMEOUT: Duration = Duration::from_secs(45);
 const AUTHENTICATION_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Shared server admission state. Keep this beside the endpoint for its whole
@@ -668,9 +680,19 @@ async fn send_folder_control_to(
             .await
             .map_err(|_| FolderControlError::Unavailable)?;
         send.finish().map_err(|_| FolderControlError::Unavailable)?;
-        let response = crate::transport::read_frame(&mut receive, MAX_FRAME_BYTES)
-            .await
-            .map_err(|_| FolderControlError::Unavailable)?;
+        let response = if matches!(
+            &request.operation,
+            FolderControlOperation::ReadApplianceImports {
+                context_version: Some(2),
+                ..
+            }
+        ) {
+            read_versioned_import_response(&mut receive).await?
+        } else {
+            crate::transport::read_frame(&mut receive, MAX_FRAME_BYTES)
+                .await
+                .map_err(|_| FolderControlError::Unavailable)?
+        };
         let response: FolderControlResponse =
             serde_json::from_slice(&response).map_err(|_| FolderControlError::Rejected)?;
         verify_response(
@@ -684,6 +706,35 @@ async fn send_folder_control_to(
     })
     .await
     .map_err(|_| FolderControlError::TimedOut)?
+}
+
+async fn read_versioned_import_response(
+    receive: &mut quinn::RecvStream,
+) -> Result<Vec<u8>, FolderControlError> {
+    let mut header = [0_u8; 4];
+    let mut read = 0;
+    while read < header.len() {
+        match receive.read(&mut header[read..]).await {
+            Ok(Some(n)) if n > 0 => read += n,
+            _ => {
+                return Err(if read == 0 {
+                    FolderControlError::NoResponse
+                } else {
+                    FolderControlError::Rejected
+                });
+            }
+        }
+    }
+    let length = u32::from_be_bytes(header) as usize;
+    if length == 0 || length > MAX_FRAME_BYTES {
+        return Err(FolderControlError::Rejected);
+    }
+    let mut bytes = vec![0_u8; length];
+    receive
+        .read_exact(&mut bytes)
+        .await
+        .map_err(|_| FolderControlError::Rejected)?;
+    Ok(bytes)
 }
 
 /// Serve exactly one bidirectional stream after the QUIC endpoint has selected
@@ -759,11 +810,17 @@ pub async fn serve_folder_control_connection(
                     },
                     None => FolderControlPayload::Rejected,
                 }
-            } else if let FolderControlOperation::ReadApplianceImports { requester_id, .. } =
-                request.operation
+            } else if let FolderControlOperation::ReadApplianceImports {
+                requester_id,
+                context_version,
+                ..
+            } = request.operation
             {
                 match controller_bond {
-                    Some(bond) => match bond.read_imports(&engine, requester_id).await {
+                    Some(bond) => match bond
+                        .read_imports(&engine, requester_id, context_version)
+                        .await
+                    {
                         Ok(value) => FolderControlPayload::ApplianceImports(value),
                         Err(FolderControlError::Rejected) => FolderControlPayload::Rejected,
                         Err(FolderControlError::Busy) => FolderControlPayload::Busy,

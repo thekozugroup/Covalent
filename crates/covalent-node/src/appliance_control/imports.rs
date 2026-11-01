@@ -41,7 +41,12 @@ impl ControllerBondStore {
         &self,
         engine: &Engine,
         requester: DeviceId,
+        context_version: Option<u16>,
     ) -> Result<ImportStatus, FolderControlError> {
+        let version = context_version.unwrap_or(1);
+        if !matches!(version, 1 | 2) {
+            return Err(FolderControlError::Rejected);
+        }
         let before = self
             .authorized(engine, requester)
             .map_err(|_| FolderControlError::Rejected)?;
@@ -56,6 +61,7 @@ impl ControllerBondStore {
                 .await
                 .ok()
                 .and_then(Result::ok)
+                .and_then(|c| c.for_version(version).ok())
                 .filter(|c| {
                     c.validate().is_ok()
                         && c.bond.appliance == before.appliance
@@ -155,15 +161,28 @@ fn target(
 async fn context(state: &AppState, peer: DeviceId) -> Result<ImportStatus, ApiError> {
     let pi = crate::sync_control::current_identity(&state.engine, peer)
         .map_err(|_| error(BondError::Rejected))?;
-    let value = send_folder_control(
-        Arc::clone(&state.engine),
-        target(state, peer)?,
-        FolderControlOperation::ReadApplianceImports {
-            requester_id: state.engine.device_id(),
-            target_id: peer,
-        },
-    )
+    let binding = target(state, peer)?;
+    let read = |context_version| {
+        send_folder_control(
+            Arc::clone(&state.engine),
+            binding.clone(),
+            FolderControlOperation::ReadApplianceImports {
+                requester_id: state.engine.device_id(),
+                target_id: peer,
+                context_version,
+            },
+        )
+    };
+    // Old decoders close an unknown read frame without a reply. Only that transport
+    // outcome permits one legacy read; refusals, invalid replies and writes never retry.
+    let value = tokio::time::timeout(crate::sync_control::EXCHANGE_TIMEOUT, async {
+        match read(Some(2)).await {
+            Err(FolderControlError::NoResponse) => read(None).await,
+            result => result,
+        }
+    })
     .await
+    .map_err(|_| error(BondError::Unavailable))?
     .map_err(|_| error(BondError::Unavailable))?;
     match value {
         FolderControlPayload::ApplianceImports(value)

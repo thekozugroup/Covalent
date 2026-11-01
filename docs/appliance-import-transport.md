@@ -85,9 +85,32 @@ refuse. Service availability, current bond, exact preview and protected space
 are all required; a transport connection alone grants nothing.
 
 The private Pi bridge requests version2 explicitly and gates camera support on
-the verified native executable's camera protocol marker. A modern phone can
-read either context version. An older reader refuses a modern context rather
-than silently discarding its camera fields. Platform/native/companion versions
-therefore need coordinated upgrade qualification. No fallback resets an outbox,
-rewrites an old volume proof or retries an uncertain mutation. The outbox format
-stays version1 and retains old volume requests beside new camera proofs.
+the verified native executable's camera protocol marker. The signed
+ReadApplianceImports operation now has an optional `context_version` field.
+Absent means legacy context1; a modern phone requests2. The field is signed.
+Its absence retains the exact original operation bytes and digest. Explicit
+nulls, strings and fractional versions refuse; unsupported versions never reach
+the import host.
+
+A newer host validates its complete protected context before projecting a
+volume-only context1 for older readers. It removes camera entries and modern
+fields, marks omitted sources, and preserves the full bond, volume journal,
+preview, destination and storage. It never relabels a camera as a drive or
+converts a signature. Older readers therefore keep their drive flow while a
+newer companion can request both source kinds.
+
+After TLS pin verification, a modern reader permits exactly one legacy read if
+the peer closes before sending any response bytes. This can represent an older
+strict decoder; the second query still requires all existing transport,
+signature and owner checks. Signed refusals, busy results, partial/oversized
+frames, malformed responses and invalid signatures never trigger fallback.
+Both reads share the existing45-second exchange budget. A compatible earlier
+camera host can still return context2 on the legacy query; modern readers accept
+either valid version. This is read negotiation, never a write retry or a weaker
+authentication mode.
+
+Root/native component updates still require their ordinary coordinated bundle
+and installed upgrade qualification. Mixed-version wire tests do not prove an
+old installed APK or physical Pi upgrade. No fallback resets an outbox, rewrites
+an old volume proof or retries an uncertain mutation. The outbox format stays
+version1 and retains old volume requests beside new camera proofs.

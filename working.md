@@ -1,3 +1,42 @@
+# Import compatibility across companion/platform updates — 2026-11-01
+
+The previous signed camera stage was progress. This stage fixes its mixed-version
+read gap: old requests keep exact original operation bytes and receive validated
+volume-only context1. Modern requests sign an optional context_version2 and can
+receive volume/camera context. Projection keeps the full bond, volume tuple,
+preview and protected space; cameras are omitted and disclosed, never relabelled.
+Invalid modern data is rejected before projection. No proof, bond or outbox is
+rewritten, and the mutation/readback/withdrawal paths retain their prior rules.
+
+A modern reader can make one legacy query only when an authenticated pinned
+connection closes before any reply bytes. Refused/busy/invalid signatures or
+malformed/partial/oversized frames never downgrade. TLS, full identity and owner
+checks remain on the second read, under the existing shared45-second budget.
+This supports legacy volume hosts and the intermediate camera-capable host that
+predates the version field. A versioned-context NoResponse is a local transport
+result, not a new wire grant or advertised capability.
+
+Full355 node unit tests pass with zero failures/ignored/filtered, including real
+authenticated QUIC old/new/transitional read paths, legacy volume admission on a
+modern camera host, revocation and no unsafe fallback. Exact legacy operation
+bytes and version/signature binding are checked. Workspace/all-target/all-feature
+clippy with warnings denied, format and foundation are checked separately in the
+private audit. The first network fixture fails its immediate port-rebind check:
+Quinn's detached endpoint driver can retain its socket after wait_idle/drop. The
+corrected fixture waits within3seconds for actual socket rebind, with no changed
+product deadline or waived cleanup assertion. Original failure remains separate.
+
+No Kotlin/UI, dependency, lockfile, release version, actual phone/Pi or account/
+media changes. Prior265 JVM/14 UI checks describe the previous normal APK; no
+new APK/native platform bundle is claimed here. The next platform pin/build must
+use this exact committed public source. Physical old-APK/roaming/import/cloud,
+remaining headless settings, signed updates/recovery and gold-image acceptance
+remain open. Older b5d7159 hosted CI passes foundation/Rust/macOS/dependency work
+but container scans report go-jose security findings; its Android job is tracked
+separately. Private7c9bddd CI passes Linux/root-camera work then fails owner UI
+behind a System UI ANR dialog. Original failures are retained; no reset, dismissal,
+waiver or speculative cause is claimed. No release or merge.
+
 # Signed camera review in Interlink — 2026-11-01
 
 Adds canonical schema2 camera approvals/withdrawals with separate signing domains;

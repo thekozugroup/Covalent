@@ -46,7 +46,8 @@ cryptographically in shared core. The 14 component tests use the normal debug
 Application and complete native producers with synthetic source data. Camera
 screens and 200% dark text are captured in `brand/`. No complete signed Pi
 component bundle, physical import, account or cloud acceptance follows from
-these checks. Older context readers require coordinated upgrade qualification.
+these checks. Signed read-version negotiation now preserves the volume view for
+older readers; actual installed app/platform upgrade qualification remains open.
 
 Earlier volume-stage verification: full250 JVM and345 node unit tests, zero failures/
 ignored; denied-warning workspace/all-target/all-feature clippy; native API36

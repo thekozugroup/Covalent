@@ -132,6 +132,26 @@ fn hex(value: &str, size: usize) -> bool {
 }
 
 impl ImportContext {
+    /// A legacy reader sees only volume data; malformed modern data is never sanitized into a grant.
+    pub(crate) fn for_version(mut self, version: u16) -> Result<Self, ImportHostError> {
+        self.validate()?;
+        if !matches!(version, 1 | 2) {
+            return Err(ImportHostError);
+        }
+        if version == 1 && self.schema_version == 2 {
+            let before = self.sources.len();
+            self.sources
+                .retain(|s| s.kind == covalent_core::appliance_import::ImportSourceKind::Volume);
+            self.sources_truncated |= before != self.sources.len();
+            for source in &mut self.sources {
+                source.can_remember = None;
+            }
+            self.schema_version = 1;
+            self.camera_service_available = None;
+            self.validate()?;
+        }
+        Ok(self)
+    }
     pub fn decode(bytes: &[u8]) -> Result<Self, ImportHostError> {
         if bytes.len() > 32_768 {
             return Err(ImportHostError);
@@ -278,6 +298,56 @@ impl ImportReceipt {
 pub(crate) mod tests {
     use super::*;
     use covalent_core::{DeviceIdentity, appliance_import::*};
+    #[test]
+    fn legacy_projection_keeps_volume_tuple_and_never_relabels_camera_or_rewrites_a_proof() {
+        let (phone, old) = fixture();
+        let proof = sign_import_approval(&phone, &choice(&old, ImportApprovalMode::Once)).unwrap();
+        let mut modern = old.clone();
+        modern.schema_version = 2;
+        modern.camera_service_available = Some(true);
+        modern.sources[0].can_remember = Some(true);
+        let mut camera = modern.sources[0].clone();
+        camera.source_id = "c".repeat(64);
+        camera.kind = ImportSourceKind::Camera;
+        camera.can_remember = Some(false);
+        camera.action_session = Uuid::new_v4();
+        modern.sources.push(camera);
+        let legacy = modern.clone().for_version(1).unwrap();
+        assert_eq!(legacy.sources, old.sources);
+        assert_eq!(legacy.bond, old.bond);
+        assert_eq!(legacy.storage, old.storage);
+        assert!(legacy.sources_truncated);
+        assert_eq!(legacy.schema_version, 1);
+        let value = serde_json::to_value(&legacy).unwrap();
+        assert!(
+            value.get("cameraServiceAvailable").is_none()
+                && value["sources"][0].get("canRemember").is_none()
+        );
+        assert_eq!(modern.clone().for_version(2).unwrap(), modern);
+        assert_eq!(old.clone().for_version(2).unwrap(), old);
+        assert_eq!(old.clone().for_version(1).unwrap(), old);
+        let decoded = verify_import_approval(&legacy.bond, &proof).unwrap();
+        assert!(legacy.admits(&decoded) && modern.admits(&decoded));
+    }
+
+    #[test]
+    fn legacy_projection_rejects_bad_modern_context_before_removing_unsupported_sources() {
+        let (_, mut modern) = fixture();
+        modern.schema_version = 2;
+        modern.camera_service_available = Some(true);
+        modern.volume_service_available = false;
+        modern.sources[0].kind = ImportSourceKind::Camera;
+        modern.sources[0].can_remember = Some(false);
+        assert!(modern.clone().for_version(1).unwrap().sources.is_empty());
+        for version in [0, 3, u16::MAX] {
+            assert!(modern.clone().for_version(version).is_err());
+        }
+        modern.camera_service_available = Some(false);
+        assert!(modern.clone().for_version(1).is_err());
+        modern.camera_service_available = Some(true);
+        modern.source_cleanup_available = true;
+        assert!(modern.for_version(1).is_err());
+    }
     #[test]
     fn camera_context_has_independent_journal_and_explicit_remember_capability() {
         let (_, mut c) = fixture();
