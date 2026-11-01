@@ -9,6 +9,8 @@ mod appliance_import_outbox;
 pub mod appliance_imports;
 #[cfg(unix)]
 pub mod appliance_platform;
+#[cfg(unix)]
+pub mod appliance_updates;
 pub mod discovery;
 mod display_names;
 pub mod first_run_claim;
@@ -578,6 +580,16 @@ impl AppState {
     ) -> Self {
         if let Some(bond) = &self.controller_bond {
             let _ = bond.imports.set(host);
+        }
+        self
+    }
+    #[cfg(unix)]
+    pub fn with_appliance_updates(
+        self,
+        host: Arc<dyn appliance_updates::ApplianceUpdateHost>,
+    ) -> Self {
+        if let Some(bond) = &self.controller_bond {
+            let _ = bond.updates.set(host);
         }
         self
     }

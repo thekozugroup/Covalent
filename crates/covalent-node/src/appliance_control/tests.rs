@@ -10,6 +10,8 @@ use std::sync::Arc;
 
 #[path = "imports_tests.rs"]
 mod imports_tests;
+#[path = "updates_tests.rs"]
+mod updates_tests;
 
 struct Device {
     root: tempfile::TempDir,

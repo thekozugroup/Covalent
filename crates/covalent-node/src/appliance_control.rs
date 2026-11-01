@@ -46,7 +46,8 @@ pub(crate) struct ControllerBondStore {
     bond: Mutex<Option<ControllerBond>>,
     pub(crate) platform: OnceLock<Arc<dyn crate::appliance_platform::AppliancePlatformReader>>,
     pub(crate) imports: OnceLock<Arc<dyn crate::appliance_imports::ApplianceImportHost>>,
-    import_ops: Arc<tokio::sync::Semaphore>,
+    pub(crate) updates: OnceLock<Arc<dyn crate::appliance_updates::ApplianceUpdateHost>>,
+    host_ops: Arc<tokio::sync::Semaphore>,
     platform_reads: Arc<tokio::sync::Semaphore>,
 }
 
@@ -126,7 +127,8 @@ impl ControllerBondStore {
             bond: Mutex::new(Some(bond)),
             platform: OnceLock::new(),
             imports: OnceLock::new(),
-            import_ops: Arc::new(tokio::sync::Semaphore::new(1)),
+            updates: OnceLock::new(),
+            host_ops: Arc::new(tokio::sync::Semaphore::new(1)),
             platform_reads: Arc::new(tokio::sync::Semaphore::new(1)),
         })
     }
@@ -560,7 +562,9 @@ pub(crate) async fn remote_platform(
 mod tests;
 
 mod imports;
+mod updates;
 pub use imports::ImportStatus;
 pub(crate) use imports::{
     check_import, confirm_import, import_actions, import_context, withdraw_import,
 };
+pub use updates::UpdateStatus;

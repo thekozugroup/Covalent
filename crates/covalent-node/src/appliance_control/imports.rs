@@ -51,7 +51,7 @@ impl ControllerBondStore {
             .authorized(engine, requester)
             .map_err(|_| FolderControlError::Rejected)?;
         let _permit = self
-            .import_ops
+            .host_ops
             .clone()
             .try_acquire_owned()
             .map_err(|_| FolderControlError::Busy)?;
@@ -116,7 +116,7 @@ impl ControllerBondStore {
             return Err(FolderControlError::Rejected);
         }
         let _permit = self
-            .import_ops
+            .host_ops
             .clone()
             .try_acquire_owned()
             .map_err(|_| FolderControlError::Busy)?;

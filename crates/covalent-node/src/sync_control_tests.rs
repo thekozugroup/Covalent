@@ -6,6 +6,90 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 #[test]
+fn update_operations_require_appliance_alpn_and_authenticate_operation_and_intent() {
+    use crate::appliance_updates::UpdateOperation;
+    use covalent_core::appliance_updates::*;
+    let source = test_engine();
+    let target = test_engine();
+    let fingerprint = "c".repeat(64);
+    let proof = SignedAutomaticUpdateChange {
+        payload: "signed-choice".into(),
+        signature: "separate-proof".into(),
+    };
+    for operation in [
+        FolderControlOperation::ReadApplianceUpdates {
+            requester_id: source.engine.device_id(),
+            target_id: target.engine.device_id(),
+        },
+        FolderControlOperation::ApplianceUpdate {
+            requester_id: source.engine.device_id(),
+            target_id: target.engine.device_id(),
+            operation: UpdateOperation::Apply,
+            proof: proof.clone(),
+        },
+        FolderControlOperation::ApplianceUpdate {
+            requester_id: source.engine.device_id(),
+            target_id: target.engine.device_id(),
+            operation: UpdateOperation::Lookup,
+            proof: proof.clone(),
+        },
+    ] {
+        assert_eq!(operation.alpn(), APPLIANCE_CONTROL_ALPN);
+        let request = sign_request(
+            &source.engine,
+            target.engine.device_id(),
+            &fingerprint,
+            operation,
+        )
+        .unwrap();
+        let verify = |r: &FolderControlRequest, alpn| {
+            verify_request(
+                r,
+                alpn,
+                target.engine.device_id(),
+                &fingerprint,
+                &source.engine.public_identity(),
+                &mut FolderControlReplay::default(),
+                r.issued_at_unix_ms,
+            )
+        };
+        assert!(verify(&request, APPLIANCE_CONTROL_ALPN).is_ok());
+        for old_alpn in [FOLDER_CONTROL_ALPN, LINK_CONTROL_ALPN] {
+            assert!(verify(&request, old_alpn).is_err());
+        }
+        let mut tampered = request.clone();
+        if let FolderControlOperation::ApplianceUpdate {
+            operation, proof, ..
+        } = &mut tampered.operation
+        {
+            *operation = if *operation == UpdateOperation::Apply {
+                UpdateOperation::Lookup
+            } else {
+                UpdateOperation::Apply
+            };
+            proof.payload.push('!');
+        } else if let FolderControlOperation::ReadApplianceUpdates { target_id, .. } =
+            &mut tampered.operation
+        {
+            *target_id = source.engine.device_id();
+        }
+        tampered.operation_digest = digest(&tampered.operation).unwrap();
+        assert!(verify(&tampered, APPLIANCE_CONTROL_ALPN).is_err());
+        let mut unknown = serde_json::to_value(&request.operation).unwrap();
+        let fields = unknown
+            .as_object_mut()
+            .unwrap()
+            .values_mut()
+            .next()
+            .unwrap()
+            .as_object_mut()
+            .unwrap();
+        fields.insert("token".into(), serde_json::json!("forbidden"));
+        assert!(serde_json::from_value::<FolderControlOperation>(unknown).is_err());
+    }
+}
+
+#[test]
 fn import_context_version_is_signed_and_absent_legacy_field_keeps_exact_wire_bytes() {
     let source = test_engine();
     let target = test_engine();

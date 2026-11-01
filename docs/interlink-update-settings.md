@@ -1,11 +1,14 @@
 # Interlink automatic-update control
 
 The first privileged settings feature is an explicit choice to enable or pause
-Pi automatic updates from the approved Interlink phone. The current code adds
-its cryptographic command contract only. No platform mutation endpoint, Pi
-credential migration or companion toggle is exposed yet.
+Pi automatic updates from the approved Interlink phone. The signed core command,
+Pi atomic policy transaction and root verifier exist. The node now carries fixed
+context/apply/lookup operations over its authenticated appliance QUIC channel,
+with an explicitly installed privileged host bridge. The phone outbox/readback
+and Material3 Expressive control are still pending; no local mutation API or
+companion switch is exposed before that recovery boundary is implemented.
 
-## Implemented command boundary
+## Authentication and transport
 
 `covalent-core::appliance_updates` signs one version1 canonical JSON payload:
 `schemaVersion`, the existing full owner-approved `bond`, a stable `actionId`,
@@ -15,42 +18,55 @@ repository token, path, URL, component version, deletion option or shell command
 The signing domain is `covalent/appliance-updates/automatic/v1`; import and
 withdrawal signatures cannot authorize this setting.
 
-The verifier takes both expected bond and expected revision from independently
-trusted privileged state. It rejects other phones/Pis, either changed approval
-generation, stale or nil revisions, invalid identity fingerprints, unsupported
-versions, nil action IDs, oversized payloads, altered intent, unknown/missing/
-duplicate fields, noncanonical JSON and malformed/truncated/padded signatures.
-The ordinary sync pairing and selecting a Pi do not supply this authority.
+`ReadApplianceUpdates` and `ApplianceUpdate` use the existing dedicated appliance
+ALPN. The authenticated envelope binds requester, target, certificate, verb,
+proof, nonce and time. No legacy read fallback or write retry is added. Ordinary
+sync pairing is insufficient: the node checks its separate approved full peer
+identity and native bond generation before calling the host, and again before
+returning a result. A shared bounded host-operation permit prevents overlapping
+node import/update calls. Missing or invalid context is unavailable, never an
+invented configured/enabled policy. A busy host produces a fixed busy response.
 
-## Required effect and recovery boundary
+Node signature admission checks the approved phone's intent. It does not make
+the caller's root generation or settings revision trusted. `ApplianceUpdateHost`
+must independently verify its protected full bond and current durable revision
+under the same privileged lock as publication. The Pi's root implementation does
+this through its fixed `controllerUpdateContext`, `controllerUpdateApply` and
+`controllerUpdateLookup` commands. The native bridge verifies the root socket's
+UID before writing; only those commands and a signed proof can cross it. Requests,
+responses and the whole exchange have fixed size/time bounds.
 
-Verification does not consume a revision or write settings. The privileged
-handler still must hold the owner/state lock, compare the real current durable
-revision and atomically publish the new policy with a new revision, including
-for an unchanged boolean. A signed choice alone is not replay protection.
-Local credential or policy changes must also invalidate the previous revision.
-Preserve existing repository credentials and all unrelated state; never reset
-damaged configuration or create credentials from a network request.
+The strict context/receipt decoders reject unknown, duplicate, missing, malformed
+and oversized fields. A configured context requires a nonnil revision; an
+unconfigured context cannot claim enabled. A receipt binds the exact action ID
+and payload digest. Applied means the chosen boolean with a new revision.
+`notObserved` is a read observation of the expected revision, never cancellation,
+proof a queued request cannot run later, or permission to repeat a mutation.
 
-Keep the exact request ID/digest, old revision and result with the policy write
-so a lost response can be resolved without repeating an effect. A read-only
-duplicate lookup may verify against the matching persisted receipt's old
-revision; applying a new choice must always use current locked state. Do not
-trust the request itself as the source of an expected revision. A newer policy
-must never be overwritten by an older signed request.
+## Durable effects and phone recovery
 
-Next wire the native/root verifier and durable policy transaction, then the
-bonded node transport and phone's durable request/readback flow. The Material3
-Expressive toggle must display freshly confirmed Pi state and disclose an
-unconfirmed outcome. An unconfigured updater must request setup rather than
-claiming automatic updates are enabled. Existing idle, signature, recovery,
-account-preservation and source-retention gates remain authoritative.
+The Pi retains credential, boolean, revision and latest receipt in one protected
+atomic record, with file/parent fsync and readback. Every choice consumes a new
+revision, including a no-op. An exact latest duplicate reads its receipt; an old
+request cannot overwrite a newer policy. Local changes invalidate old revisions.
+Owner revocation blocks both apply and lookup. Credentials remain local.
 
-## Current verification
+Next persist the phone's exact signed request before sending, recover a lost
+reply by lookup, and show freshly confirmed state and an unconfirmed outcome.
+An unconfigured updater must request setup rather than claim enabled. Existing
+idle, signature, recovery, account-preservation and source-retention gates remain
+authoritative. Enabling scheduling cannot choose or immediately install a release.
 
-All186 core library tests pass, including seven new command-boundary tests.
-Clippy covers all core targets/features with warnings denied. No existing
-wire operation, import domain, dependency, application package or version changes.
-No Pi/phone state, pending Pictures run, update bundle or reusable image changes.
-This is source-only security groundwork, not a completed remote-control feature,
-Android-native execution or installed appliance acceptance.
+## Acceptance boundary
+
+Core signing and the privileged Pi transaction have separate retained source-bound
+qualification. The new transport tests use real paired loopback QUIC and real
+signatures with an in-memory privileged-host double. They do not prove durable
+root publication, actual LAN/Tailscale roaming or an installed Android service.
+Native adapter tests use Unix sockets and synthetic root replies; Android
+compilation is a separate check. Report exact final test results in working.md.
+
+No actual Pi/phone, account, pending Pictures run, source media, update candidate,
+recovery or reusable image changes in this stage. The existing hosted API37
+platform assertion and Android36 guest ANR failures remain failed acceptance
+runs; these transport changes do not repair them.

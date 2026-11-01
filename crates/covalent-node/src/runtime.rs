@@ -230,6 +230,8 @@ pub struct NodeRuntimeConfig {
     pub appliance_platform: Option<Arc<dyn crate::appliance_platform::AppliancePlatformReader>>,
     #[cfg(unix)]
     pub appliance_imports: Option<Arc<dyn crate::appliance_imports::ApplianceImportHost>>,
+    #[cfg(unix)]
+    pub appliance_updates: Option<Arc<dyn crate::appliance_updates::ApplianceUpdateHost>>,
 }
 
 impl NodeRuntimeConfig {
@@ -269,6 +271,8 @@ impl NodeRuntimeConfig {
             appliance_platform: None,
             #[cfg(unix)]
             appliance_imports: None,
+            #[cfg(unix)]
+            appliance_updates: None,
         }
     }
 }
@@ -354,6 +358,8 @@ impl NodeRuntime {
             appliance_platform,
             #[cfg(unix)]
             appliance_imports,
+            #[cfg(unix)]
+            appliance_updates,
         } = configuration;
 
         let key_protector =
@@ -515,6 +521,10 @@ impl NodeRuntime {
         #[cfg(unix)]
         if let Some(host) = appliance_imports {
             state = state.with_appliance_imports(host);
+        }
+        #[cfg(unix)]
+        if let Some(host) = appliance_updates {
+            state = state.with_appliance_updates(host);
         }
         #[cfg(unix)]
         if folder_sync_access_unavailable {

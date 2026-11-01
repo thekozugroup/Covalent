@@ -1,3 +1,33 @@
+# Owner-bound update transport qualified — 2026-11-01
+
+Previous goal turn only rechecked branding, with no implementation progress.
+This turn adds fixed signed context/apply/lookup operations on the appliance QUIC
+channel and an explicitly installed privileged update host. Separate owner bond,
+full peer identity/native generation and signed intent gate access; root state
+still independently owns root generation, durable revisions and effects. Recheck
+approval after host completion, reject forged receipts, distinguish unavailable
+from unconfigured, share bounded import/update admission and never retry writes.
+No credential/URL/path/version/install command or local mutation API is exposed.
+
+All361 node library tests pass on the final exact source, zero ignored/filtered;
+six new contract/peer/frame cases cover owner-only access, stale/altered/wrong-key/
+wrong-domain intent, replay, lost reply/readback, revocation, missing/invalid hosts
+and exact receipts. Clippy all node targets/features passes with warnings denied.
+Five native Unix-socket cases (two new bridge, three existing transport) pass with
+synthetic root replies and actual UID checks. One first-attempt test tried granting
+before pairing; corrected fixture now passes, with initial failure retained.
+Bounded public proof: artifacts/evidence/interlink-update-transport. Raw execution
+logs remain in the private appliance audit, not this public evidence file.
+
+The private Pi adapter and bundle source-fingerprint wiring are implemented;
+full ARM64 Android compilation and pin publication are the next stage. Phone
+request outbox/readback and Expressive control remain pending; no inert switch,
+APK/release/image or actual Pi/phone update is claimed. Existing failed API37 and
+Android36 guest-ANR hosted acceptance runs remain failed, without waivers/retries.
+Original candidates/recovery/accounts/keys/pairings/media/Pictures journal and
+PR60/PR1 draft heads/bases remain unchanged. Scoped compiler/source/test scratch
+is tracked for the active Android compile and will be removed before handoff.
+
 # Known Android37 graphics assertion identified — 2026-11-01
 
 The original1bd5525 permission-recovery failure is now identified by its retained
