@@ -22,8 +22,11 @@ No companion toggle/unsigned route exposed before owner/native/transport/outbox
 integration. Actual Pi/phone/accounts/media/journals/signers remain unchanged.
 
 Owned Android36 AVD/data/registration/netsim/ADB5041 are removed and independently
-absent, shared ADB5037/5038 remain. Scoped compiler/test scratch will be removed
-after final proof retention; no new environment is needed for this decoder change.
+absent, shared ADB5037/5038 remain. Scoped compiler/test scratch is removed and independently verified, along with
+the exact owned task registration. Shared ADB/SDKs and other tasks remain. Private
+source77987bd now has full safety run41339102296 in progress; Linux588/589 pass
+on the preceding source-specific runs. Its two Android preflight failures are
+retained and corrected; native final-byte qualification remains pending.
 
 # Signed automatic-update choice groundwork — 2026-11-01
 
