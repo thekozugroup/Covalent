@@ -96,6 +96,10 @@
       RECOVERY.retry,
     ],
     folder_sync_busy: ["Another folder change is still in progress. Try again shortly.", RECOVERY.retry],
+    folder_sync_recovery_required: [
+      "Some files need review before this folder can change. Keep the current folder until the review is complete.",
+      RECOVERY.none,
+    ],
     link_settings_conflict: ["Link settings changed on another device. Refresh and review the current settings before submitting again.", RECOVERY.none],
     link_settings_pending: ["A link-settings change is waiting for the source. Review that request before making another change.", RECOVERY.none],
     link_run_conflict: ["The link changed before this run started. Refresh link status and try again.", RECOVERY.none],
@@ -271,6 +275,10 @@
     ],
 
     // Request contract — this console and the node disagree
+    invalid_request: [
+      "Your backup server couldn't use this request. Reload this page, then try again.",
+      RECOVERY.none,
+    ],
     invalid_contract: [
       "This console and your backup server don't agree on how to talk to each other. Update both to the same version.",
       RECOVERY.none,

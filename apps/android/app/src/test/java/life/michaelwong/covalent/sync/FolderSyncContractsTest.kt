@@ -19,10 +19,64 @@ import life.michaelwong.covalent.model.FolderSyncStatus
 import life.michaelwong.covalent.model.PeerConnectionFreshness
 import life.michaelwong.covalent.model.PeerConnectionState
 import life.michaelwong.covalent.model.summaryFor
+import life.michaelwong.covalent.model.runNeedsConfirmation
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class FolderSyncContractsTest {
+    @Test
+    fun elapsedIncomingRunWithMissingSourceNeedsConfirmationWithoutChangingItsRecord() {
+        val run = linkRun(FolderLinkRunPhase.RUNNING).copy(deadlineUnixMs = 200)
+        val waiting = share(PeerConnectionState.DISCONNECTED).copy(incoming = true, linkRun = run)
+        val observed = status(waiting)
+        assertFalse(observed.runNeedsConfirmation(waiting, 199))
+        assertTrue(observed.runNeedsConfirmation(waiting, 200))
+        assertEquals(FolderShareSummary.CONNECTION_UNKNOWN, observed.summaryFor(waiting, 200))
+        assertEquals(run, waiting.linkRun)
+        assertEquals(FolderLinkRunPhase.RUNNING, waiting.linkRun?.phase)
+    }
+
+    @Test
+    fun connectedSourceAndObservedLocalCopyKeepTheirActiveSummaryAfterDeadline() {
+        val running = share(PeerConnectionState.CONNECTED).copy(incoming = true,
+            linkRun = linkRun(FolderLinkRunPhase.RUNNING).copy(deadlineUnixMs = 200))
+        assertFalse(status(running).runNeedsConfirmation(running, 300))
+        assertEquals(FolderShareSummary.SYNCING, status(running).summaryFor(running, 300))
+        val disconnected = running.copy(peerConnection = PeerConnectionState.DISCONNECTED)
+        val copying = status(disconnected).copy(folders = listOf(health.copy(state = "syncing")))
+        assertTrue(copying.runNeedsConfirmation(disconnected, 300))
+        assertEquals(FolderShareSummary.SYNCING, copying.summaryFor(disconnected, 300))
+    }
+
+    @Test
+    fun staleConnectionCannotConfirmAnElapsedRunWhileErrorsStillTakePriority() {
+        val running = share(PeerConnectionState.CONNECTED).copy(incoming = true,
+            linkRun = linkRun(FolderLinkRunPhase.PREPARING).copy(deadlineUnixMs = 200))
+        val stale = status(running).copy(connectionFreshness = PeerConnectionFreshness.STALE)
+        assertTrue(stale.runNeedsConfirmation(running, 300))
+        assertEquals(FolderShareSummary.CONNECTION_UNKNOWN, stale.summaryFor(running, 300))
+        val failed = stale.copy(folders = listOf(health.copy(statusError = true)))
+        assertEquals(FolderShareSummary.NEEDS_ATTENTION, failed.summaryFor(running, 300))
+    }
+
+    @Test
+    fun missingDeadlineOutgoingAndTerminalRunsNeverAcquireAnInventedOutcome() {
+        val original = share(PeerConnectionState.DISCONNECTED).copy(incoming = true,
+            linkRun = linkRun(FolderLinkRunPhase.RUNNING))
+        assertFalse(status(original).runNeedsConfirmation(original, Long.MAX_VALUE))
+        val outgoing = original.copy(incoming = false,
+            linkRun = original.linkRun?.copy(deadlineUnixMs = 200))
+        assertFalse(status(outgoing).runNeedsConfirmation(outgoing, 300))
+        for (phase in listOf(FolderLinkRunPhase.SUCCEEDED, FolderLinkRunPhase.INCOMPLETE,
+            FolderLinkRunPhase.INTERRUPTED, FolderLinkRunPhase.CANCELLED)) {
+            val terminal = original.copy(linkRun = linkRun(phase).copy(deadlineUnixMs = 200))
+            assertFalse(status(terminal).runNeedsConfirmation(terminal, 300))
+            assertEquals(phase, terminal.linkRun?.phase)
+        }
+    }
+
     @Test
     fun errorsAndScanningPrecedeReachabilityWhileDisconnectNamesWaitingState() {
         val share = share(PeerConnectionState.DISCONNECTED)

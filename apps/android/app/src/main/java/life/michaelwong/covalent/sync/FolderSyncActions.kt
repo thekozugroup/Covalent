@@ -1,6 +1,7 @@
 package life.michaelwong.covalent.sync
 
 import java.util.UUID
+import life.michaelwong.covalent.data.NodeApiException
 import life.michaelwong.covalent.model.FolderSyncMutation
 import life.michaelwong.covalent.model.FolderLinkSettings
 import life.michaelwong.covalent.model.FolderShare
@@ -82,7 +83,20 @@ internal class FolderSyncActions(
     fun repair(offerId: String, root: String): FolderSyncMutation = synchronized(CAPABILITY_CHANGE_LOCK) {
         val selectedRoot = validateRoot(root)
         grants.prepareRepair(offerId, selectedRoot)
-        api.repair(ensureNodeReady(), offerId, selectedRoot).also { mutation ->
+        val mutation = try {
+            api.repair(ensureNodeReady(), offerId, selectedRoot)
+        } catch (error: NodeApiException) {
+            if (error.protocolVersion == 1 && error.statusCode == 409 &&
+                error.code == "folder_sync_recovery_required" &&
+                error.hasExplicitRetryContract && !error.retryable
+            ) {
+                // This specific contract guarantees the node never committed
+                // the proposal. Unknown outcomes must remain replayable.
+                grants.rejectRepair(offerId, selectedRoot)
+            }
+            throw error
+        }
+        mutation.also {
             requireMutationOffer(mutation, offerId)
             grants.finishRepair(offerId, selectedRoot)
             onCapabilityChangeAcknowledged()
@@ -106,7 +120,8 @@ internal class FolderSyncActions(
                 // A closing private API or uncertain save leaves this tombstone available to retry.
                 runCatching { remove(offerId) }
             } else if (root != null && offerId != null) {
-                // A failed or uncertain acknowledgement leaves the saved choice available to retry.
+                // An uncertain acknowledgement retains the exact choice; a
+                // definitive pre-commit refusal clears only that proposal.
                 runCatching { repair(offerId, root) }
             }
         }

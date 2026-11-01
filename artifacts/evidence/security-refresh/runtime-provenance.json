@@ -1,0 +1,114 @@
+{
+  "format": 1,
+  "followsCommit": "3ebbecfe05fb748e00158b42fa02b7e470ca44b6",
+  "recipe": {
+    "oldCommit": "8aef0c37b0ad23dc4137f0e4755b97a59dc698b8",
+    "newCommit": "fd05fc094264bce4fb76efc6c7f61ba4abfcb609",
+    "recipeTreeSHA1": "ac111a3e906e374f6296091894ba3eb26348ee36",
+    "recipeFileCount": 24,
+    "changedFiles": [
+      "APKBUILD"
+    ],
+    "addedFiles": [
+      "CVE-2026-107891.patch",
+      "CVE-2026-6042.patch"
+    ],
+    "removedFiles": [
+      "iconv-gb18030-fix.patch"
+    ],
+    "gitBlobHashesVerified": true,
+    "apkbuildSha512Verified": true,
+    "lockStructureValidated": true,
+    "unrelatedRowsUnchanged": true
+  },
+  "sourceQualification": {
+    "mode": "Source qualification using explicitly synthetic installed and builder databases; actual installed musl rows checked separately in signed APK containers",
+    "lockSha256": "4eaffcec7b7ee1f01ec36267b5f731895c2a721c7c1c6a6cd0f5706b487d0a50",
+    "returnedKeys": [
+      "archiveNotices",
+      "copiedCABundle",
+      "declaredSourceImages",
+      "installedDatabaseSHA256",
+      "localRecipeOverrides",
+      "lockSHA256",
+      "noticeBundle",
+      "originNoticeReferences",
+      "packages",
+      "recipeDirectories",
+      "schema",
+      "sourceBundle",
+      "sourceBundleOrigins",
+      "sourceInputs",
+      "sourceScope",
+      "supplementalLicenses",
+      "target",
+      "unclassifiedOrigins"
+    ],
+    "outputs": {
+      "runtime-source.tar.gz": {
+        "bytes": 4141209,
+        "sha256": "4e58e2b0eedff1bca4dff74139b8a6580ef4e19bddc9d140506a2d4d99a88edc"
+      },
+      "THIRD-PARTY-NOTICES.txt": {
+        "bytes": 130956,
+        "sha256": "c15a208bac276d95fcb38ae2ee6061a965baec6fb7b074fae9a53dd4bd81c308"
+      },
+      "inventory.json": {
+        "bytes": 121940,
+        "sha256": "c5aba0ca554f80fb0d242ebbeb5f891155f3eb060111059ef65bd9f332de731e"
+      }
+    },
+    "recipeSourceNoticeAndBundleValidation": true,
+    "fullRuntimeOrImageAcceptance": false
+  },
+  "runtimeBase": [
+    {
+      "platform": "linux/arm64",
+      "apkArchitectureAsserted": true,
+      "realInstalledDatabase": true,
+      "exactPackagesOutsideLocalBusyboxMatch": true,
+      "missing": [],
+      "databaseSha256": "a4ba63e7dc3a555808f1819c6fe6b568783116e3b9c427dc4fa03ca942e32a23",
+      "localBusyboxOverrideExcludedFromThisCheck": true,
+      "fullImageBuild": false,
+      "buildOnlyPackagesRemovedByRuntimePatchedStage": [
+        "apk-tools",
+        "libapk",
+        "zlib"
+      ],
+      "extra": [],
+      "scope": "Actual runtime-base APK data; local BusyBox replacements and documented apk-tools/libapk/zlib removal are applied only by the full image build, not claimed here"
+    },
+    {
+      "platform": "linux/amd64",
+      "apkArchitectureAsserted": true,
+      "realInstalledDatabase": true,
+      "exactPackagesOutsideLocalBusyboxMatch": true,
+      "missing": [],
+      "databaseSha256": "0078b53e34995bb9634731e68aa4111e507a96bddf4bcd1621d40ff84a6e5d1a",
+      "localBusyboxOverrideExcludedFromThisCheck": true,
+      "fullImageBuild": false,
+      "buildOnlyPackagesRemovedByRuntimePatchedStage": [
+        "apk-tools",
+        "libapk",
+        "zlib"
+      ],
+      "extra": [],
+      "scope": "Actual runtime-base APK data; local BusyBox replacements and documented apk-tools/libapk/zlib removal are applied only by the full image build, not claimed here"
+    }
+  ],
+  "collectorAndVerifierTests": true,
+  "containerContract": true,
+  "unchangedRustInputsFrom": "3ebbecfe05fb748e00158b42fa02b7e470ca44b6",
+  "rustCratesTree": "a8880b050f7c665226fb11288763989d7e78d2a6",
+  "inputSha256": {
+    "packaging/docker/Dockerfile": "4fed513269a9664def689a6c6cc8c4a31176eff376940af1076af282ae80362a",
+    "packaging/docker/alpine/runtime-source-lock.json": "4eaffcec7b7ee1f01ec36267b5f731895c2a721c7c1c6a6cd0f5706b487d0a50"
+  },
+  "limits": [
+    "Full image/hosted acceptance pending",
+    "Base-stage check excludes local BusyBox replacement and documented package-manager removal",
+    "Source collection uses explicitly synthetic package databases",
+    "No physical device, phone, cloud or gold-image qualification"
+  ]
+}

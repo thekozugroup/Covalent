@@ -1164,6 +1164,248 @@ async fn disconnect_reconnect_and_unknown_do_not_stop_a_healthy_worker() {
     assert_eq!(calls.close_calls, 0);
 }
 
+fn review_policy(device: &Device, folder: Uuid, pending: bool) -> (PathBuf, Vec<u8>) {
+    let name = "private-unconfirmed-original.jpg";
+    let attempt = serde_json::json!({
+        "sourceIndex":{"indexId":"0x0123456789ABCDEF","sequence":1},
+        "source":{name:{"path":name,"size":7,"modifiedUnixSeconds":1}},
+        "allowed":[name],"suppressions":[],"propagateSourceDeletions":false
+    });
+    let mut state = serde_json::json!({
+        "owned":[],"delivered":{},"suppressions":[],"copyCompleted":false
+    });
+    state[if pending { "pending" } else { "unresolved" }] = if pending {
+        attempt
+    } else {
+        serde_json::json!([attempt])
+    };
+    let path = device
+        .installation
+        .database_directory()
+        .unwrap()
+        .join(format!("rclone-policy-{folder}.v1.json"));
+    let bytes = serde_json::to_vec(&serde_json::json!({
+        "version":1,"folders":{folder.to_string():state}
+    }))
+    .unwrap();
+    std::fs::write(&path, &bytes).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    (path, bytes)
+}
+
+#[tokio::test]
+async fn root_move_refuses_unconfirmed_copies_without_changing_consent_or_workers() {
+    for pending in [true, false] {
+        let first = Device::new("Source", 44311);
+        let second = Device::new("Destination", 44312);
+        pair(&first, &second);
+        let source_backend = Arc::new(TestBackend::default());
+        let target_backend = Arc::new(TestBackend::default());
+        let source = first.service(first.journal(), source_backend);
+        let target = second.service(second.journal(), Arc::clone(&target_backend));
+        let folder = Uuid::new_v4();
+        let (offer_id, _) = make_ready_folder(&first, &second, &source, &target, folder).await;
+        let (path, bytes) = review_policy(&second, folder, pending);
+        let original = second.files().join("private-unconfirmed-original.jpg");
+        std::fs::write(&original, b"original survives").unwrap();
+        let replacement = second.root.join("replacement");
+        std::fs::create_dir(&replacement).unwrap();
+        let revision = second.reopen().revision();
+        let before = target_backend.snapshot();
+        let result = target.repair_root(offer_id, &replacement).await;
+        assert!(
+            result.is_err(),
+            "root change must preserve unconfirmed proof"
+        );
+        assert_eq!(target_backend.snapshot(), before);
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        assert_eq!(std::fs::read(&original).unwrap(), b"original survives");
+        let mut reopened = second.reopen();
+        assert_eq!(reopened.revision(), revision);
+        assert_eq!(reopened.pending_root_reset().unwrap(), None);
+        assert_eq!(
+            reopened.desired_settings().unwrap().folders[0].root(),
+            second.files()
+        );
+        drop(reopened);
+
+        // Renewing the exact existing capability does not discard review proof.
+        target.repair_root(offer_id, &second.files()).await.unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        source.stop().await.unwrap();
+        target.stop().await.unwrap();
+        let recovery =
+            FolderSyncAccessRecovery::new(second.reopen(), Arc::clone(&second.installation))
+                .unwrap();
+        assert!(recovery.repair_root(offer_id, &replacement).await.is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        assert_eq!(second.reopen().revision(), revision);
+    }
+}
+
+#[tokio::test]
+async fn root_review_refusal_is_private_nonretryable_for_ready_and_offline_apis() {
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use http_body_util::BodyExt as _;
+    use tower::ServiceExt as _;
+
+    let first = Device::new("Source", 44315);
+    let second = Device::new("Destination", 44316);
+    pair(&first, &second);
+    let source = first.service(first.journal(), Arc::new(TestBackend::default()));
+    let target_backend = Arc::new(TestBackend::default());
+    let target = Arc::new(second.service(second.journal(), Arc::clone(&target_backend)));
+    let folder = Uuid::new_v4();
+    let (offer_id, _) = make_ready_folder(&first, &second, &source, &target, folder).await;
+    let (path, bytes) = review_policy(&second, folder, false);
+    let replacement = second.root.join("private-new-destination");
+    std::fs::create_dir(&replacement).unwrap();
+    let token = "root-review-local-token-at-least-32-bytes";
+    let ready = FolderSyncRuntimeState::Ready(Arc::clone(&target));
+    let offline = FolderSyncRuntimeState::FolderAccessUnavailable(Some(Arc::new(
+        FolderSyncAccessRecovery::new(second.reopen(), Arc::clone(&second.installation)).unwrap(),
+    )));
+    let before = target_backend.snapshot();
+    for runtime in [ready, offline] {
+        let state = crate::AppState::new(
+            Arc::clone(&second.engine),
+            crate::PlatformTier::Tier1,
+            token.into(),
+        )
+        .unwrap()
+        .with_folder_sync(runtime);
+        let response = crate::router(state)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/sync/repair")
+                    .header("authorization", format!("Bearer {token}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({"offerId":offer_id,"selectedRoot":replacement})
+                            .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["code"], "folder_sync_recovery_required");
+        assert_eq!(value["retryable"], false);
+        let text = String::from_utf8_lossy(&body);
+        for private in [
+            token,
+            "private-unconfirmed-original.jpg",
+            replacement.to_str().unwrap(),
+            second.files().to_str().unwrap(),
+        ] {
+            assert!(!text.contains(private));
+        }
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        assert_eq!(target_backend.snapshot(), before);
+    }
+    source.stop().await.unwrap();
+    target.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn already_committed_root_reset_never_reports_a_definitive_precommit_refusal() {
+    let first = Device::new("Source", 44317);
+    let second = Device::new("Destination", 44318);
+    pair(&first, &second);
+    let source = first.service(first.journal(), Arc::new(TestBackend::default()));
+    let target = second.service(second.journal(), Arc::new(TestBackend::default()));
+    let folder = Uuid::new_v4();
+    let (offer_id, _) = make_ready_folder(&first, &second, &source, &target, folder).await;
+    source.stop().await.unwrap();
+    target.stop().await.unwrap();
+    let replacement = second.root.join("committed-root");
+    std::fs::create_dir(&replacement).unwrap();
+    let mut journal = second.reopen();
+    journal.repair_root(offer_id, &replacement).unwrap();
+    let prepared = journal.prepare_root_repair(offer_id, &replacement).unwrap();
+    let revision = journal.revision();
+    let (path, bytes) = review_policy(&second, folder, true);
+    assert_eq!(
+        journal.commit_root_repair(prepared).unwrap_err(),
+        super::SharingError::PersistenceUncertain
+    );
+    assert!(matches!(
+        journal.prepare_root_repair(offer_id, &replacement),
+        Err(super::SharingError::PersistenceUncertain)
+    ));
+    assert_eq!(journal.revision(), revision);
+    assert_eq!(journal.pending_root_reset().unwrap(), Some(folder));
+    assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    let mut reopened = second.reopen();
+    assert_eq!(reopened.pending_root_reset().unwrap(), Some(folder));
+    assert_eq!(
+        reopened.desired_settings().unwrap().folders[0].root(),
+        replacement
+    );
+}
+
+#[tokio::test]
+async fn late_unconfirmed_write_refuses_root_commit_and_resumes_unchanged_consent() {
+    let first = Device::new("Source", 44313);
+    let second = Device::new("Destination", 44314);
+    pair(&first, &second);
+    let source_backend = Arc::new(TestBackend::default());
+    let target_backend = Arc::new(TestBackend::default());
+    let source = first.service(first.journal(), source_backend);
+    let target = Arc::new(second.service(second.journal(), Arc::clone(&target_backend)));
+    let folder = Uuid::new_v4();
+    let (offer_id, _) = make_ready_folder(&first, &second, &source, &target, folder).await;
+    let revision = second.reopen().revision();
+    let before = target_backend.snapshot();
+    let release = Arc::new(Notify::new());
+    target_backend.push_stop(TestStopBehavior::Wait(Arc::clone(&release)));
+    let replacement = second.root.join("replacement");
+    std::fs::create_dir(&replacement).unwrap();
+    let operation = {
+        let target = Arc::clone(&target);
+        tokio::spawn(async move { target.repair_root(offer_id, &replacement).await })
+    };
+    let stopped = tokio::time::timeout(Duration::from_secs(2), async {
+        while target_backend.snapshot().stop_calls == before.stop_calls {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
+    let policy = stopped
+        .is_ok()
+        .then(|| review_policy(&second, folder, true));
+    release.notify_one();
+    let outcome = operation.await.unwrap();
+    assert!(stopped.is_ok(), "repair must reach its owned worker reap");
+    assert_eq!(
+        outcome.unwrap_err(),
+        FolderSyncServiceError::RecoveryRequired
+    );
+    let (path, bytes) = policy.unwrap();
+    assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    let mut reopened = second.reopen();
+    assert_eq!(reopened.revision(), revision);
+    assert_eq!(reopened.pending_root_reset().unwrap(), None);
+    assert_eq!(
+        reopened.desired_settings().unwrap().folders[0].root(),
+        second.files()
+    );
+    let after = target_backend.snapshot();
+    assert_eq!(after.maximum_active, 1);
+    assert_eq!(after.reset_calls, before.reset_calls);
+    assert_eq!(after.launches, before.launches + 1);
+    assert_eq!(
+        target.status().await.unwrap().lifecycle(),
+        FolderSyncLifecycle::Running
+    );
+    source.stop().await.unwrap();
+    target.stop().await.unwrap();
+}
+
 #[tokio::test]
 async fn root_repair_reaps_old_worker_then_runs_a_new_full_initial_scan() {
     let first = Device::new("Mac", 44207);
@@ -1884,7 +2126,7 @@ async fn cancelled_stop_has_already_closed_the_exact_lifeline() {
     task.abort();
     let _ = task.await;
     assert_eq!(
-        first_service.cached_lifecycle_for_test(),
+        first_service.cached_lifecycle_for_test().await,
         FolderSyncLifecycle::StillStopping
     );
 
@@ -2051,6 +2293,41 @@ async fn reported_folder_error_is_retained_and_reaps_worker() {
 }
 
 #[tokio::test]
+async fn completion_signals_do_not_postpone_independent_health_checks() {
+    let first = Device::new("Mac", 44297);
+    let second = Device::new("Docker", 44298);
+    pair(&first, &second);
+    let first_backend = Arc::new(TestBackend::default());
+    let source = FolderSyncService::new_for_test(
+        first.journal(),
+        Arc::clone(&first.engine),
+        Arc::clone(&first_backend),
+        Duration::from_millis(50),
+    );
+    let target = second.service(second.journal(), Arc::new(TestBackend::default()));
+    make_ready(&first, &second, &source, &target).await;
+    first_backend.set_health_failure(true);
+    tokio::time::timeout(Duration::from_secs(1), async {
+        tokio::select! {
+            _ = async {
+                loop {
+                    source.signal_progress_for_test();
+                    tokio::time::sleep(Duration::from_millis(1)).await;
+                }
+            } => unreachable!("completion traffic continues until the health check stops the worker"),
+            _ = first_backend.wait_for_stop() => {}
+        }
+    })
+    .await
+    .expect("completion traffic must not keep resetting the health deadline");
+    assert_eq!(
+        source.cached_lifecycle_for_test().await,
+        FolderSyncLifecycle::NeedsAttention(FolderSyncIssue::WorkerHealth)
+    );
+    assert_eq!(first_backend.snapshot().active, 0);
+}
+
+#[tokio::test]
 async fn owned_health_task_detects_failure_without_a_status_request() {
     let first = Device::new("Mac", 44269);
     let second = Device::new("Docker", 44270);
@@ -2080,7 +2357,7 @@ async fn owned_health_task_detects_failure_without_a_status_request() {
     .await
     .unwrap();
     assert_eq!(
-        first_service.cached_lifecycle_for_test(),
+        first_service.cached_lifecycle_for_test().await,
         FolderSyncLifecycle::NeedsAttention(FolderSyncIssue::WorkerHealth)
     );
 }
@@ -3084,6 +3361,137 @@ async fn endpoint_roster_changes_and_rejections_do_not_interrupt_healthy_workers
         assert_eq!(before.stop_calls, after.stop_calls);
         assert_eq!(before.active, after.active);
     }
+    source.stop().await.unwrap();
+    target.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn recovery_reads_are_redacted_bounded_and_do_not_launch_workers_or_clear_state() {
+    use axum::{
+        extract::{RawQuery, State},
+        http::{HeaderMap, HeaderValue},
+    };
+    use serde_json::json;
+    let first = Device::new("Source", 44981);
+    let second = Device::new("Destination", 44982);
+    pair(&first, &second);
+    let a_backend = Arc::new(TestBackend::default());
+    let b_backend = Arc::new(TestBackend::default());
+    let source = Arc::new(first.service(first.journal(), Arc::clone(&a_backend)));
+    let target = Arc::new(second.service(second.journal(), Arc::clone(&b_backend)));
+    let folder = Uuid::new_v4();
+    let offer = source
+        .offer_with_settings(
+            second.engine.device_id(),
+            folder,
+            "Private label",
+            Some(&first.files()),
+            2000,
+            FolderLinkSettings {
+                cadence: LinkCadence::Manual,
+                paused: false,
+                android_conditions: Default::default(),
+                deletion_policy: covalent_protocol::FolderLinkPolicy::default(),
+            },
+        )
+        .await
+        .unwrap()
+        .into_value();
+    target.receive_offer(offer.clone(), 2001).await.unwrap();
+    let acceptance = target
+        .accept(offer.offer_id, &second.files(), 2002)
+        .await
+        .unwrap()
+        .into_value();
+    let commit = source
+        .receive_acceptance(offer.offer_id, acceptance, 2003)
+        .await
+        .unwrap()
+        .into_value();
+    target.receive_commit(offer.offer_id, commit).await.unwrap();
+    let path = second
+        .installation
+        .database_directory()
+        .unwrap()
+        .join(format!("rclone-policy-{folder}.v1.json"));
+    let private_name = "private-original.jpg";
+    let policy = json!({"version":1,"folders":{folder.to_string():{
+        "owned":[],"delivered":{},"suppressions":[],"copyCompleted":false,
+        "unresolved":[{"sourceIndex":{"indexId":"0x0123456789ABCDEF","sequence":1},
+            "source":{private_name:{"path":private_name,"size":7,"modifiedUnixSeconds":1}},
+            "allowed":[private_name],"suppressions":[],"propagateSourceDeletions":false}]
+    }}});
+    let before = serde_json::to_vec(&policy).unwrap();
+    std::fs::write(&path, &before).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let a_before = a_backend.snapshot();
+    let b_before = b_backend.snapshot();
+    assert!(
+        source.recovery_status().await.unwrap().is_empty(),
+        "outgoing sources do not expose destination metadata"
+    );
+    let token = "recovery-test-local-token-at-least-32-bytes";
+    let app = crate::AppState::new(
+        Arc::clone(&second.engine),
+        crate::PlatformTier::Tier1,
+        token.into(),
+    )
+    .unwrap()
+    .with_folder_sync(FolderSyncRuntimeState::Ready(Arc::clone(&target)));
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "authorization",
+        HeaderValue::from_str(&format!("Bearer {token}")).unwrap(),
+    );
+    for _ in 0..5 {
+        let response =
+            crate::sync_api::recovery(State(app.clone()), headers.clone(), RawQuery(None))
+                .await
+                .unwrap()
+                .0;
+        assert_eq!(response["schemaVersion"], 1);
+        assert_eq!(response["observationsComplete"], true);
+        assert_eq!(response["folders"][0]["folderId"], folder.to_string());
+        assert_eq!(response["folders"][0]["unconfirmedFiles"], 1);
+        assert_eq!(response["folders"][0]["unconfirmedSourceBytes"], 7);
+        for secret in [
+            private_name,
+            token,
+            "Private label",
+            second.root.to_str().unwrap(),
+        ] {
+            assert!(!response.to_string().contains(secret));
+        }
+    }
+    let permit = target.recovery_read_permit_for_test();
+    let refused = tokio::time::timeout(Duration::from_millis(100), target.recovery_status())
+        .await
+        .unwrap();
+    assert!(matches!(refused, Err(FolderSyncServiceError::Busy)));
+    assert!(
+        target.status().await.is_ok(),
+        "metadata read admission never owns the lifecycle lock"
+    );
+    drop(permit);
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+    let unavailable = target.recovery_status().await.unwrap();
+    assert!(!unavailable[0].available);
+    assert_eq!(unavailable[0].unconfirmed_files, None);
+    assert_eq!(unavailable[0].unconfirmed_source_bytes, None);
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+    assert_eq!(a_backend.snapshot(), a_before);
+    assert_eq!(b_backend.snapshot(), b_before);
+    target.remove(offer.offer_id).await.unwrap();
+    assert!(
+        target.recovery_status().await.unwrap().is_empty(),
+        "removed links cannot retain visible recovery scope"
+    );
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        before,
+        "removal never erases recovery records or originals"
+    );
     source.stop().await.unwrap();
     target.stop().await.unwrap();
 }

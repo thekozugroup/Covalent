@@ -190,6 +190,7 @@ data-safety rules in the shared implementation.
 - [First share][first-link] · [Troubleshooting][troubleshooting]
 - [Architecture][architecture] · [Product scope][requirements] · [Design][design]
 - [Release notes][release-notes] · [Verification record][release-evidence]
+- [Appliance controller bond and read-only status](docs/appliance-control.md) (development)
 - [Screenshots and website content pack][website-pack]
 - [Back up your first folder](docs/getting-started.md), for existing legacy
   encrypted archives only; [current legacy guidance][legacy-backups]

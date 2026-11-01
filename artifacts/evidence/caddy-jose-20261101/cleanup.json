@@ -1,0 +1,22 @@
+{
+  "taskId": "caddy-security-refresh-1793551697040573000-67364-0",
+  "scratchAbsent": true,
+  "taskInventoryAbsent": true,
+  "ownedRuntimeProcessesAbsent": true,
+  "ownedPortsNoListeners": [
+    53234,
+    53235,
+    53236
+  ],
+  "sharedAdbPreserved": [
+    76421,
+    93998
+  ],
+  "sharedGoToolchainPreserved": true,
+  "vmAvdContainerCreated": false,
+  "preFreeBytes": 460052160512,
+  "postFreeBytes": 468826177536,
+  "volumeFreeBytesIncrease": 8774017024,
+  "measurementLimit": "Whole APFS volume free-space change across cleanup, including concurrent activity; not a unique-block reclamation claim.",
+  "retained": "Bounded source/scan/reference/runtime evidence only; test binaries, generated CA keys, task module/build/scanner caches removed."
+}

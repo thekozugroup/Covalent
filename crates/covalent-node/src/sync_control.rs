@@ -20,6 +20,7 @@ use sha2::Digest as _;
 pub const FOLDER_CONTROL_ALPN: &[u8] = b"covalent-quic/4";
 /// Never negotiate one-way records with a legacy two-way-only peer.
 pub const LINK_CONTROL_ALPN: &[u8] = b"covalent-quic/5";
+pub const APPLIANCE_CONTROL_ALPN: &[u8] = b"covalent-appliance/1";
 const SCHEMA_VERSION: u16 = 1;
 const REQUEST_DOMAIN: &[u8] = b"covalent/folder-control/request/v1";
 const RESPONSE_DOMAIN: &[u8] = b"covalent/folder-control/response/v1";
@@ -45,6 +46,8 @@ pub enum FolderControlError {
     Busy,
     TimedOut,
     Unavailable,
+    /// An authenticated peer closed a versioned import read before any reply bytes.
+    NoResponse,
 }
 impl fmt::Display for FolderControlError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -54,6 +57,7 @@ impl fmt::Display for FolderControlError {
             Self::Busy => "folder control is busy",
             Self::TimedOut => "folder control timed out",
             Self::Unavailable => "folder control is unavailable",
+            Self::NoResponse => "folder control peer sent no response",
         })
     }
 }
@@ -84,9 +88,46 @@ pub enum FolderControlOperation {
         target_id: DeviceId,
         candidate_address: String,
     },
+    ReadApplianceStatus {
+        requester_id: DeviceId,
+        target_id: DeviceId,
+    },
+    ReadAppliancePlatform {
+        requester_id: DeviceId,
+        target_id: DeviceId,
+    },
+    ReadApplianceImports {
+        requester_id: DeviceId,
+        target_id: DeviceId,
+        #[serde(
+            default,
+            deserialize_with = "import_context_version",
+            skip_serializing_if = "Option::is_none"
+        )]
+        context_version: Option<u16>,
+    },
+    ApplianceImport {
+        requester_id: DeviceId,
+        target_id: DeviceId,
+        operation: crate::appliance_imports::ImportOperation,
+        proof: covalent_core::appliance_import::SignedImportApproval,
+        withdrawal_signature: Option<String>,
+    },
+}
+fn import_context_version<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<u16>, D::Error> {
+    u16::deserialize(d).map(Some)
 }
 impl FolderControlOperation {
     fn alpn(&self) -> &'static [u8] {
+        if matches!(
+            self,
+            Self::ReadApplianceStatus { .. }
+                | Self::ReadAppliancePlatform { .. }
+                | Self::ReadApplianceImports { .. }
+                | Self::ApplianceImport { .. }
+        ) {
+            return APPLIANCE_CONTROL_ALPN;
+        }
         let one_way = match self {
             Self::SendOffer(offer) => offer.link_policy.is_some(),
             Self::SendAcceptance { acceptance, .. } => {
@@ -101,7 +142,12 @@ impl FolderControlOperation {
             | Self::CommitLinkRun(_)
             | Self::ReportLinkRun(_)
             | Self::CommitEndpointRoster(_) => true,
-            Self::SendRemoval(_) | Self::ProbeAddress { .. } => false,
+            Self::SendRemoval(_)
+            | Self::ProbeAddress { .. }
+            | Self::ReadApplianceStatus { .. }
+            | Self::ReadAppliancePlatform { .. }
+            | Self::ReadApplianceImports { .. }
+            | Self::ApplianceImport { .. } => false,
         };
         if one_way {
             LINK_CONTROL_ALPN
@@ -122,7 +168,11 @@ impl FolderControlOperation {
             Self::CommitLinkRun(commit) => commit.source_id,
             Self::ReportLinkRun(report) => report.reporter_id,
             Self::CommitEndpointRoster(commit) => commit.source_id,
-            Self::ProbeAddress { requester_id, .. } => *requester_id,
+            Self::ProbeAddress { requester_id, .. }
+            | Self::ReadApplianceStatus { requester_id, .. }
+            | Self::ReadAppliancePlatform { requester_id, .. }
+            | Self::ReadApplianceImports { requester_id, .. }
+            | Self::ApplianceImport { requester_id, .. } => *requester_id,
         }
     }
 
@@ -139,7 +189,11 @@ impl FolderControlOperation {
             Self::CommitLinkRun(commit) => Some(commit.target_id),
             Self::ReportLinkRun(report) => Some(report.source_id),
             Self::CommitEndpointRoster(commit) => Some(commit.target_id),
-            Self::ProbeAddress { target_id, .. } => Some(*target_id),
+            Self::ProbeAddress { target_id, .. }
+            | Self::ReadApplianceStatus { target_id, .. }
+            | Self::ReadAppliancePlatform { target_id, .. }
+            | Self::ReadApplianceImports { target_id, .. }
+            | Self::ApplianceImport { target_id, .. } => Some(*target_id),
         }
     }
 }
@@ -170,6 +224,10 @@ pub enum FolderControlPayload {
     AddressProof(SyncEngineBinding),
     LinkSettings(crate::sync_engine::LinkSettingsCommit),
     LinkRun(crate::sync_engine::LinkRunCommit),
+    ApplianceStatus(crate::appliance_control::ApplianceStatus),
+    AppliancePlatform(crate::appliance_control::AppliancePlatformStatus),
+    ApplianceImports(crate::appliance_control::ImportStatus),
+    ApplianceImportReceipt(crate::appliance_imports::ImportReceipt),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -458,7 +516,7 @@ mod tests;
 // QUIC plumbing is intentionally one-shot: each control mutation opens one
 // connection, one bidirectional stream, sends one frame and receives one frame.
 // It never reuses storage-v3 state or falls back to another ALPN.
-const EXCHANGE_TIMEOUT: Duration = Duration::from_secs(45);
+pub(crate) const EXCHANGE_TIMEOUT: Duration = Duration::from_secs(45);
 const AUTHENTICATION_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Shared server admission state. Keep this beside the endpoint for its whole
@@ -622,9 +680,19 @@ async fn send_folder_control_to(
             .await
             .map_err(|_| FolderControlError::Unavailable)?;
         send.finish().map_err(|_| FolderControlError::Unavailable)?;
-        let response = crate::transport::read_frame(&mut receive, MAX_FRAME_BYTES)
-            .await
-            .map_err(|_| FolderControlError::Unavailable)?;
+        let response = if matches!(
+            &request.operation,
+            FolderControlOperation::ReadApplianceImports {
+                context_version: Some(2),
+                ..
+            }
+        ) {
+            read_versioned_import_response(&mut receive).await?
+        } else {
+            crate::transport::read_frame(&mut receive, MAX_FRAME_BYTES)
+                .await
+                .map_err(|_| FolderControlError::Unavailable)?
+        };
         let response: FolderControlResponse =
             serde_json::from_slice(&response).map_err(|_| FolderControlError::Rejected)?;
         verify_response(
@@ -640,15 +708,45 @@ async fn send_folder_control_to(
     .map_err(|_| FolderControlError::TimedOut)?
 }
 
+async fn read_versioned_import_response(
+    receive: &mut quinn::RecvStream,
+) -> Result<Vec<u8>, FolderControlError> {
+    let mut header = [0_u8; 4];
+    let mut read = 0;
+    while read < header.len() {
+        match receive.read(&mut header[read..]).await {
+            Ok(Some(n)) if n > 0 => read += n,
+            _ => {
+                return Err(if read == 0 {
+                    FolderControlError::NoResponse
+                } else {
+                    FolderControlError::Rejected
+                });
+            }
+        }
+    }
+    let length = u32::from_be_bytes(header) as usize;
+    if length == 0 || length > MAX_FRAME_BYTES {
+        return Err(FolderControlError::Rejected);
+    }
+    let mut bytes = vec![0_u8; length];
+    receive
+        .read_exact(&mut bytes)
+        .await
+        .map_err(|_| FolderControlError::Rejected)?;
+    Ok(bytes)
+}
+
 /// Serve exactly one bidirectional stream after the QUIC endpoint has selected
 /// a folder-control ALPN. The decoded operation must match that exact protocol.
 pub async fn serve_folder_control_connection(
     connection: quinn::Connection,
     negotiated_alpn: Vec<u8>,
     engine: std::sync::Arc<Engine>,
-    service: std::sync::Arc<crate::sync_engine::FolderSyncService>,
+    service: Option<std::sync::Arc<crate::sync_engine::FolderSyncService>>,
     server_fingerprint: String,
     admission: std::sync::Arc<FolderControlAdmission>,
+    controller_bond: Option<std::sync::Arc<crate::appliance_control::ControllerBondStore>>,
 ) -> Result<(), FolderControlError> {
     tokio::time::timeout(EXCHANGE_TIMEOUT, async move {
         let connection = OneShotServerConnection(connection);
@@ -686,7 +784,82 @@ pub async fn serve_folder_control_connection(
         .map_err(|_| FolderControlError::TimedOut)??;
         let permit = admission.streams.clone().try_acquire_owned().ok();
         let payload = if permit.is_some() {
-            apply_remote(service, request.operation.clone()).await
+            if let FolderControlOperation::ReadApplianceStatus { requester_id, .. } =
+                request.operation
+            {
+                match controller_bond {
+                    Some(bond) => match bond
+                        .read_status(&engine, requester_id, service.as_deref())
+                        .await
+                    {
+                        Ok(status) => FolderControlPayload::ApplianceStatus(status),
+                        Err(FolderControlError::Rejected) => FolderControlPayload::Rejected,
+                        Err(_) => FolderControlPayload::NeedsAttention,
+                    },
+                    None => FolderControlPayload::Rejected,
+                }
+            } else if let FolderControlOperation::ReadAppliancePlatform { requester_id, .. } =
+                request.operation
+            {
+                match controller_bond {
+                    Some(bond) => match bond.read_platform(&engine, requester_id).await {
+                        Ok(value) => FolderControlPayload::AppliancePlatform(value),
+                        Err(FolderControlError::Rejected) => FolderControlPayload::Rejected,
+                        Err(FolderControlError::Busy) => FolderControlPayload::Busy,
+                        Err(_) => FolderControlPayload::NeedsAttention,
+                    },
+                    None => FolderControlPayload::Rejected,
+                }
+            } else if let FolderControlOperation::ReadApplianceImports {
+                requester_id,
+                context_version,
+                ..
+            } = request.operation
+            {
+                match controller_bond {
+                    Some(bond) => match bond
+                        .read_imports(&engine, requester_id, context_version)
+                        .await
+                    {
+                        Ok(value) => FolderControlPayload::ApplianceImports(value),
+                        Err(FolderControlError::Rejected) => FolderControlPayload::Rejected,
+                        Err(FolderControlError::Busy) => FolderControlPayload::Busy,
+                        Err(_) => FolderControlPayload::NeedsAttention,
+                    },
+                    None => FolderControlPayload::Rejected,
+                }
+            } else if let FolderControlOperation::ApplianceImport {
+                requester_id,
+                operation,
+                ref proof,
+                ref withdrawal_signature,
+                ..
+            } = request.operation
+            {
+                match controller_bond {
+                    Some(bond) => match bond
+                        .import_action(
+                            &engine,
+                            requester_id,
+                            operation,
+                            proof,
+                            withdrawal_signature.as_deref(),
+                        )
+                        .await
+                    {
+                        Ok(value) => FolderControlPayload::ApplianceImportReceipt(value),
+                        Err(FolderControlError::Rejected) => FolderControlPayload::Rejected,
+                        Err(FolderControlError::Busy) => FolderControlPayload::Busy,
+                        Err(_) => FolderControlPayload::NeedsAttention,
+                    },
+                    None => FolderControlPayload::Rejected,
+                }
+            } else {
+                match service {
+                    Some(service) => apply_remote(service, request.operation.clone()).await,
+                    None => FolderControlPayload::NeedsAttention,
+                }
+            }
         } else {
             FolderControlPayload::Busy
         };
@@ -713,6 +886,11 @@ async fn apply_remote(
     operation: FolderControlOperation,
 ) -> FolderControlPayload {
     match operation {
+        // Administrative operations must pass the separate bond gate above.
+        FolderControlOperation::ReadApplianceStatus { .. }
+        | FolderControlOperation::ReadAppliancePlatform { .. }
+        | FolderControlOperation::ReadApplianceImports { .. }
+        | FolderControlOperation::ApplianceImport { .. } => FolderControlPayload::Rejected,
         FolderControlOperation::CommitEndpointRoster(commit) => {
             match service.receive_endpoint_roster(&commit).await {
                 Ok(()) => FolderControlPayload::Ack,
@@ -800,7 +978,10 @@ async fn apply_remote(
     }
 }
 
-fn current_identity(engine: &Engine, peer: DeviceId) -> Result<PublicIdentity, FolderControlError> {
+pub(crate) fn current_identity(
+    engine: &Engine,
+    peer: DeviceId,
+) -> Result<PublicIdentity, FolderControlError> {
     let config = engine
         .config()
         .map_err(|_| FolderControlError::Unavailable)?;

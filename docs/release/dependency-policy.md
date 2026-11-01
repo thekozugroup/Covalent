@@ -4,6 +4,12 @@ Covalent release candidates must have reproducible dependency inventories for Ru
 
 High or critical vulnerabilities block release. A temporary exception must name the advisory, affected package and path, actual exposure, compensating control, owner, and expiration date in a reviewed repository change. An expired or undocumented exception is a failure. Generated SBOMs and reports are attached to immutable workflow runs or releases with the exact source commit; ignored local files are not release evidence.
 
+CI runs checksum-pinned native `cargo-audit` and `cargo-deny` releases. The audit
+denies warnings and runs on fork pull requests with the same read-only workflow
+permissions; it does not need a token or Check API publication. The required job
+result carries the failure. A failed download, checksum, version check or audit
+fails the job rather than skipping the scan.
+
 Run locally:
 
 ```sh

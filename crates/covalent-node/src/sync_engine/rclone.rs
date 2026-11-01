@@ -10,10 +10,12 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock, Weak};
 use std::time::Duration;
 
+use caseless::Caseless as _;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
+use unicode_normalization::UnicodeNormalization as _;
 use uuid::Uuid;
 
 use super::android_saf::{AndroidSafGrantError, AndroidSafGrantRegistry};
@@ -26,6 +28,85 @@ use super::{EngineIndexSnapshot, EngineSessionError, VerifiedEngineExecutable};
 const MAX_OUTPUT_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_POLICY_BYTES: u64 = 64 * 1024 * 1024;
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(60 * 60);
+const MAX_UNRESOLVED_TRANSFERS: usize = 512;
+const MAX_RECOVERY_READ_BYTES: u64 = 8 * 1024 * 1024;
+const POLICY_READ_FLAGS: i32 = rustix::fs::OFlags::NOFOLLOW.bits() as i32
+    | rustix::fs::OFlags::CLOEXEC.bits() as i32
+    | rustix::fs::OFlags::NONBLOCK.bits() as i32;
+
+/// Persisted uncertainty only; this never establishes cloud backup or consent.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FolderRecoverySummary {
+    pub folder_id: Uuid,
+    pub available: bool,
+    pub unconfirmed_files: Option<u64>,
+    pub unconfirmed_source_bytes: Option<u64>,
+}
+
+pub(super) struct RecoveryReader {
+    installation: Arc<EngineInstallation>,
+    folders: BTreeSet<Uuid>,
+    active: BTreeSet<Uuid>,
+}
+
+impl RecoveryReader {
+    pub(super) fn new(
+        installation: Arc<EngineInstallation>,
+        folders: BTreeSet<Uuid>,
+        active: BTreeSet<Uuid>,
+    ) -> Self {
+        Self {
+            installation,
+            folders,
+            active,
+        }
+    }
+
+    pub(super) fn read(self) -> Vec<FolderRecoverySummary> {
+        let directory = self.installation.database_directory().ok();
+        let mut remaining = MAX_RECOVERY_READ_BYTES;
+        self.folders
+            .into_iter()
+            .map(|folder_id| {
+                let observed = (|| {
+                    if remaining == 0 {
+                        return Err(EngineSessionError::RuntimeUnavailable);
+                    }
+                    let directory = directory
+                        .as_ref()
+                        .ok_or(EngineSessionError::RuntimeUnavailable)?;
+                    let (path, staged) = policy_paths(directory, folder_id);
+                    let (loaded, bytes) = load_policy_counted(&path, &staged, remaining);
+                    remaining = remaining.saturating_sub(bytes);
+                    let policy = loaded?;
+                    let Some(state) = policy.folders.get(&folder_id) else {
+                        return if policy.folders.is_empty() {
+                            Ok((0, 0))
+                        } else {
+                            Err(EngineSessionError::RuntimeUnavailable)
+                        };
+                    };
+                    unconfirmed_counts(state, self.active.contains(&folder_id))
+                })();
+                match observed {
+                    Ok((files, bytes)) => FolderRecoverySummary {
+                        folder_id,
+                        available: true,
+                        unconfirmed_files: Some(files),
+                        unconfirmed_source_bytes: Some(bytes),
+                    },
+                    Err(_) => FolderRecoverySummary {
+                        folder_id,
+                        available: false,
+                        unconfirmed_files: None,
+                        unconfirmed_source_bytes: None,
+                    },
+                }
+            })
+            .collect()
+    }
+}
 
 // Embedded Android has no tracing subscriber. Its JNI boundary installs the
 // platform log sink; the node crate keeps its existing unsafe-code prohibition.
@@ -256,6 +337,29 @@ pub(super) struct RclonePeer {
 
 type CommandInputs = (Vec<OsString>, Vec<(OsString, OsString)>);
 
+struct GrantReservations {
+    registry: AndroidSafGrantRegistry,
+    grants: BTreeSet<Uuid>,
+}
+
+impl GrantReservations {
+    fn reserve(&mut self, grant: Uuid) -> Result<(), EngineSessionError> {
+        if !self.grants.contains(&grant) {
+            self.registry.mark_active(grant).map_err(map_grant_error)?;
+            self.grants.insert(grant);
+        }
+        Ok(())
+    }
+}
+
+impl Drop for GrantReservations {
+    fn drop(&mut self) {
+        for grant in &self.grants {
+            self.registry.mark_inactive(*grant);
+        }
+    }
+}
+
 pub(super) struct RcloneRuntime {
     guardian: Arc<VerifiedEngineExecutable>,
     executable: Arc<VerifiedEngineExecutable>,
@@ -352,6 +456,10 @@ struct FolderPolicyState {
     pending: Option<PendingTransfer>,
     #[serde(default)]
     copy_completed: bool,
+    // Preserve the original admitted inventory and uncertain write scope. These
+    // paths are held for review; later unrelated files can still be delivered.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    unresolved: Vec<PendingTransfer>,
 }
 
 #[derive(Debug, Default, Deserialize, Serialize)]
@@ -380,6 +488,7 @@ impl RcloneRuntime {
         &self.executable
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(super) async fn prepare(
         guardian: Arc<VerifiedEngineExecutable>,
         executable: Arc<VerifiedEngineExecutable>,
@@ -388,6 +497,7 @@ impl RcloneRuntime {
         worker_lease: Weak<EngineWorkerLease>,
         installation: Arc<EngineInstallation>,
         roots: Arc<Vec<FolderRootLease>>,
+        in_flight: &BTreeSet<Uuid>,
     ) -> Result<Self, EngineSessionError> {
         executable
             .recheck()
@@ -417,7 +527,10 @@ impl RcloneRuntime {
             4096,
         )?;
         let grants = executable.android_saf_grants();
-        let mut active_grants = BTreeSet::new();
+        let mut reservations = GrantReservations {
+            registry: grants.clone(),
+            grants: BTreeSet::new(),
+        };
         let mut resolved_folders = BTreeMap::new();
         for folder in &settings.folders {
             if matches!(folder.role(), EngineFolderRole::LegacyTwoWay) {
@@ -427,8 +540,7 @@ impl RcloneRuntime {
                 super::android_saf::parse_token(folder.root()).map_err(map_grant_error)?;
             let resolved = grants.resolve(folder.root()).map_err(map_grant_error)?;
             let backend = if let Some((grant_id, grant)) = resolved {
-                grants.mark_active(grant_id).map_err(map_grant_error)?;
-                active_grants.insert(grant_id);
+                reservations.reserve(grant_id)?;
                 FolderBackend::WebDav {
                     grant_id,
                     address: grant.address,
@@ -477,10 +589,12 @@ impl RcloneRuntime {
         let map_bytes =
             serde_json::to_vec(&map).map_err(|_| EngineSessionError::InvalidConfiguration)?;
         write_private_new(&map_path, &map_bytes, 1024 * 1024)?;
-        for folder_id in resolved_folders.keys() {
+        for folder_id in resolved_folders.keys().filter(|id| !in_flight.contains(id)) {
             let (policy, staged) = policy_paths(&policy_directory, *folder_id);
             load_policy(&policy, &staged)?;
         }
+        // An unchanged in-flight job owns its policy writes. Every new copy still
+        // calls load_policy; do not mistake that owner's atomic staging for damage.
         Ok(Self {
             guardian,
             executable,
@@ -494,7 +608,7 @@ impl RcloneRuntime {
             roots,
             worker_lease,
             grants,
-            active_grants,
+            active_grants: std::mem::take(&mut reservations.grants),
         })
     }
 
@@ -589,7 +703,9 @@ impl RcloneRuntime {
             } => (propagate_source_deletions, restore_local_deletions),
             _ => return Err(EngineSessionError::InvalidConfiguration),
         };
-        check_pending_retry(state, &source, &target, restore)?;
+        prepare_pending_retry(state, &target, restore)?;
+        hold_unowned_collisions(state, &source, &target, &source_index, propagate, restore)?;
+        let held = held_paths(state);
         let (allowed, suppressions) = plan_transfer(state, &source, &target, propagate, restore);
         let pending = PendingTransfer {
             source_index: source_index.clone(),
@@ -599,10 +715,15 @@ impl RcloneRuntime {
             propagate_source_deletions: propagate,
         };
         if pending.allowed.is_empty() {
-            verify_transfer(&pending, &target)?;
+            verify_transfer_except(&pending, &target, &held)?;
             complete_transfer_state(state, source, pending.suppressions, propagate);
+            let incomplete = !state.unresolved.is_empty();
             save_policy(&policy_path, &policy_staged, &policy)?;
-            return Ok(source_index);
+            return if incomplete {
+                Err(EngineSessionError::PendingCopyRecoveryRequired)
+            } else {
+                Ok(source_index)
+            };
         }
         state.pending = Some(pending.clone());
         state.copy_completed = false;
@@ -650,7 +771,7 @@ impl RcloneRuntime {
             .into_iter()
             .map(|entry| (entry.path.clone(), entry))
             .collect::<BTreeMap<_, _>>();
-        verify_transfer(&pending, &target_after).inspect_err(|error| {
+        verify_transfer_except(&pending, &target_after, &held).inspect_err(|error| {
             report_transfer_error("target-verify", *error);
         })?;
         let mut next = load_policy(&policy_path, &policy_staged)?;
@@ -663,15 +784,17 @@ impl RcloneRuntime {
             return Err(EngineSessionError::EngineUnavailable);
         }
         complete_transfer_state(state, source, pending.suppressions, propagate);
+        let incomplete = !state.unresolved.is_empty();
         save_policy(&policy_path, &policy_staged, &next)?;
-        Ok(source_index)
+        if incomplete {
+            Err(EngineSessionError::PendingCopyRecoveryRequired)
+        } else {
+            Ok(source_index)
+        }
     }
 
     pub(super) fn reset_folder(&self, folder_id: Uuid) -> Result<(), EngineSessionError> {
-        let (policy_path, policy_staged) = policy_paths(&self.policy_directory, folder_id);
-        let mut policy = load_policy(&policy_path, &policy_staged)?;
-        policy.folders.remove(&folder_id);
-        save_policy(&policy_path, &policy_staged, &policy)
+        reset_folder_policy(&self.policy_directory, folder_id)
     }
 
     fn destination_source(
@@ -1129,27 +1252,236 @@ fn inventory_index(entries: &[InventoryEntry]) -> EngineIndexSnapshot {
     }
 }
 
-fn check_pending_retry(
-    state: &FolderPolicyState,
-    source: &BTreeMap<String, InventoryEntry>,
+fn prepare_pending_retry(
+    state: &mut FolderPolicyState,
     target: &BTreeMap<String, InventoryEntry>,
     restore: bool,
+) -> Result<BTreeSet<String>, EngineSessionError> {
+    validate_unresolved(state)?;
+    if state.pending.is_none() && state.unresolved.is_empty() {
+        return Ok(BTreeSet::new());
+    }
+    // Restoring deleted files grants replay only where the target is absent.
+    // An existing unknown original still requires a separate reviewed decision.
+    let target_names = restore.then(|| {
+        target
+            .keys()
+            .map(|path| held_path_key(path))
+            .collect::<BTreeSet<_>>()
+    });
+    if let Some(names) = &target_names {
+        for attempt in &mut state.unresolved {
+            attempt
+                .allowed
+                .retain(|path| names.contains(&held_path_key(path)));
+        }
+        state
+            .unresolved
+            .retain(|attempt| !attempt.allowed.is_empty());
+    }
+    if let Some(pending) = &state.pending {
+        let uncertain = pending
+            .allowed
+            .iter()
+            .filter(|path| {
+                !state.owned.contains(*path)
+                    && target_names
+                        .as_ref()
+                        .is_none_or(|names| names.contains(&held_path_key(path)))
+            })
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        if !uncertain.is_empty() {
+            if state.unresolved.len() >= MAX_UNRESOLVED_TRANSFERS
+                || uncertain
+                    .iter()
+                    .any(|path| !pending.source.contains_key(path))
+            {
+                return Err(EngineSessionError::RuntimeUnavailable);
+            }
+            let mut archived = pending.clone();
+            archived.allowed = uncertain;
+            validate_unresolved_attempt(&archived)?;
+            state.unresolved.push(archived);
+        }
+        state
+            .suppressions
+            .extend(pending.suppressions.iter().cloned());
+        state.pending = None;
+        state.copy_completed = false;
+    }
+    validate_unresolved(state)?;
+    Ok(held_paths(state))
+}
+
+fn hold_unowned_collisions(
+    state: &mut FolderPolicyState,
+    source: &BTreeMap<String, InventoryEntry>,
+    target: &BTreeMap<String, InventoryEntry>,
+    source_index: &EngineIndexSnapshot,
+    propagate: bool,
+    restore: bool,
 ) -> Result<(), EngineSessionError> {
-    let Some(pending) = state.pending.as_ref().filter(|_| !state.copy_completed) else {
-        return Ok(());
-    };
-    if !restore
-        || pending.allowed.iter().any(|path| {
-            pending.source.contains_key(path)
-                && !source.contains_key(path)
-                && target.contains_key(path)
+    let (allowed, suppressions) = plan_transfer(state, source, target, propagate, restore);
+    let target_names = target
+        .keys()
+        .map(|path| held_path_key(path))
+        .collect::<BTreeSet<_>>();
+    let collisions = allowed
+        .into_iter()
+        .filter(|path| {
+            source.contains_key(path)
                 && !state.owned.contains(path)
+                && target_names.contains(&held_path_key(path))
+        })
+        .collect::<BTreeSet<_>>();
+    if !collisions.is_empty() {
+        if state.unresolved.len() >= MAX_UNRESOLVED_TRANSFERS {
+            return Err(EngineSessionError::RuntimeUnavailable);
+        }
+        state.unresolved.push(PendingTransfer {
+            source_index: source_index.clone(),
+            source: source.clone(),
+            allowed: collisions,
+            suppressions,
+            propagate_source_deletions: propagate,
+        });
+        validate_unresolved(state)?;
+    }
+    Ok(())
+}
+
+fn held_paths(state: &FolderPolicyState) -> BTreeSet<String> {
+    state
+        .unresolved
+        .iter()
+        .flat_map(|attempt| attempt.allowed.iter())
+        .map(|path| held_path_key(path))
+        .collect()
+}
+
+fn unconfirmed_counts(
+    state: &FolderPolicyState,
+    active: bool,
+) -> Result<(u64, u64), EngineSessionError> {
+    validate_unresolved(state)?;
+    let mut files = 0_u64;
+    let mut bytes = 0_u64;
+    let mut count = |pending: &PendingTransfer, only_unowned: bool| {
+        if !pending.source_index.is_valid() {
+            return Err(EngineSessionError::RuntimeUnavailable);
+        }
+        for path in &pending.allowed {
+            if only_unowned && state.owned.contains(path) {
+                continue;
+            }
+            let entry = pending
+                .source
+                .get(path)
+                .filter(|entry| entry.path == *path && entry.size >= 0)
+                .ok_or(EngineSessionError::RuntimeUnavailable)?;
+            files = files
+                .checked_add(1)
+                .ok_or(EngineSessionError::RuntimeUnavailable)?;
+            bytes = bytes
+                .checked_add(entry.size as u64)
+                .ok_or(EngineSessionError::RuntimeUnavailable)?;
+        }
+        Ok::<(), EngineSessionError>(())
+    };
+    for pending in &state.unresolved {
+        count(pending, false)?;
+    }
+    if let Some(pending) = &state.pending {
+        if active
+            && pending
+                .allowed
+                .iter()
+                .any(|path| !state.owned.contains(path))
+        {
+            return Err(EngineSessionError::RuntimeUnavailable);
+        }
+        count(pending, true)?;
+    }
+    Ok((files, bytes))
+}
+
+fn held_path_key(path: &str) -> String {
+    // Hold aliases conservatively across case-insensitive/normalizing backends.
+    // Stored inventories and delivered paths retain their exact original names.
+    path.nfd().default_case_fold().nfd().collect()
+}
+
+fn path_is_held(held: &BTreeSet<String>, path: &str) -> bool {
+    if held.is_empty() {
+        return false;
+    }
+    let key = held_path_key(path);
+    let mut ancestor = key.as_str();
+    loop {
+        if held.contains(ancestor) {
+            return true;
+        }
+        let Some((parent, _)) = ancestor.rsplit_once('/') else {
+            break;
+        };
+        ancestor = parent;
+    }
+    let prefix = format!("{key}/");
+    held.range::<str, _>((
+        std::ops::Bound::Included(prefix.as_str()),
+        std::ops::Bound::Unbounded,
+    ))
+    .next()
+    .is_some_and(|candidate| candidate.starts_with(&prefix))
+}
+
+fn validate_unresolved_attempt(attempt: &PendingTransfer) -> Result<(), EngineSessionError> {
+    if !attempt.source_index.is_valid()
+        || attempt.allowed.is_empty()
+        || attempt.allowed.iter().any(|path| {
+            path.is_empty()
+                || path.contains('\0')
+                || path.split('/').any(|part| matches!(part, "" | "." | ".."))
+                || !Path::new(path)
+                    .components()
+                    .all(|part| matches!(part, std::path::Component::Normal(_)))
+                || attempt
+                    .source
+                    .get(path)
+                    .is_none_or(|entry| entry.path != *path || entry.size < 0)
         })
     {
-        Err(EngineSessionError::PendingCopyRecoveryRequired)
-    } else {
-        Ok(())
+        return Err(EngineSessionError::RuntimeUnavailable);
     }
+    Ok(())
+}
+
+fn validate_unresolved(state: &FolderPolicyState) -> Result<(), EngineSessionError> {
+    if state.unresolved.is_empty() {
+        return Ok(());
+    }
+    if state.unresolved.len() > MAX_UNRESOLVED_TRANSFERS {
+        return Err(EngineSessionError::RuntimeUnavailable);
+    }
+    let mut paths = BTreeSet::new();
+    for attempt in &state.unresolved {
+        validate_unresolved_attempt(attempt)?;
+        for path in &attempt.allowed {
+            if state.owned.contains(path) || !paths.insert(path.clone()) {
+                return Err(EngineSessionError::RuntimeUnavailable);
+            }
+        }
+    }
+    let held = held_paths(state);
+    if state
+        .pending
+        .as_ref()
+        .is_some_and(|pending| pending.allowed.iter().any(|path| path_is_held(&held, path)))
+    {
+        return Err(EngineSessionError::RuntimeUnavailable);
+    }
+    Ok(())
 }
 
 fn plan_transfer(
@@ -1195,7 +1527,8 @@ fn plan_transfer(
                 .cloned(),
         );
     }
-    allowed.retain(|path| !suppressions.contains(path));
+    let held = held_paths(state);
+    allowed.retain(|path| !suppressions.contains(path) && !path_is_held(&held, path));
     (allowed, suppressions)
 }
 
@@ -1205,13 +1538,25 @@ fn complete_transfer_state(
     suppressions: BTreeSet<String>,
     propagate: bool,
 ) {
+    let held = held_paths(state);
+    let mut verified = source;
+    if !held.is_empty() {
+        verified.retain(|path, _| !path_is_held(&held, path));
+    }
     state.suppressions = suppressions;
     if propagate {
-        state.delivered = source;
-        state.owned = state.delivered.keys().cloned().collect();
+        if held.is_empty() {
+            state.delivered = verified;
+            state.owned = state.delivered.keys().cloned().collect();
+        } else {
+            state.delivered.retain(|path, _| path_is_held(&held, path));
+            state.owned.retain(|path| path_is_held(&held, path));
+            state.delivered.extend(verified);
+            state.owned.extend(state.delivered.keys().cloned());
+        }
     } else {
-        state.owned.extend(source.keys().cloned());
-        state.delivered.extend(source);
+        state.owned.extend(verified.keys().cloned());
+        state.delivered.extend(verified);
     }
     state.pending = None;
     state.copy_completed = false;
@@ -1227,12 +1572,21 @@ fn pending_paths_are_unchanged(
         .all(|path| current.get(path) == pending.source.get(path))
 }
 
+#[cfg(test)]
 fn verify_transfer(
     pending: &PendingTransfer,
     target: &BTreeMap<String, InventoryEntry>,
 ) -> Result<(), EngineSessionError> {
+    verify_transfer_except(pending, target, &BTreeSet::new())
+}
+
+fn verify_transfer_except(
+    pending: &PendingTransfer,
+    target: &BTreeMap<String, InventoryEntry>,
+    held: &BTreeSet<String>,
+) -> Result<(), EngineSessionError> {
     for (path, source) in &pending.source {
-        if pending.suppressions.contains(path) {
+        if pending.suppressions.contains(path) || path_is_held(held, path) {
             continue;
         }
         if target
@@ -1380,51 +1734,107 @@ fn policy_paths(directory: &Path, folder_id: Uuid) -> (PathBuf, PathBuf) {
     )
 }
 
-fn load_policy(path: &Path, staged: &Path) -> Result<PolicyState, EngineSessionError> {
-    if staged.exists() {
-        return Err(EngineSessionError::RuntimeUnavailable);
-    }
-    let file = match OpenOptions::new()
-        .read(true)
-        .custom_flags((rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::CLOEXEC).bits() as i32)
-        .open(path)
-    {
-        Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(PolicyState {
-                version: 1,
-                folders: BTreeMap::new(),
-            });
-        }
-        Err(_) => return Err(EngineSessionError::RuntimeUnavailable),
+pub(super) fn ensure_folder_reset_safe(
+    installation: &EngineInstallation,
+    folder_id: Uuid,
+) -> Result<(), EngineSessionError> {
+    let directory = installation
+        .database_directory()
+        .map_err(|_| EngineSessionError::RuntimeUnavailable)?;
+    let (path, staged) = policy_paths(&directory, folder_id);
+    require_policy_reset_safe(&load_policy(&path, &staged)?, folder_id)
+}
+
+fn require_policy_reset_safe(
+    policy: &PolicyState,
+    folder_id: Uuid,
+) -> Result<(), EngineSessionError> {
+    let Some(state) = policy.folders.get(&folder_id) else {
+        return if policy.folders.is_empty() {
+            Ok(())
+        } else {
+            Err(EngineSessionError::RuntimeUnavailable)
+        };
     };
-    let metadata = file
-        .metadata()
-        .map_err(|_| EngineSessionError::RuntimeUnavailable)?;
-    if !metadata.is_file()
-        || metadata.uid() != rustix::process::geteuid().as_raw()
-        || metadata.mode() & 0o7777 != 0o600
-        || metadata.nlink() != 1
-        || metadata.len() > MAX_POLICY_BYTES
-    {
-        return Err(EngineSessionError::RuntimeUnavailable);
+    if unconfirmed_counts(state, false)?.0 != 0 {
+        return Err(EngineSessionError::PendingCopyRecoveryRequired);
     }
-    let mut bytes = Vec::new();
-    file.take(MAX_POLICY_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|_| EngineSessionError::RuntimeUnavailable)?;
-    if bytes.len() as u64 > MAX_POLICY_BYTES {
-        return Err(EngineSessionError::RuntimeUnavailable);
-    }
-    let state: PolicyState =
-        serde_json::from_slice(&bytes).map_err(|_| EngineSessionError::RuntimeUnavailable)?;
-    if state.version != 1 {
-        return Err(EngineSessionError::RuntimeUnavailable);
-    }
-    Ok(state)
+    Ok(())
+}
+
+fn reset_folder_policy(directory: &Path, folder_id: Uuid) -> Result<(), EngineSessionError> {
+    let (path, staged) = policy_paths(directory, folder_id);
+    let mut policy = load_policy(&path, &staged)?;
+    // Recheck after worker reap, even if consent preflight observed no hold.
+    // A completed flag alone never establishes ownership of a pending write.
+    require_policy_reset_safe(&policy, folder_id)?;
+    policy.folders.remove(&folder_id);
+    save_policy(&path, &staged, &policy)
+}
+
+fn load_policy(path: &Path, staged: &Path) -> Result<PolicyState, EngineSessionError> {
+    load_policy_counted(path, staged, MAX_POLICY_BYTES).0
+}
+
+fn load_policy_counted(
+    path: &Path,
+    staged: &Path,
+    maximum: u64,
+) -> (Result<PolicyState, EngineSessionError>, u64) {
+    let mut consumed = 0;
+    let result = (|| {
+        if staged.exists() {
+            return Err(EngineSessionError::RuntimeUnavailable);
+        }
+        let file = match OpenOptions::new()
+            .read(true)
+            .custom_flags(POLICY_READ_FLAGS)
+            .open(path)
+        {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(PolicyState {
+                    version: 1,
+                    folders: BTreeMap::new(),
+                });
+            }
+            Err(_) => return Err(EngineSessionError::RuntimeUnavailable),
+        };
+        let metadata = file
+            .metadata()
+            .map_err(|_| EngineSessionError::RuntimeUnavailable)?;
+        if !metadata.is_file()
+            || metadata.uid() != rustix::process::geteuid().as_raw()
+            || metadata.mode() & 0o7777 != 0o600
+            || metadata.nlink() != 1
+            || metadata.len() > maximum
+        {
+            return Err(EngineSessionError::RuntimeUnavailable);
+        }
+        let mut bytes = Vec::new();
+        let read = file.take(maximum + 1).read_to_end(&mut bytes);
+        consumed = bytes.len() as u64;
+        read.map_err(|_| EngineSessionError::RuntimeUnavailable)?;
+        if bytes.len() as u64 > maximum {
+            return Err(EngineSessionError::RuntimeUnavailable);
+        }
+        let state: PolicyState =
+            serde_json::from_slice(&bytes).map_err(|_| EngineSessionError::RuntimeUnavailable)?;
+        if state.version != 1 {
+            return Err(EngineSessionError::RuntimeUnavailable);
+        }
+        for folder in state.folders.values() {
+            validate_unresolved(folder)?;
+        }
+        Ok(state)
+    })();
+    (result, consumed)
 }
 
 fn save_policy(path: &Path, staged: &Path, state: &PolicyState) -> Result<(), EngineSessionError> {
+    for folder in state.folders.values() {
+        validate_unresolved(folder)?;
+    }
     let bytes = serde_json::to_vec(state).map_err(|_| EngineSessionError::RuntimeUnavailable)?;
     write_private_new(staged, &bytes, MAX_POLICY_BYTES)?;
     fs::rename(staged, path).map_err(|_| EngineSessionError::RuntimeUnavailable)?;
@@ -1444,6 +1854,47 @@ fn save_policy(path: &Path, staged: &Path, state: &PolicyState) -> Result<(), En
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn overlapping_runtime_reservations_release_only_their_own_grant() {
+        struct Obscurer;
+        impl super::super::android_saf::PasswordObscurer for Obscurer {
+            fn obscure(
+                &self,
+                password: zeroize::Zeroizing<String>,
+            ) -> Result<zeroize::Zeroizing<String>, AndroidSafGrantError> {
+                Ok(password)
+            }
+        }
+        let registry = AndroidSafGrantRegistry::with_obscurer(Arc::new(Obscurer));
+        let grant = Uuid::new_v4();
+        registry
+            .register(
+                grant,
+                "127.0.0.1:48123".parse().unwrap(),
+                zeroize::Zeroizing::new("test-user".to_owned()),
+                zeroize::Zeroizing::new("test-password".to_owned()),
+            )
+            .unwrap();
+        let mut original = GrantReservations {
+            registry: registry.clone(),
+            grants: BTreeSet::new(),
+        };
+        original.reserve(grant).unwrap();
+        {
+            let mut preparing = GrantReservations {
+                registry: registry.clone(),
+                grants: BTreeSet::new(),
+            };
+            preparing.reserve(grant).unwrap();
+            preparing.reserve(grant).unwrap();
+            assert_eq!(registry.unregister(grant), Err(AndroidSafGrantError::Busy));
+            // A failed preparation drops its reservations while the original runtime remains active.
+        }
+        assert_eq!(registry.unregister(grant), Err(AndroidSafGrantError::Busy));
+        drop(original);
+        registry.unregister(grant).unwrap();
+    }
 
     #[test]
     fn transfer_diagnostics_classify_errors_without_disclosing_messages_or_paths() {
@@ -1763,11 +2214,12 @@ mod tests {
         target.insert("unrelated.txt".into(), source["copied.txt"].clone());
         let mut after_source_deletion = source.clone();
         after_source_deletion.remove("copied.txt");
+        let mut restoring = state.clone();
         assert_eq!(
-            check_pending_retry(state, &after_source_deletion, &target, true),
-            Ok(())
+            prepare_pending_retry(&mut restoring, &target, true).unwrap(),
+            BTreeSet::from(["unfinished.txt".into()])
         );
-        let (allowed, _) = plan_transfer(state, &after_source_deletion, &target, true, true);
+        let (allowed, _) = plan_transfer(&restoring, &after_source_deletion, &target, true, true);
         assert!(allowed.contains("copied.txt"));
         assert!(!allowed.contains("unrelated.txt"));
 
@@ -1775,23 +2227,45 @@ mod tests {
         let (allowed, suppressions) = plan_transfer(state, &source, &target, false, false);
         assert!(!allowed.contains("copied.txt"));
         assert!(suppressions.contains("copied.txt"));
+        let mut conservative = state.clone();
         assert_eq!(
-            check_pending_retry(state, &source, &target, false),
-            Err(EngineSessionError::PendingCopyRecoveryRequired)
+            prepare_pending_retry(&mut conservative, &target, false).unwrap(),
+            BTreeSet::from(["unfinished.txt".into()])
         );
+        assert_eq!(conservative.unresolved[0].source, pending.source);
+        assert_eq!(
+            conservative.unresolved[0].allowed,
+            BTreeSet::from(["unfinished.txt".into()])
+        );
+        assert!(!conservative.owned.contains("unfinished.txt"));
+        assert!(conservative.pending.is_none());
 
         // A WebDAV write can appear before an error without a completed-copy
         // record. Restoration must not discard that unknown file's ownership.
         let mut missing_unconfirmed_source = source.clone();
         missing_unconfirmed_source.remove("unfinished.txt");
+        let mut preserve_unknown = state.clone();
         assert_eq!(
-            check_pending_retry(state, &missing_unconfirmed_source, &target, true),
-            Err(EngineSessionError::PendingCopyRecoveryRequired)
+            prepare_pending_retry(&mut preserve_unknown, &target, true).unwrap(),
+            BTreeSet::from(["unfinished.txt".into()])
+        );
+        let (allowed, _) = plan_transfer(
+            &preserve_unknown,
+            &missing_unconfirmed_source,
+            &target,
+            true,
+            true,
+        );
+        assert!(
+            !allowed.contains("unfinished.txt"),
+            "restoration never grants deletion ownership of an unknown file"
         );
         target.remove("unfinished.txt");
-        assert_eq!(
-            check_pending_retry(state, &missing_unconfirmed_source, &target, true),
-            Ok(())
+        let mut absent_unknown = state.clone();
+        assert!(
+            prepare_pending_retry(&mut absent_unknown, &target, true)
+                .unwrap()
+                .is_empty()
         );
 
         let before_invalid = fs::read(&path).unwrap();
@@ -1806,5 +2280,395 @@ mod tests {
             );
             assert_eq!(fs::read(&path).unwrap(), before_invalid);
         }
+    }
+
+    fn uncertain_fixture(name: &str) -> PendingTransfer {
+        let entry = InventoryEntry {
+            path: name.into(),
+            size: 4,
+            modified_unix_seconds: 1,
+            sha256: Some("11".repeat(32)),
+        };
+        PendingTransfer {
+            source_index: inventory_index(std::slice::from_ref(&entry)),
+            source: BTreeMap::from([(name.into(), entry)]),
+            allowed: BTreeSet::from([name.into()]),
+            suppressions: BTreeSet::new(),
+            propagate_source_deletions: true,
+        }
+    }
+
+    #[test]
+    fn policy_reset_preserves_uncertain_proof_even_with_a_completed_flag() {
+        let directory = tempfile::tempdir().unwrap();
+        let folder = Uuid::new_v4();
+        let other = Uuid::new_v4();
+        let (path, staged) = policy_paths(directory.path(), folder);
+        let pending = uncertain_fixture("unknown.jpg");
+        let other_state = FolderPolicyState {
+            unresolved: vec![uncertain_fixture("other-original.jpg")],
+            ..Default::default()
+        };
+        for unresolved in [true, false] {
+            for completed in [true, false] {
+                let mut state = FolderPolicyState {
+                    copy_completed: completed,
+                    ..Default::default()
+                };
+                if unresolved {
+                    state.unresolved.push(pending.clone());
+                } else {
+                    state.pending = Some(pending.clone());
+                }
+                save_policy(
+                    &path,
+                    &staged,
+                    &PolicyState {
+                        version: 1,
+                        folders: BTreeMap::from([(folder, state), (other, other_state.clone())]),
+                    },
+                )
+                .unwrap();
+                let before = fs::read(&path).unwrap();
+                assert_eq!(
+                    reset_folder_policy(directory.path(), folder),
+                    Err(EngineSessionError::PendingCopyRecoveryRequired)
+                );
+                assert_eq!(fs::read(&path).unwrap(), before);
+                assert!(!staged.exists());
+            }
+        }
+        // Confirmed ownership permits a scoped reset without erasing another
+        // folder's independent held proof or treating it as our authority.
+        let owned = FolderPolicyState {
+            owned: pending.allowed.clone(),
+            delivered: pending.source.clone(),
+            pending: Some(pending),
+            ..Default::default()
+        };
+        save_policy(
+            &path,
+            &staged,
+            &PolicyState {
+                version: 1,
+                folders: BTreeMap::from([(folder, owned), (other, other_state.clone())]),
+            },
+        )
+        .unwrap();
+        reset_folder_policy(directory.path(), folder).unwrap();
+        let after = load_policy(&path, &staged).unwrap();
+        assert!(!after.folders.contains_key(&folder));
+        assert_eq!(after.folders[&other].unresolved, other_state.unresolved);
+        let before = fs::read(&path).unwrap();
+        assert_eq!(
+            reset_folder_policy(directory.path(), folder),
+            Err(EngineSessionError::RuntimeUnavailable)
+        );
+        assert_eq!(fs::read(&path).unwrap(), before);
+    }
+
+    #[test]
+    fn policy_fifo_is_refused_without_waiting_for_a_writer() {
+        use std::os::unix::fs::FileTypeExt as _;
+        // Check the production open flags before opening a writerless FIFO,
+        // so a missing NONBLOCK fails this test instead of hanging the suite.
+        assert_ne!(
+            POLICY_READ_FLAGS & rustix::fs::OFlags::NONBLOCK.bits() as i32,
+            0
+        );
+        let directory = tempfile::tempdir().unwrap();
+        let folder = Uuid::new_v4();
+        let (path, staged) = policy_paths(directory.path(), folder);
+        assert!(
+            std::process::Command::new("mkfifo")
+                .arg("-m")
+                .arg("600")
+                .arg(&path)
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert_eq!(
+            load_policy(&path, &staged).unwrap_err(),
+            EngineSessionError::RuntimeUnavailable
+        );
+        assert_eq!(
+            reset_folder_policy(directory.path(), folder),
+            Err(EngineSessionError::RuntimeUnavailable)
+        );
+        assert!(fs::symlink_metadata(&path).unwrap().file_type().is_fifo());
+        assert!(!staged.exists());
+    }
+
+    #[test]
+    fn held_name_aliases_include_ancestors_without_hiding_siblings() {
+        let held = ["a-.txt", "a/b.jpg", "Café/IMG.JPG", "Straße/file.txt"]
+            .into_iter()
+            .map(held_path_key)
+            .collect();
+        for path in [
+            "a",
+            "a/b.jpg",
+            "a/b.jpg/child",
+            "CAFÉ/img.jpg",
+            "Cafe\u{301}/img.jpg",
+            "STRASSE/file.txt",
+            "strasse",
+        ] {
+            assert!(path_is_held(&held, path), "alias escaped: {path}");
+        }
+        for path in [
+            "a-new.txt",
+            "a-more/file.txt",
+            "a/c.jpg",
+            "Café/other.jpg",
+            "Straße2/file.txt",
+        ] {
+            assert!(!path_is_held(&held, path), "unrelated sibling held: {path}");
+        }
+    }
+
+    #[test]
+    fn unresolved_writes_survive_new_success_without_ownership_or_deletion() {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct LegacyFolder {
+            #[serde(rename = "owned")]
+            _owned: Option<BTreeSet<String>>,
+            #[serde(rename = "delivered")]
+            _delivered: Option<BTreeMap<String, InventoryEntry>>,
+            #[serde(rename = "suppressions")]
+            _suppressions: Option<BTreeSet<String>>,
+            #[serde(rename = "pending")]
+            _pending: Option<PendingTransfer>,
+            #[serde(rename = "copyCompleted")]
+            _copy_completed: Option<bool>,
+        }
+        // Use exact legacy field names while refusing the new durable field.
+        let mut state = FolderPolicyState {
+            pending: Some(uncertain_fixture("held.txt")),
+            ..Default::default()
+        };
+        let original = state.pending.clone().unwrap();
+        let unknown = InventoryEntry {
+            size: 99,
+            ..original.source["held.txt"].clone()
+        };
+        let target = BTreeMap::from([("held.txt".into(), unknown)]);
+        assert_eq!(
+            prepare_pending_retry(&mut state, &target, false).unwrap(),
+            BTreeSet::from(["held.txt".into()])
+        );
+        let fresh = uncertain_fixture("fresh.txt").source;
+        let index = inventory_index(&fresh.values().cloned().collect::<Vec<_>>());
+        hold_unowned_collisions(&mut state, &fresh, &target, &index, true, false).unwrap();
+        let (allowed, suppressions) = plan_transfer(&state, &fresh, &target, true, false);
+        assert_eq!(allowed, BTreeSet::from(["fresh.txt".into()]));
+        let attempt = PendingTransfer {
+            source_index: index,
+            source: fresh.clone(),
+            allowed,
+            suppressions: suppressions.clone(),
+            propagate_source_deletions: true,
+        };
+        let mut after = target.clone();
+        after.extend(fresh.clone());
+        verify_transfer_except(&attempt, &after, &held_paths(&state)).unwrap();
+        complete_transfer_state(&mut state, fresh, suppressions, true);
+        assert_eq!(state.unresolved, vec![original]);
+        assert!(state.pending.is_none());
+        assert_eq!(state.owned, BTreeSet::from(["fresh.txt".into()]));
+        assert!(!state.delivered.contains_key("held.txt"));
+        let directory = tempfile::tempdir().unwrap();
+        let folder = Uuid::new_v4();
+        let (path, staged) = policy_paths(directory.path(), folder);
+        save_policy(
+            &path,
+            &staged,
+            &PolicyState {
+                version: 1,
+                folders: BTreeMap::from([(folder, state.clone())]),
+            },
+        )
+        .unwrap();
+        let reopened = load_policy(&path, &staged).unwrap();
+        assert_eq!(reopened.folders[&folder].unresolved, state.unresolved);
+        assert!(
+            serde_json::from_value::<LegacyFolder>(
+                serde_json::to_value(FolderPolicyState::default()).unwrap()
+            )
+            .is_ok()
+        );
+        let encoded = serde_json::to_value(&state).unwrap();
+        assert!(serde_json::from_value::<LegacyFolder>(encoded).is_err());
+        // Restoration never overwrites an existing unknown original.
+        assert!(
+            !prepare_pending_retry(&mut state, &after, true)
+                .unwrap()
+                .is_empty()
+        );
+        after.remove("held.txt");
+        assert!(
+            prepare_pending_retry(&mut state, &after, false)
+                .unwrap()
+                .contains("held.txt")
+        );
+        assert!(
+            prepare_pending_retry(&mut state, &after, true)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(!state.owned.contains("held.txt"));
+    }
+
+    #[test]
+    fn unowned_target_collisions_hold_aliases_and_keep_new_paths_available() {
+        let pending = uncertain_fixture("Café/IMG.JPG");
+        let source = pending.source;
+        let existing = InventoryEntry {
+            path: "Cafe\u{301}/img.jpg".into(),
+            size: 99,
+            modified_unix_seconds: 2,
+            sha256: None,
+        };
+        let target = BTreeMap::from([(existing.path.clone(), existing)]);
+        let mut state = FolderPolicyState::default();
+        hold_unowned_collisions(
+            &mut state,
+            &source,
+            &target,
+            &pending.source_index,
+            true,
+            true,
+        )
+        .unwrap();
+        assert_eq!(state.unresolved.len(), 1);
+        assert!(!state.owned.contains("Café/IMG.JPG"));
+        assert!(
+            !prepare_pending_retry(&mut state, &target, true)
+                .unwrap()
+                .is_empty()
+        );
+        let mut next = source;
+        next.extend(uncertain_fixture("new.jpg").source);
+        let (allowed, _) = plan_transfer(&state, &next, &target, true, false);
+        assert_eq!(allowed, BTreeSet::from(["new.jpg".into()]));
+    }
+
+    #[test]
+    fn malformed_or_excessive_unresolved_state_never_replaces_policy() {
+        let directory = tempfile::tempdir().unwrap();
+        let folder = Uuid::new_v4();
+        let (path, staged) = policy_paths(directory.path(), folder);
+        let mut state = FolderPolicyState {
+            unresolved: vec![uncertain_fixture("held.txt")],
+            ..Default::default()
+        };
+        let mut policy = PolicyState {
+            version: 1,
+            folders: BTreeMap::from([(folder, state.clone())]),
+        };
+        save_policy(&path, &staged, &policy).unwrap();
+        let before = fs::read(&path).unwrap();
+        for name in ["../escape", "/absolute", "a//b", "a/./b", "a/../b"] {
+            state.unresolved = vec![uncertain_fixture(name)];
+            policy.folders.insert(folder, state.clone());
+            assert_eq!(
+                save_policy(&path, &staged, &policy),
+                Err(EngineSessionError::RuntimeUnavailable)
+            );
+            assert_eq!(fs::read(&path).unwrap(), before);
+            assert!(!staged.exists());
+        }
+        state.unresolved = vec![uncertain_fixture("same.txt"), uncertain_fixture("same.txt")];
+        assert_eq!(
+            validate_unresolved(&state),
+            Err(EngineSessionError::RuntimeUnavailable)
+        );
+        state.unresolved = (0..MAX_UNRESOLVED_TRANSFERS)
+            .map(|n| uncertain_fixture(&format!("held-{n}.txt")))
+            .collect();
+        assert!(validate_unresolved(&state).is_ok());
+        state.pending = Some(uncertain_fixture("one-too-many.txt"));
+        assert_eq!(
+            prepare_pending_retry(&mut state, &BTreeMap::new(), false),
+            Err(EngineSessionError::RuntimeUnavailable)
+        );
+        state.unresolved.push(uncertain_fixture("one-too-many.txt"));
+        policy.folders.insert(folder, state);
+        assert_eq!(
+            save_policy(&path, &staged, &policy),
+            Err(EngineSessionError::RuntimeUnavailable)
+        );
+        // Persisted files remain the original valid snapshot after failed admission.
+        assert_eq!(fs::read(&path).unwrap(), before);
+    }
+
+    #[test]
+    fn recovery_counts_are_unknown_during_unknown_writes_and_read_budget_is_total() {
+        let pending = uncertain_fixture("unknown.txt");
+        let state = FolderPolicyState {
+            pending: Some(pending),
+            ..Default::default()
+        };
+        assert_eq!(unconfirmed_counts(&state, false), Ok((1, 4)));
+        assert_eq!(
+            unconfirmed_counts(&state, true),
+            Err(EngineSessionError::RuntimeUnavailable)
+        );
+        let root = tempfile::tempdir().unwrap();
+        let sync = root.path().join("sync");
+        fs::create_dir(&sync).unwrap();
+        fs::set_permissions(&sync, fs::Permissions::from_mode(0o700)).unwrap();
+        let protector = covalent_core::StaticKeyProtector::new(1, [42; 32]).unwrap();
+        let installation = Arc::new(EngineInstallation::create(&sync, &protector).unwrap());
+        let directory = installation.database_directory().unwrap();
+        let mut large = uncertain_fixture("unknown.txt");
+        for n in 0..6000 {
+            let name = format!(
+                "folder-{n}/{}/{}/file.jpg",
+                "a".repeat(200),
+                "b".repeat(200)
+            );
+            large.source.insert(
+                name.clone(),
+                InventoryEntry {
+                    path: name,
+                    size: 1,
+                    modified_unix_seconds: 1,
+                    sha256: Some("11".repeat(32)),
+                },
+            );
+        }
+        // A full admitted snapshot can be larger than its small held path set.
+        large.source_index = inventory_index(&large.source.values().cloned().collect::<Vec<_>>());
+        let folders = BTreeSet::from([Uuid::new_v4(), Uuid::new_v4()]);
+        for folder in &folders {
+            let policy = PolicyState {
+                version: 1,
+                folders: BTreeMap::from([(
+                    *folder,
+                    FolderPolicyState {
+                        unresolved: vec![large.clone()],
+                        ..Default::default()
+                    },
+                )]),
+            };
+            let (path, staged) = policy_paths(&directory, *folder);
+            save_policy(&path, &staged, &policy).unwrap();
+            assert!(fs::metadata(&path).unwrap().len() > MAX_RECOVERY_READ_BYTES / 2);
+            assert!(fs::metadata(&path).unwrap().len() < MAX_RECOVERY_READ_BYTES);
+        }
+        let summaries = RecoveryReader::new(installation, folders, BTreeSet::new()).read();
+        assert_eq!(summaries.iter().filter(|row| row.available).count(), 1);
+        assert_eq!(
+            summaries
+                .iter()
+                .filter(|row| !row.available
+                    && row.unconfirmed_files.is_none()
+                    && row.unconfirmed_source_bytes.is_none())
+                .count(),
+            1
+        );
     }
 }

@@ -96,6 +96,13 @@ data class EnrolledTrust(
 class CovalentNodeClient(
     private val trustProvider: () -> EnrolledTrust? = { null },
 ) {
+    private var boundedReadTimeoutMillis = 30_000
+
+    /** Read-only background observations must yield promptly when the local host stops. */
+    internal constructor(boundedReadTimeoutMillis: Int) : this() {
+        require(boundedReadTimeoutMillis in 1..30_000)
+        this.boundedReadTimeoutMillis = boundedReadTimeoutMillis
+    }
     /** Bounded local polling must not stall the service actor during recovery. */
     internal fun discoveryEnabled(baseUrl: String): Boolean {
         val connection = openConnection(baseUrl, "/api/v1/status", "GET", null, "application/json", 1_500)
@@ -175,6 +182,47 @@ class CovalentNodeClient(
         )
     }
 
+    /** Controller context is a paired-identity reference, never remote approval. */
+    internal fun applianceContext(baseUrl: String, token: String) =
+        life.michaelwong.covalent.appliance.parseApplianceContext(requestBoundedObject(
+            baseUrl, "GET", "/api/v1/appliance/controller", token, null, 65_536))
+
+    internal fun applianceStatus(baseUrl: String, token: String, peerId: String, localId: String) =
+        life.michaelwong.covalent.appliance.parseApplianceObservation(requestBoundedObject(
+            baseUrl, "POST", "/api/v1/appliance/status", token,
+            JSONObject().put("peerId", requireUuid(peerId, "appliance")).toString(), 8192), peerId, localId)
+
+    internal fun appliancePlatform(baseUrl: String, token: String, peerId: String, localId: String) =
+        life.michaelwong.covalent.appliance.parseAppliancePlatform(requestBoundedObject(
+            baseUrl, "POST", "/api/v1/appliance/platform", token,
+            JSONObject().put("peerId", requireUuid(peerId, "appliance")).toString(), 40_960), peerId, localId)
+
+    internal fun applianceImports(baseUrl: String, token: String, selected: life.michaelwong.covalent.appliance.SelectedAppliance) =
+        life.michaelwong.covalent.appliance.parsePiImports(requestBoundedObject(
+            baseUrl, "POST", "/api/v1/appliance/imports/context", token,
+            JSONObject().put("peerId", selected.appliance.deviceId).toString(), 40_960), selected)
+
+    internal fun applianceImportActions(baseUrl: String, token: String, local: life.michaelwong.covalent.appliance.ApplianceIdentity) =
+        life.michaelwong.covalent.appliance.parsePiImportActions(requestBoundedObject(
+            baseUrl, "GET", "/api/v1/appliance/imports/actions", token, null, 131_072), local)
+
+    internal fun confirmApplianceImport(baseUrl: String, token: String, choice: life.michaelwong.covalent.appliance.PiImportChoice) =
+        life.michaelwong.covalent.appliance.parsePiSavedImport(requestBoundedObject(
+            baseUrl, "POST", "/api/v1/appliance/imports/confirm", token, choice.canonicalPayload(), 8192), choice.bond.controller)
+            .also { require(it.choice == choice) }
+
+    internal fun checkApplianceImport(baseUrl: String, token: String, action: life.michaelwong.covalent.appliance.PiSavedImport) =
+        life.michaelwong.covalent.appliance.parsePiSavedImport(requestBoundedObject(
+            baseUrl, "POST", "/api/v1/appliance/imports/check", token,
+            JSONObject().put("actionId", action.choice.id).toString(), 8192), action.choice.bond.controller)
+            .also { require(it.choice == action.choice && it.payload == action.payload && it.signature == action.signature && it.source == action.source && it.order == action.order) }
+
+    internal fun withdrawApplianceImport(baseUrl: String, token: String, action: life.michaelwong.covalent.appliance.PiSavedImport) =
+        life.michaelwong.covalent.appliance.parsePiSavedImport(requestBoundedObject(
+            baseUrl, "POST", "/api/v1/appliance/imports/withdraw", token,
+            JSONObject().put("actionId", action.choice.id).toString(), 8192), action.choice.bond.controller)
+            .also { require(it.choice == action.choice && it.payload == action.payload && it.signature == action.signature && it.source == action.source && it.order == action.order && it.withdrawalRequested) }
+
     /** Reads only the redacted folder-sync projection from the authenticated node. */
     fun folderSyncStatus(baseUrl: String, token: String): FolderSyncStatus =
         request(baseUrl, "GET", "/api/v1/sync/status", token, null).body.toFolderSyncStatus()
@@ -253,16 +301,14 @@ class CovalentNodeClient(
         requireUuid(changeId, "settings change")
         require(changeId != "00000000-0000-0000-0000-000000000000")
         require(expectedRevision >= 0) { "The expected settings revision is invalid." }
-        return post(
-            baseUrl,
-            token,
-            "/api/v1/sync/settings",
-            JSONObject()
-                .put("folderId", folderId)
-                .put("changeId", changeId)
-                .put("expectedRevision", expectedRevision)
-                .put("settings", settings.toJson()),
-        ).toFolderSyncMutation()
+        val request = JSONObject()
+            .put("folderId", folderId)
+            .put("changeId", changeId)
+            .put("expectedRevision", expectedRevision)
+            .put("settings", settings.toJson())
+        return retryFolderLinkSettings {
+            post(baseUrl, token, "/api/v1/sync/settings", request).toFolderSyncMutation()
+        }
     }
 
     fun acceptFolder(
@@ -707,22 +753,23 @@ class CovalentNodeClient(
         payload: String?,
         maximumResponseBytes: Int,
     ): JSONObject {
-        val connection = openConnection(baseUrl, path, method, token, "application/json").apply {
-            useCaches = false
-            setRequestProperty("Cache-Control", "no-store")
+        val connection = openConnection(baseUrl, path, method, token, "application/json", boundedReadTimeoutMillis)
+        connection.connectTimeout = minOf(connection.connectTimeout, boundedReadTimeoutMillis)
+        return try {
+            connection.useCaches = false
+            connection.instanceFollowRedirects = false
+            connection.setRequestProperty("Cache-Control", "no-store")
             if (payload != null) {
-                doOutput = true
-                setRequestProperty("Content-Type", "application/json")
+                connection.doOutput = true
+                connection.setRequestProperty("Content-Type", "application/json")
                 val bytes = payload.encodeToByteArray()
                 try {
-                    setFixedLengthStreamingMode(bytes.size)
-                    outputStream.use { it.write(bytes) }
+                    connection.setFixedLengthStreamingMode(bytes.size)
+                    connection.outputStream.use { it.write(bytes) }
                 } finally {
                     bytes.fill(0)
                 }
             }
-        }
-        return try {
             if (connection.responseCode !in 200..299) readResponse(connection)
             val body = connection.inputStream.use {
                 it.readBoundedText(maximumResponseBytes, "The node response")

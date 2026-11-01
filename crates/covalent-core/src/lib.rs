@@ -1,6 +1,8 @@
 //! Memory-safe Covalent backup, storage, verification, restore, and trust engine.
 #![forbid(unsafe_code)]
 
+/// Signed, owner-bound appliance import choices; admission remains privileged.
+pub mod appliance_import;
 mod atomic;
 mod backup;
 mod chunker;

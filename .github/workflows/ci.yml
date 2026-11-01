@@ -59,9 +59,25 @@ jobs:
       - run: node --test packaging/web/tests/*.test.mjs
       - run: node scripts/check-openapi-routes.mjs
       - run: npx --yes @redocly/cli@2.46.1 lint docs/api/openapi.yaml
-      - uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+      # Run the audit without Check API publication or a writable token, including
+      # fork pull requests. The job result remains the required security gate.
+      - name: Audit Rust dependencies
+        run: |
+          set -euo pipefail
+          audit_version=0.22.2
+          audit_platform=x86_64-unknown-linux-musl
+          audit_archive="${RUNNER_TEMP}/cargo-audit-${audit_platform}-v${audit_version}.tgz"
+          curl --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 \
+            --retry 3 --output "${audit_archive}" \
+            "https://github.com/rustsec/rustsec/releases/download/cargo-audit/v${audit_version}/cargo-audit-${audit_platform}-v${audit_version}.tgz"
+          printf '%s  %s\n' 7fb9497f8594b389e5fce5ef9b92db08432996895b2e0c5a0167a69ed445c428 "${audit_archive}" | sha256sum --check --strict
+          audit_directory="${RUNNER_TEMP}/cargo-audit-${audit_version}"
+          mkdir "${audit_directory}"
+          tar -xzf "${audit_archive}" -C "${audit_directory}" --strip-components=1 \
+            "cargo-audit-${audit_platform}-v${audit_version}/cargo-audit"
+          audit_binary="${audit_directory}/cargo-audit"
+          test "$("${audit_binary}" --version)" = "cargo-audit ${audit_version}"
+          "${audit_binary}" audit --deny warnings
       # The Docker-based action fetched its Rust image before any job step and
       # hit Docker Hub rate limits. Use the same checker version and arguments
       # from its checksum-pinned upstream native release instead.
@@ -110,6 +126,24 @@ jobs:
         run: test "$(uname -m)" = arm64
       - run: ./scripts/test-macos-open-source-notices.sh
       - run: ./scripts/test-macos-sync-engine-packaging.sh
+      - name: Verify maintained-worker folder links
+        run: |
+          set -euo pipefail
+          work=$(mktemp -d "${RUNNER_TEMP}/covalent-folder-links.XXXXXX")
+          trap 'chmod -R u+w "$work"; rm -rf "$work"' EXIT
+          ./scripts/build-macos-sync-engine.sh \
+            "${GITHUB_WORKSPACE}/packaging/rclone" "$work/engine"
+          xcrun clang -std=c11 -Os -Wall -Wextra -Werror -arch arm64 \
+            -mmacosx-version-min=15.0 packaging/sync-engine/engine-guardian.c \
+            -o "$work/guardian"
+          COVALENT_TEST_SYNC_WORKER="$work/engine/covalent-rclone" \
+          COVALENT_TEST_SYNC_GUARDIAN="$work/guardian" \
+            cargo test --locked -p covalent-node --test one_way_links \
+              -- --ignored --test-threads=2 --nocapture
+      - name: Scan the selected worker source for vulnerabilities
+        env:
+          GOTOOLCHAIN: local
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 -C packaging/rclone ./...
       - run: brew install xcodegen
       - run: swift test --package-path apps/apple
       - name: Generate Apple dependency inventories
@@ -212,6 +246,7 @@ jobs:
           python3 -B scripts/test-android-inventory.py
           python3 -B scripts/test-interlink-release.py
           python3 -B scripts/test-interlink-permission-harness.py
+          python3 -B scripts/test-interlink-alert-harness.py
           python3 -B scripts/test-interlink-native-reports.py
           python3 -B scripts/test-interlink-reboot-harness.py
       - run: ./scripts/check-android.sh
@@ -723,6 +758,7 @@ jobs:
             $ANDROID_HOME/platform-tools/adb -s emulator-5570 shell wm dismiss-keyguard || true
             COVALENT_ANDROID_PREBUILT=true COVALENT_ANDROID_EVIDENCE_DIR="${{ runner.temp }}/covalent-android-api37" COVALENT_ANDROID_HEADLESS_CI=true ANDROID_SERIAL=emulator-5570 ./scripts/android-api37-device-test.sh
             python3 -B scripts/interlink-api37-permission-test.py --serial emulator-5570 --avd Covalent_API_37 --evidence-dir "${{ runner.temp }}/covalent-android-api37/interlink"
+            python3 -B scripts/interlink-api37-alert-test.py --serial emulator-5570 --avd Covalent_API_37 --startup-receipt "${{ runner.temp }}/covalent-android-api37/interlink/permission-recovery.json" --evidence-dir "${{ runner.temp }}/covalent-android-api37/interlink-alerts"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:

@@ -108,9 +108,9 @@ const clientTrees = [
     },
     wiring: [
       {
-        description: "bounded Android recovery requests forward the exact path and method",
+        description: "bounded Android requests forward the exact path, method and read timeout",
         file: androidClientFile,
-        pattern: /fun requestBoundedObject\b[\s\S]{0,400}?openConnection\(baseUrl, path, method, token, "application\/json"\)/g,
+        pattern: /fun requestBoundedObject\b[\s\S]{0,400}?openConnection\(baseUrl, path, method, token, "application\/json", boundedReadTimeoutMillis\)/g,
       },
       {
         description: "HttpURLConnection.requestMethod is taken from the caller's method argument",
@@ -681,9 +681,9 @@ function openapiOperations(source) {
   const operations = new Set();
   let currentPath = null;
   for (const line of source.split(/\r?\n/)) {
-    const path = line.match(/^ {2}(\/api\/v1[^:]*):\s*$/)?.[1];
+    const path = line.match(/^ {2}(\/[^:]*):\s*$/)?.[1];
     if (path !== undefined) {
-      currentPath = path;
+      currentPath = path.startsWith("/api/v1") ? path : null;
       continue;
     }
     const method = line.match(/^ {4}([a-z]+):\s*$/)?.[1];

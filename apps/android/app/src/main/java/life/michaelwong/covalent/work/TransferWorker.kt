@@ -48,7 +48,7 @@ internal object TransferNotification {
             NotificationManager.IMPORTANCE_LOW,
         ).apply { description = context.getString(R.string.transfer_channel_description) })
         return NotificationCompat.Builder(context, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_launcher)
+            .setSmallIcon(R.drawable.ic_sync_notification)
             .setContentTitle(context.getString(R.string.transfer_notification_title))
             .setOngoing(true)
             .setOnlyAlertOnce(true)

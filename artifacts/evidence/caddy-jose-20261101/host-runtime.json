@@ -1,0 +1,46 @@
+{
+  "scope": "Host runtime; shipped Caddyfile adapted for task paths/ports and install_trust=false. Not native Linux image proof.",
+  "state": "passed",
+  "processes": [
+    {
+      "role": "backend thread in harness",
+      "identity": "84256 Sun Nov  1 12:04:09 2026     python3"
+    },
+    {
+      "role": "first-start",
+      "pid": 84280,
+      "identity": "84280 Sun Nov  1 12:04:09 2026     /private/tmp/ai-development/caddy-security-refresh-1793551697040573000-67364-0/bin/caddy-darwin-arm64"
+    },
+    {
+      "role": "second-start",
+      "pid": 84285,
+      "identity": "84285 Sun Nov  1 12:04:09 2026     /private/tmp/ai-development/caddy-security-refresh-1793551697040573000-67364-0/bin/caddy-darwin-arm64"
+    }
+  ],
+  "ports": {
+    "backend": 53234,
+    "https": 53235,
+    "httpRedirect": 53236
+  },
+  "checks": [
+    "HTTPS reverse proxy using generated CA",
+    "Security headers retained",
+    "HSTS retained",
+    "Static console route",
+    "Event-stream response preserved",
+    "Owner-only Unix ingress",
+    "HTTPS proxy after restart",
+    "Existing CA key and certificate bytes preserved after restart"
+  ],
+  "pkiHashes": {
+    "root.crt": "a52ea7f5215b1c5ea2f2153e71fb23bee66c0c3b294e738235e16db0ce67c2f1",
+    "intermediate.key": "e400ca8a0caff92ace7174704486b6978edef10af7ec472f7a057ecd278f75a6",
+    "root.key": "77b5551d3e71089768e7c518fd442412be4ca4b6d7a7cd5194f1beb9e30bbb16",
+    "intermediate.crt": "132d51498a7f7b6e7ff803cd8e5905184b969199fdbded3c34515c2e5c8fddaa"
+  },
+  "cleanup": {
+    "caddyStopped": true,
+    "backendThreadStopped": true,
+    "hostTrustInstallation": false
+  }
+}

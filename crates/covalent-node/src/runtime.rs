@@ -225,6 +225,11 @@ pub struct NodeRuntimeConfig {
     /// it starts the already-prepared folder service through the local API.
     #[cfg(unix)]
     pub defer_folder_sync_start: bool,
+    /// Optional host-owned read-only system observations. Absent on ordinary nodes.
+    #[cfg(unix)]
+    pub appliance_platform: Option<Arc<dyn crate::appliance_platform::AppliancePlatformReader>>,
+    #[cfg(unix)]
+    pub appliance_imports: Option<Arc<dyn crate::appliance_imports::ApplianceImportHost>>,
 }
 
 impl NodeRuntimeConfig {
@@ -260,6 +265,10 @@ impl NodeRuntimeConfig {
             folder_sync_access_unavailable: false,
             #[cfg(unix)]
             defer_folder_sync_start: false,
+            #[cfg(unix)]
+            appliance_platform: None,
+            #[cfg(unix)]
+            appliance_imports: None,
         }
     }
 }
@@ -341,6 +350,10 @@ impl NodeRuntime {
             folder_sync_access_unavailable,
             #[cfg(unix)]
             defer_folder_sync_start,
+            #[cfg(unix)]
+            appliance_platform,
+            #[cfg(unix)]
+            appliance_imports,
         } = configuration;
 
         let key_protector =
@@ -496,6 +509,14 @@ impl NodeRuntime {
             .then(|| (Arc::clone(&recovery_state), Arc::clone(&engine)));
         state = state.with_recovery_state(Arc::clone(&recovery_state));
         #[cfg(unix)]
+        if let Some(reader) = appliance_platform {
+            state = state.with_appliance_platform(reader);
+        }
+        #[cfg(unix)]
+        if let Some(host) = appliance_imports {
+            state = state.with_appliance_imports(host);
+        }
+        #[cfg(unix)]
         if folder_sync_access_unavailable {
             state = state.with_folder_sync(
                 crate::sync_engine::FolderSyncRuntimeConfig::prepare_access_recovery(
@@ -545,6 +566,8 @@ impl NodeRuntime {
         )
         .context("open pairing Start admission state")?;
         let quic_node = quic_node.with_pairing_service(Arc::new(pairing_service));
+        #[cfg(unix)]
+        let quic_node = quic_node.with_controller_bond(state.controller_bond.clone());
         #[cfg(unix)]
         let quic_node = match &state.folder_sync {
             crate::sync_engine::FolderSyncRuntimeState::Ready(service) => {

@@ -12,6 +12,28 @@ class FolderAcceptanceRetryTest {
         NodeApiException(status, version, code, retryable, "Busy", hasExplicitRetryContract = true)
 
     @Test
+    fun settingsBusyReusesTheSameChangeAndStopsOnUncertainResponse() {
+        val request = Any()
+        val sent = mutableListOf<Any>()
+        val waits = mutableListOf<Long>()
+        val result = retryFolderLinkSettings(wait = waits::add) {
+            sent += request
+            if (sent.size == 1) throw busy()
+            "confirmed"
+        }
+        assertEquals("confirmed", result)
+        assertEquals(listOf(100L), waits)
+        assertTrue(sent.size == 2 && sent.all { it === request })
+        val uncertain = IOException("Lost settings response")
+        var calls = 0
+        val failure = runCatching {
+            retryFolderLinkSettings(wait = { error("Unexpected retry") }) { calls++; throw uncertain }
+        }
+        assertSame(uncertain, failure.exceptionOrNull())
+        assertEquals(1, calls)
+    }
+
+    @Test
     fun immediateSuccessDoesNotWait() {
         assertEquals("accepted", retryFolderAcceptance(wait = { error("Unexpected wait") }) { "accepted" })
     }

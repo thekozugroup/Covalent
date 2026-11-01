@@ -458,6 +458,8 @@
     <string name="node_error_folder_sync_unavailable">Folder sync is unavailable on this device. Check that folder sync is installed and the shared folder is available, then try again.</string>
     <string name="node_error_folder_sync_busy">Another folder change is still in progress. Try again shortly.</string>
     <string name="node_error_folder_sync_needs_attention">Folder sync needs attention before it can continue. Check the folder status, then try again.</string>
+    <string name="node_error_folder_sync_recovery_required">Some files need review before this folder can change. Keep the current folder until the review is complete.</string>
+    <string name="node_error_invalid_request">Covalent could not use this request. Close and reopen this screen, then try again.</string>
     <string name="node_error_invalid_peer_address">Enter the device address as a numeric IP address and port, such as 192.168.1.20:8787, then try again.</string>
     <string name="node_error_peer_address_changed">The saved device address changed before this update finished. Refresh the saved device, then try again.</string>
     <string name="node_error_peer_address_unreachable">Covalent could not authenticate the trusted device at the new address. Check the address and network connection, then try again.</string>
@@ -521,9 +523,14 @@
     <string name="transfer_channel_name">Covalent transfers</string>
     <string name="transfer_channel_description">Shows active backup and restore work.</string>
     <string name="transfer_notification_title">Covalent transfer in progress</string>
-    <string name="node_provider_channel_name">Covalent phone storage</string>
-    <string name="node_provider_channel_description">Shows when this phone is storing backups for your other devices.</string>
-    <string name="node_provider_notification_title">Covalent is storing backups</string>
+    <string name="node_provider_channel_name">Covalent sync service</string>
+    <string name="node_provider_channel_description">Shows this phone’s sync service and folder access status.</string>
+    <string name="node_provider_notification_title">Covalent sync service</string>
+    <string name="node_provider_status_starting">Starting secure sync…</string>
+    <string name="node_provider_status_recovering">Recovering this phone’s saved sync identity…</string>
+    <string name="node_provider_status_backup_available">Ready to receive device backups</string>
+    <string name="node_provider_status_folders_available">Ready to sync shared folders</string>
+    <string name="node_provider_status_access_unavailable">Shared folders need attention</string>
     <string name="node_provider_stop">Stop</string>
 
     <plurals name="backup_snapshot_count">
@@ -655,6 +662,8 @@
     <string name="folder_link_run_next_due">Next run: %1$s</string>
     <string name="folder_link_run_preparing">Preparing transfer</string>
     <string name="folder_link_run_running">Transfer running</string>
+    <string name="folder_link_run_awaiting_confirmation">Waiting for source</string>
+    <string name="folder_link_run_awaiting_confirmation_detail">Reconnect the source to refresh this unfinished run. Files and progress are kept.</string>
     <string name="folder_link_run_succeeded">Last run completed</string>
     <string name="folder_link_run_incomplete">Last run incomplete</string>
     <string name="folder_link_run_interrupted">Last run interrupted</string>

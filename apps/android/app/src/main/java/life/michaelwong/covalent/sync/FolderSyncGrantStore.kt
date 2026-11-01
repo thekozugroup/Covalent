@@ -33,6 +33,7 @@ internal interface FolderSyncGrantJournal {
     fun prepareAcceptance(offerId: String, root: String)
     fun prepareRepair(offerId: String, root: String)
     fun finishRepair(offerId: String, root: String)
+    fun rejectRepair(offerId: String, root: String)
     fun pendingRepairRoot(offerId: String): String?
     fun prepareRemoval(offerId: String)
     fun finishRemoval(offerId: String)
@@ -180,6 +181,19 @@ internal class FolderSyncGrantStore(
     override fun pendingRepairRoot(offerId: String): String? = synchronized(JOURNAL_LOCK) {
         val id = canonicalUuid(offerId)
         recordsLocked().singleOrNull { it.offerId == id && !it.pendingRemoval }?.pendingRoot
+    }
+
+    /** Drop only an exact proposal the node definitively refused before committing. */
+    override fun rejectRepair(offerId: String, root: String) = synchronized(JOURNAL_LOCK) {
+        val id = canonicalUuid(offerId)
+        val selectedRoot = validateStoredRoot(root)
+        val grants = recordsLocked()
+        val existing = grants.singleOrNull { it.offerId == id }
+            ?: throw IllegalStateException("The durable folder choice is missing.")
+        check(!existing.pendingRemoval && existing.pendingRoot == selectedRoot) {
+            "The refused folder repair does not match the durable choice."
+        }
+        replaceLocked(grants.replace(existing, existing.withPendingRoot(null)))
     }
 
     override fun prepareRemoval(offerId: String) = synchronized(JOURNAL_LOCK) {
@@ -338,7 +352,7 @@ internal class FolderSyncGrantStore(
         replacement: FolderSyncGrant,
     ): List<FolderSyncGrant> = map { if (it.key == existing.key) replacement else it }
 
-    private fun FolderSyncGrant.withPendingRoot(value: String) = FolderSyncGrant(
+    private fun FolderSyncGrant.withPendingRoot(value: String?) = FolderSyncGrant(
         key, kind, offerId, folderId, peerId, root, label, value, false,
     )
 

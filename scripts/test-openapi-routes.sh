@@ -48,6 +48,21 @@ run_fixture() {
 
 run_fixture DurableTransferJournal.valid.kt SafTransferBridge.valid.kt >/dev/null
 
+# A non-versioned path after an API path must not invent a method on that API.
+python3 - "$fixture_root/docs/api/openapi.yaml" <<'PY_NON_API'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+source = path.read_text()
+start = source.index('  /healthz:\n')
+end = source.index('  /api/v1/status:\n', start)
+health = source[start:end]
+source = source[:start] + source[end:]
+next_path = source.index('  /api/v1/sync/status:\n')
+path.write_text(source[:next_path] + health + source[next_path:])
+PY_NON_API
+node "$fixture_root/scripts/check-openapi-routes.mjs" >/dev/null
+
 unknown_output="$fixture_root/unknown-path.out"
 if run_fixture DurableTransferJournal.unknown.kt SafTransferBridge.valid.kt >"$unknown_output" 2>&1; then
   echo "route checker accepted an unknown durable path constant" >&2

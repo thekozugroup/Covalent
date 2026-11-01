@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="740" viewBox="0 0 1280 740">
+  <title>Interlink identity preview</title>
+  <defs>
+    <g id="mark" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round" transform="rotate(-35 12 12)">
+      <path d="M10.5 8H8a4 4 0 0 0 0 8h2.5M13.5 8H16a4 4 0 0 1 0 8h-2.5M8.5 12H15.5"/>
+    </g>
+  </defs>
+  <rect width="1280" height="740" fill="#f8fbf1"/>
+  <text x="64" y="80" fill="#52634f" font-family="sans-serif" font-size="18" letter-spacing="2">INTERLINK · IDENTITY PREVIEW</text>
+  <g transform="translate(72 180) scale(7)" color="#153d2e"><use href="#mark"/></g>
+  <text x="300" y="300" fill="#153d2e" font-family="Georgia,serif" font-size="102">Interlink</text>
+  <text x="306" y="350" fill="#52634f" font-family="sans-serif" font-size="24">A simple bond between your phone and your Pi.</text>
+  <line x1="64" x2="1216" y1="440" y2="440" stroke="#c2c9bc"/>
+  <rect x="76" y="500" width="128" height="128" rx="36" fill="#153d2e"/>
+  <g transform="translate(104 528) scale(3)" color="#fff"><use href="#mark"/></g>
+  <circle cx="400" cy="564" r="64" fill="#b8f2b9"/>
+  <g transform="translate(364 528) scale(3)" color="#002108"><use href="#mark"/></g>
+  <rect x="596" y="500" width="128" height="128" rx="36" fill="#313f3a"/>
+  <g transform="translate(624 528) scale(3)" color="#b8f2b9"><use href="#mark"/></g>
+  <circle cx="920" cy="564" r="64" fill="#e9def8"/>
+  <g transform="translate(884 528) scale(3)" color="#4a4458"><use href="#mark"/></g>
+  <g fill="#52634f" font-family="sans-serif" font-size="18" text-anchor="middle">
+    <text x="140" y="675">App icon</text><text x="400" y="675">Light theme</text>
+    <text x="660" y="675">Dark theme</text><text x="920" y="675">Wallpaper color</text>
+  </g>
+</svg>

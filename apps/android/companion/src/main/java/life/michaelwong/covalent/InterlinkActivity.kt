@@ -4,17 +4,12 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import life.michaelwong.covalent.ui.FolderSyncScreen
 
@@ -28,34 +23,17 @@ class InterlinkActivity : ComponentActivity() {
         setContent {
             val manager by owner.manager.collectAsState()
             val failed by owner.failed.collectAsState()
-            val dark = isSystemInDarkTheme()
-            val colors = when {
-                android.os.Build.VERSION.SDK_INT >= 31 && dark -> dynamicDarkColorScheme(this)
-                android.os.Build.VERSION.SDK_INT >= 31 -> dynamicLightColorScheme(this)
-                dark -> darkColorScheme(primary = Color(0xFFB8DCC5), tertiary = Color(0xFFD9C78F))
-                else -> lightColorScheme(primary = Color(0xFF306349), tertiary = Color(0xFF765B1A))
-            }
-            MaterialExpressiveTheme(colorScheme = colors, motionScheme = MotionScheme.expressive()) {
-                Scaffold(
-                    containerColor = MaterialTheme.colorScheme.surface,
-                    topBar = {
-                        TopAppBar(
-                            title = { Text("Interlink", fontFamily = FontFamily.Serif,
-                                style = MaterialTheme.typography.headlineMedium,
-                                maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                            navigationIcon = {
-                                Icon(painterResource(R.drawable.ic_brand_mark), contentDescription = null,
-                                    modifier = Modifier.padding(start = 20.dp, end = 12.dp).size(28.dp))
-                            },
-                        )
-                    },
-                ) { padding ->
+            InterlinkTheme {
+                InterlinkScaffold { padding ->
                     Box(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding).imePadding()) {
                         val ready = manager
                         if (ready != null) {
                             FolderSyncScreen(
                                 manager = ready,
                                 photoAppliance = true,
+                                deviceHeader = {
+                                    Column(verticalArrangement = Arrangement.spacedBy(14.dp)) { InterlinkApplianceDashboard(ready) }
+                                },
                                 modifier = Modifier.widthIn(max = 840.dp).fillMaxHeight()
                                     .align(androidx.compose.ui.Alignment.TopCenter),
                             )

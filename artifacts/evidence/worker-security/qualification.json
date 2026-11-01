@@ -1,0 +1,383 @@
+{
+  "schema": 1,
+  "date": "2026-10-31",
+  "scope": "Software qualification; no phone/Pi/production installation or gold acceptance",
+  "workerSourceCommit": "95c34be538cf8f02d44d416556ac6c446793f195",
+  "workerSourceTree": "9eec016c4843e1d82167cbb932e356ab030adb12",
+  "goModSha256": "4922e516bf57b690eb18a282a49bf29fe11b3fa0aff2dfe36656642fde3e6bf8",
+  "goSumSha256": "84562c962f783086abde98a5c0e65a892746abd90740d64a612f9c5c5f77b034",
+  "workerSecurity": {
+    "scanner": "govulncheckv1.9.0",
+    "sourceConfig": {
+      "protocol_version": "v1.0.0",
+      "scanner_name": "govulncheck",
+      "scanner_version": "v1.9.0",
+      "db": "https://vuln.go.dev",
+      "db_last_modified": "2026-10-27T21:16:18Z",
+      "go_version": "go1.26.10",
+      "scan_level": "symbol",
+      "scan_mode": "source"
+    },
+    "sourceFindings": [
+      {
+        "osv": "GO-2026-5932",
+        "trace": [
+          {
+            "module": "golang.org/x/crypto",
+            "version": "v0.58.0"
+          }
+        ]
+      }
+    ],
+    "vulnerableImportedPackages": 0,
+    "calledVulnerabilities": 0,
+    "moduleOnlyFindingExplained": "OpenPGP advisory has no imported package or call. No such package appears in any of the three exact compiled target graphs. No suppression or claim of a clean entire module graph.",
+    "strippedBinaryScanLimit": "Scanner falls back to go.mod-level possible vulnerable symbols when package symbols are unavailable; initial binary reports are preserved, not treated as proof of imported code.",
+    "profiles": {
+      "macos-arm64": {
+        "packages": 478,
+        "compiledAffectedPackages": [],
+        "selectedVersions": {
+          "golang.org/x/crypto": "v0.58.0",
+          "golang.org/x/net": "v0.62.0",
+          "github.com/go-chi/chi/v5": "v5.4.0"
+        },
+        "rawTargetGraphSha256": "632a06ae4219162b943ed2ebaaa5727fbd357b1aefc985697824063007e7321a",
+        "sourceBuild": {
+          "schema": 1,
+          "engine": {
+            "name": "rclone",
+            "version": "v1.75.1",
+            "upstreamCommit": "687d264b689b8c49a67e2e52a8a5e0caa01c04ce",
+            "upstreamSourceState": "unmodified",
+            "wrapperSourceTree": "9eec016c4843e1d82167cbb932e356ab030adb12"
+          },
+          "target": {
+            "goos": "darwin",
+            "goarch": "arm64",
+            "cgoEnabled": false,
+            "buildTags": []
+          },
+          "toolchain": {
+            "goVersion": "go1.26.10"
+          },
+          "evidence": {
+            "licenseInventorySha256": "eda686b2f95ed8354c9004f805a429fca6e95d186dd5cdb6042a0c8d35a2ce0a",
+            "licenseInventoryBytes": 44022,
+            "noticeManifestSha256": "9750fb3ed0f83959bde97152534b819ea513a45d8b76b3427cbc0e290dccfd9c",
+            "combinedNoticeSha256": "bb71a8751b159f88891759f7eab8dc9514a9a00ce198af426dddf7f991fc6a9a",
+            "combinedNoticeBytes": 301484
+          },
+          "unsignedExecutable": {
+            "sha256": "f68c6ae032f8af37e4977197e581a67f45e1e67a0b22fe172e1f0ec7e5cb5d74",
+            "bytes": 20063778
+          }
+        }
+      },
+      "android-arm64": {
+        "packages": 473,
+        "compiledAffectedPackages": [],
+        "selectedVersions": {
+          "golang.org/x/crypto": "v0.58.0",
+          "golang.org/x/net": "v0.62.0",
+          "github.com/go-chi/chi/v5": "v5.4.0"
+        },
+        "rawTargetGraphSha256": "de377cd912af97c50f5b17e67d91857e2f851e802907fd30905d2cec2a801849",
+        "sourceBuild": {
+          "schema": 1,
+          "engine": {
+            "name": "rclone",
+            "version": "v1.75.1",
+            "upstreamCommit": "687d264b689b8c49a67e2e52a8a5e0caa01c04ce",
+            "upstreamSourceState": "unmodified",
+            "wrapperSourceTree": "9eec016c4843e1d82167cbb932e356ab030adb12"
+          },
+          "target": {
+            "goos": "android",
+            "cgoEnabled": true,
+            "api": 26,
+            "buildMode": "pie",
+            "maximumPageSize": 16384,
+            "buildTags": []
+          },
+          "toolchain": {
+            "goVersion": "go1.26.10",
+            "ndkVersion": "27.1.12297006"
+          }
+        }
+      },
+      "android-x64": {
+        "packages": 474,
+        "compiledAffectedPackages": [],
+        "selectedVersions": {
+          "golang.org/x/crypto": "v0.58.0",
+          "golang.org/x/net": "v0.62.0",
+          "github.com/go-chi/chi/v5": "v5.4.0"
+        },
+        "rawTargetGraphSha256": "839d3f9b850e9a4deeb91656a41c71d35c62a026d4ad6110e8b8d004198daa8b",
+        "sourceBuild": {
+          "schema": 1,
+          "engine": {
+            "name": "rclone",
+            "version": "v1.75.1",
+            "upstreamCommit": "687d264b689b8c49a67e2e52a8a5e0caa01c04ce",
+            "upstreamSourceState": "unmodified",
+            "wrapperSourceTree": "9eec016c4843e1d82167cbb932e356ab030adb12"
+          },
+          "target": {
+            "goos": "android",
+            "cgoEnabled": true,
+            "api": 26,
+            "buildMode": "pie",
+            "maximumPageSize": 16384,
+            "buildTags": []
+          },
+          "toolchain": {
+            "goVersion": "go1.26.10",
+            "ndkVersion": "27.1.12297006"
+          }
+        }
+      }
+    }
+  },
+  "macosPins": {
+    "workerSha256": "f68c6ae032f8af37e4977197e581a67f45e1e67a0b22fe172e1f0ec7e5cb5d74",
+    "noticeDigests": {
+      "source-build.json": "58c53a3874b4a5a5bc5ed5741bc0afda5cc6754f9683f4373abba521bb353f16",
+      "rclone-LICENSE.txt": "9266eae9c6a441de0f6847f19ac8f09b280d55612b079eca03b3d49b822c1a71",
+      "notices/manifest.json": "9750fb3ed0f83959bde97152534b819ea513a45d8b76b3427cbc0e290dccfd9c",
+      "notices/THIRD-PARTY-NOTICES.txt": "bb71a8751b159f88891759f7eab8dc9514a9a00ce198af426dddf7f991fc6a9a",
+      "PROVENANCE.txt": "2311fc29e78f4f7744ba84ae52b655760f41da3c964e3b5e43a7cc49fc4a763a",
+      "notices-index.txt": "dc32083ea41b4791c45c87fdab82a60aa0484be48a21b4896551db2cb2c518de"
+    },
+    "consumers": [
+      "apps/apple/Scripts/package-sync-engine.sh",
+      "apps/apple/Scripts/sign-sync-engine-bundle.sh",
+      "crates/covalent-node/src/sync_engine/mac_host.rs",
+      "scripts/verify-apple-silicon-bundle.sh",
+      "scripts/test-macos-sync-engine-packaging.sh"
+    ]
+  },
+  "alpineReferenceRefresh": {
+    "previousSourceRevision": "3ebbecfe05fb748e00158b42fa02b7e470ca44b6",
+    "previousSourceLockSha256": "681aedb313d202c7d01c4d471f2efa524e55736c21bedc214ae562efb1c35324",
+    "previousRecordsExactlyReproduced": true,
+    "unchangedCaddyStageAndGolangBaseAsserted": true,
+    "builderDatabaseDigestsPreserved": true,
+    "sourceLockSha256": "4eaffcec7b7ee1f01ec36267b5f731895c2a721c7c1c6a6cd0f5706b487d0a50",
+    "packagedEvidenceLockSha256": "b9ef58ea817ea002c6a4c20884b439fc83e2bfc893aa5058208ea4e01196d8a6",
+    "generatedFrom": "Production collector, real locked source bytes, canonical expected package metadata; no final image acceptance claimed",
+    "targets": {
+      "amd64": {
+        "noticeBundle": {
+          "path": "THIRD-PARTY-NOTICES.txt",
+          "bytes": 130945,
+          "sha256": "fd22d9aae5a91344b8a331fe5bf58037dc3ea499864c1360493f5a4f1ce74db0"
+        },
+        "sourceReadmeSHA256": "ce088c422e53653cc1f2c77feeb01e740629194499d745b4464f5f949b4a5686",
+        "sourceManifestSHA256": "03cecc5e2686fc9af5fc0adda204e06150776bcd3699a2240940879c2a1b2507",
+        "sourceFiles": 156,
+        "builderInstalledDatabaseSHA256": "42cfd3516bf53219c041785cc5319b4951484c3d1562d0e18838e81f5e1c60bd"
+      },
+      "arm64": {
+        "noticeBundle": {
+          "path": "THIRD-PARTY-NOTICES.txt",
+          "bytes": 130956,
+          "sha256": "c15a208bac276d95fcb38ae2ee6061a965baec6fb7b074fae9a53dd4bd81c308"
+        },
+        "sourceReadmeSHA256": "ce088c422e53653cc1f2c77feeb01e740629194499d745b4464f5f949b4a5686",
+        "sourceManifestSHA256": "03cecc5e2686fc9af5fc0adda204e06150776bcd3699a2240940879c2a1b2507",
+        "sourceFiles": 156,
+        "builderInstalledDatabaseSHA256": "e5a0daace4fae865d4c7525f7f6d36f0c29d48f397ad3c37ae4eeb0c1dc36f85"
+      }
+    }
+  },
+  "checks": {
+    "macos-worker-final": {
+      "exitCode": 0,
+      "seconds": 27.57,
+      "logSha256": "8c88ca7192371973a2fcf2ca14945aec77001e967bfff2e6e78b84dd19db7664"
+    },
+    "android-worker-final": {
+      "exitCode": 0,
+      "seconds": 48.02,
+      "logSha256": "77d84239b2b98c7aff99b11e79733e3f18210caaee183a23e08361b5ed2e79f0"
+    },
+    "macos-package": {
+      "exitCode": 0,
+      "seconds": 51.3,
+      "logSha256": "9b6d0144237d33501e4117727c77af5a5fe7a56c729fc4bd48d5b2547e867472"
+    },
+    "node-unit": {
+      "exitCode": 0,
+      "seconds": 120.22,
+      "logSha256": "1b9be44f2cb86e935d142c776469449196d33dc393fb39c6f5cc5827673abd8f"
+    },
+    "foundation": {
+      "exitCode": 0,
+      "seconds": 37.72,
+      "logSha256": "87a6fdf0aa0a4dff8d95093b127ec49613932d22bcc22132b64168f5afb5ed07"
+    },
+    "workflow-lint": {
+      "exitCode": 0,
+      "seconds": 0.28,
+      "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "final-clippy": {
+      "exitCode": 0,
+      "seconds": 0.74,
+      "logSha256": "037c23de2cfcca9121d1812282823faaa3e94ac70ecaf0ae65678bc3a06aa884"
+    },
+    "alpine-collector-tests": {
+      "exitCode": 0,
+      "seconds": 0.23,
+      "logSha256": "b79f8b0703e7eb14c0820d1463b3f6e5b08c214961071449695f705778c35080"
+    },
+    "alpine-verifier-tests": {
+      "exitCode": 0,
+      "seconds": 0.2,
+      "logSha256": "3dcfb9fc66f79ff607f275906b3e6a0df242d9f62b0ad93c12f239b2f57a7f3a"
+    },
+    "license-collector-tests": {
+      "exitCode": 0,
+      "seconds": 0.07,
+      "logSha256": "8750d4b5acdce1e4d680a3a27eb5d68370ed8b7d37b619aa32e9e0049f881dae"
+    },
+    "contract-fixed": {
+      "exitCode": 0,
+      "seconds": 7.14,
+      "logSha256": "09efa12b881c857f0e543691a314c7a4e5a0cea50a50fd96fca790356cb53a12"
+    },
+    "source-security-final": {
+      "exitCode": 0,
+      "seconds": 3.59,
+      "logSha256": "b5ae54ddcfa4cb39e85f84ad2d9e43556bd817c480eaab2a71bab63bfc29353b"
+    },
+    "source-security-final-json": {
+      "exitCode": 0,
+      "seconds": 2.86,
+      "logSha256": "43a295da8cf31f00b64c7847abed0db2201dd056b90041e60aa290f3c7f002fd"
+    },
+    "collection-diagnostic": {
+      "exitCode": 0,
+      "seconds": 334.96,
+      "logSha256": "5f1ca0f2bc7a2ba878054a229eaa904a28c26aa8cad18c98fb33240eb912d941"
+    },
+    "three-node-diagnostic": {
+      "exitCode": 0,
+      "seconds": 544.36,
+      "logSha256": "de34970603f0066976e9f287def60a0b631a6e7a3206af7675db2818cf065f62"
+    },
+    "worker-links": {
+      "exitCode": 1,
+      "seconds": 1285.94,
+      "logSha256": "ddfb28168940eb058f99d7344bd03b2fbd8167a5ee3080f06f419569cfc7c9a9"
+    },
+    "worker-cases-diagnostic": {
+      "exitCode": 101,
+      "seconds": 382.18,
+      "logSha256": "a670e053bc73d9247064852ed1d4fbff23250d4cb02ba64e9e2bcd9deecd1399"
+    },
+    "paired-diagnostic": {
+      "exitCode": 101,
+      "seconds": 178.19,
+      "logSha256": "95b7aa7a3e0985d0ec045abd9959cae67ab5b56cf1c8bcdb9d2d6865fc66251d"
+    }
+  },
+  "integrationScope": {
+    "initialFullSuite": "5 passed, 2 failed; includes the real fifteen-minute scheduled case passing. Worker at 4d7ceeb (chi-only update).",
+    "finalWorkerParallelSubset": "4 passed, 2 failed, 1 filtered; omitted the already-run scheduled case for diagnosis. Failures are collection and three-node file arrivals.",
+    "finalWorkerStandalone": "Both collection/remount and three-node deletion/restore/shared-settings cases pass independently; not proof that concurrent failures are resolved.",
+    "scheduledWait": "The test deliberately waits for a real fifteen-minute source due time. No shutdown deadlock established; no production shutdown change applied.",
+    "cancelledDiagnostic": "A redundant scheduled diagnostic was cancelled after discovering the intentional cadence; no successful result claimed.",
+    "concurrentInvestigation": "Detailed bounded status snapshots and the existing redacted diagnostic sink are added only to the real-worker test helper; original waits/assertions are retained. Parallel cause remains open.",
+    "finalWorkerPairedReproduction": "0 passed, 2 failed, 5 filtered. Initial three-node arrival and collection remount arrival time out with a fresh running batch/pending destination; unresolved. Same sixty-second file deadline and original assertions retained."
+  },
+  "releaseBoundary": [
+    "exact-head hosted full image/contracts/scans",
+    "all seven maintained-worker scenarios passing together",
+    "API37 emulator acceptance and physical companion/Pi checks",
+    "signed publication, safe updater admission and gold cold boot"
+  ],
+  "previousHostedCi": {
+    "status": "completed",
+    "conclusion": "failure",
+    "headSha": "1f8a8c21f5c5aa3dcd8dea297381a317b9eee13c",
+    "jobs": [
+      {
+        "name": "Shared Rust and contracts",
+        "status": "completed",
+        "conclusion": "success",
+        "id": 124596962878,
+        "failedSteps": []
+      },
+      {
+        "name": "Dependency vulnerability and license delta",
+        "status": "completed",
+        "conclusion": "success",
+        "id": 124596963119,
+        "failedSteps": []
+      },
+      {
+        "name": "macOS integration and UI",
+        "status": "completed",
+        "conclusion": "success",
+        "id": 124596963192,
+        "failedSteps": []
+      },
+      {
+        "name": "Container arm64 image",
+        "status": "completed",
+        "conclusion": "failure",
+        "id": 124596963197,
+        "failedSteps": [
+          "Run ./scripts/check-container-contract.sh covalent:ci-arm64 \"${GITHUB_SHA}\" development \"320169753a3e4d5f71d071f688e657836b0a884fe3972c10e69be534e0bee711\"",
+          "Retain the arm64 vulnerability report"
+        ]
+      },
+      {
+        "name": "Container foundation",
+        "status": "completed",
+        "conclusion": "failure",
+        "id": 124596963199,
+        "failedSteps": [
+          "Run ./scripts/check-container-contract.sh covalent:ci \"${GITHUB_SHA}\" development \"320169753a3e4d5f71d071f688e657836b0a884fe3972c10e69be534e0bee711\"",
+          "Retain the amd64 vulnerability report"
+        ]
+      },
+      {
+        "name": "Android API 37 device",
+        "status": "completed",
+        "conclusion": "failure",
+        "id": 124596963203,
+        "failedSteps": [
+          "Run reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d"
+        ]
+      },
+      {
+        "name": "macOS app bundle",
+        "status": "completed",
+        "conclusion": "success",
+        "id": 124596963230,
+        "failedSteps": []
+      },
+      {
+        "name": "Android foundation",
+        "status": "completed",
+        "conclusion": "success",
+        "id": 124596963300,
+        "failedSteps": []
+      },
+      {
+        "name": "Release candidate software gates",
+        "status": "completed",
+        "conclusion": "failure",
+        "id": 124606641478,
+        "failedSteps": [
+          "Require every exact-current software gate"
+        ]
+      }
+    ],
+    "androidEmulatorFailure": "Baseline instrumentation and SAF checks reach dedicated Interlink permission recovery; ADB reports missing-service/exit20 during input tap. Exact-current emulator acceptance remains open; no application crash cause established."
+  }
+}

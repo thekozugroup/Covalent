@@ -1,0 +1,11 @@
+{
+  "Cargo.toml": "73c7ea69716eed2f171113f4fe37feab1dcb49c0bed04ab04d9f53197f0d58a0",
+  "Cargo.lock": "a9285e1317d5ab2b770e573547fd86a3a768af929b8cb92cba86147443fce28e",
+  "rust-toolchain.toml": "279d77167cec5426fa80f457cd066dc74a360fbe4e2816f4f3fa01487a918fdc",
+  ".github/workflows/ci.yml": "8a53bc3671add0e344a94d595134b669b814e6cea72975e92cc355b6900275fe",
+  "deny.toml": "8a0226150446a44ed9de621d6aa5b9ff017234a21733e1d3e6c4b08359a62506",
+  "packaging/docker/Dockerfile": "4818cd65dd97dce10904d9e5c7afcd6a0c514c7f556426df49fd24acbc63ab7e",
+  "packaging/docker/alpine/busybox-cve-2025-60876/Dockerfile.build": "391da8368ebb24e9b09e779be76379a6a7612d2f57ad873dd5cff85c709b4e4b",
+  "apps/android/app/lint.xml": "4c20219f348b274cec7f519863618af68e8ca591b78fc67fc3af863e15be2e4c",
+  "docs/release/dependency-policy.md": "6581344782af2bab1a999ba5478d47d4ae0e405e573818d0b01b1125567c89b0"
+}

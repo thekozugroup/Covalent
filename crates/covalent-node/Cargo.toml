@@ -32,6 +32,7 @@ anyhow.workspace = true
 axum.workspace = true
 base64.workspace = true
 blake3.workspace = true
+caseless.workspace = true
 clap = { workspace = true, optional = true }
 covalent-core = { version = "0.2.12", path = "../covalent-core" }
 covalent-protocol = { version = "0.2.12", path = "../covalent-protocol" }
@@ -58,6 +59,7 @@ tokio-util.workspace = true
 tokio-rustls.workspace = true
 tracing.workspace = true
 tracing-subscriber = { workspace = true, optional = true }
+unicode-normalization.workspace = true
 uuid.workspace = true
 walkdir.workspace = true
 x509-parser.workspace = true

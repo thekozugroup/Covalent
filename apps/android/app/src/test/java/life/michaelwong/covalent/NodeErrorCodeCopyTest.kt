@@ -58,6 +58,8 @@ class NodeErrorCodeCopyTest {
             "folder_sync_unavailable",
             "folder_sync_busy",
             "folder_sync_needs_attention",
+            "folder_sync_recovery_required",
+            "invalid_request",
             "link_settings_pending",
             "link_settings_conflict",
             "link_run_pending",

@@ -373,6 +373,14 @@ public enum NodeAPIErrorCopy {
             "Folder sync needs attention before it can continue. Check the folder status, then try again.",
             .retry
         ),
+        "folder_sync_recovery_required": (
+            "Some files need review before this folder can change. Keep the current folder until the review is complete.",
+            .none
+        ),
+        "invalid_request": (
+            "Covalent could not use this request. Close and reopen this screen, then try again.",
+            .none
+        ),
         "link_settings_pending": (
             "A link settings change is waiting for the source device. Check the link status before changing it again.",
             .none

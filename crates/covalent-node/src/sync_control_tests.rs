@@ -5,6 +5,84 @@ use covalent_protocol::{PeerRole, TransportBinding};
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+#[test]
+fn import_context_version_is_signed_and_absent_legacy_field_keeps_exact_wire_bytes() {
+    let source = test_engine();
+    let target = test_engine();
+    let legacy = FolderControlOperation::ReadApplianceImports {
+        requester_id: source.engine.device_id(),
+        target_id: target.engine.device_id(),
+        context_version: None,
+    };
+    let expected = format!(
+        "{{\"readApplianceImports\":{{\"requester_id\":\"{}\",\"target_id\":\"{}\"}}}}",
+        source.engine.device_id(),
+        target.engine.device_id()
+    );
+    assert_eq!(serde_json::to_string(&legacy).unwrap(), expected);
+    assert_eq!(
+        serde_json::from_str::<FolderControlOperation>(&expected).unwrap(),
+        legacy
+    );
+    let fingerprint = "c".repeat(64);
+    let request = sign_request(
+        &source.engine,
+        target.engine.device_id(),
+        &fingerprint,
+        legacy,
+    )
+    .unwrap();
+    assert!(
+        verify_request(
+            &request,
+            APPLIANCE_CONTROL_ALPN,
+            target.engine.device_id(),
+            &fingerprint,
+            &source.engine.public_identity(),
+            &mut FolderControlReplay::default(),
+            request.issued_at_unix_ms
+        )
+        .is_ok()
+    );
+    let mut changed = serde_json::to_value(&request).unwrap();
+    changed["operation"]["readApplianceImports"]["context_version"] = 2.into();
+    let mut changed: FolderControlRequest = serde_json::from_value(changed).unwrap();
+    assert_eq!(
+        verify_request(
+            &changed,
+            APPLIANCE_CONTROL_ALPN,
+            target.engine.device_id(),
+            &fingerprint,
+            &source.engine.public_identity(),
+            &mut FolderControlReplay::default(),
+            changed.issued_at_unix_ms
+        ),
+        Err(FolderControlError::Rejected)
+    );
+    changed.operation_digest = digest(&changed.operation).unwrap();
+    assert_eq!(
+        verify_request(
+            &changed,
+            APPLIANCE_CONTROL_ALPN,
+            target.engine.device_id(),
+            &fingerprint,
+            &source.engine.public_identity(),
+            &mut FolderControlReplay::default(),
+            changed.issued_at_unix_ms
+        ),
+        Err(FolderControlError::Rejected)
+    );
+    for value in [
+        serde_json::Value::Null,
+        serde_json::json!("2"),
+        serde_json::json!(2.5),
+    ] {
+        let mut operation = serde_json::to_value(&request.operation).unwrap();
+        operation["readApplianceImports"]["context_version"] = value;
+        assert!(serde_json::from_value::<FolderControlOperation>(operation).is_err());
+    }
+}
+
 struct TestEngine {
     _directory: tempfile::TempDir,
     engine: Arc<Engine>,

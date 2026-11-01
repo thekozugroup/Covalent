@@ -1,6 +1,6 @@
 //! Authenticated, redacted folder-sync status for native hosts and the console.
 
-use axum::extract::State;
+use axum::extract::{RawQuery, State};
 use axum::http::{HeaderMap, StatusCode};
 use serde::{Deserialize, Serialize};
 
@@ -1270,6 +1270,34 @@ pub(crate) async fn display_name(
     Ok(StatusCode::NO_CONTENT)
 }
 
+pub(crate) async fn recovery(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    RawQuery(query): RawQuery,
+) -> Result<axum::Json<serde_json::Value>, ApiError> {
+    authorize(&state, &headers)?;
+    if query.is_some_and(|query| !query.is_empty()) {
+        return Err(ApiError {
+            status: StatusCode::BAD_REQUEST,
+            code: "invalid_request",
+            message: "Recovery status does not accept query parameters.",
+            retryable: false,
+            upload_offset: None,
+        });
+    }
+    #[cfg(unix)]
+    {
+        let folders = ready_service(&state)?
+            .recovery_status()
+            .await
+            .map_err(service_error)?;
+        Ok(axum::Json(serde_json::json!({"schemaVersion":1,
+            "observationsComplete":folders.iter().all(|folder| folder.available), "folders":folders})))
+    }
+    #[cfg(not(unix))]
+    Err(unavailable_error())
+}
+
 pub(crate) async fn status(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1425,6 +1453,15 @@ async fn status_without_display_names(
 #[cfg(unix)]
 pub(crate) fn service_error(error: crate::sync_engine::FolderSyncServiceError) -> ApiError {
     use crate::sync_engine::FolderSyncServiceError;
+    if error == FolderSyncServiceError::RecoveryRequired {
+        return ApiError {
+            status: StatusCode::CONFLICT,
+            code: "folder_sync_recovery_required",
+            message: "Some files need review before this folder can change. Keep the current folder until the review is complete.",
+            retryable: false,
+            upload_offset: None,
+        };
+    }
     if matches!(
         error,
         FolderSyncServiceError::SettingsConflict | FolderSyncServiceError::SettingsPending
@@ -1493,8 +1530,14 @@ pub(crate) fn service_error(error: crate::sync_engine::FolderSyncServiceError) -
 }
 
 #[cfg(unix)]
-fn sharing_error(_: crate::sync_engine::SharingError) -> ApiError {
-    service_error(crate::sync_engine::FolderSyncServiceError::Journal)
+fn sharing_error(error: crate::sync_engine::SharingError) -> ApiError {
+    service_error(
+        if error == crate::sync_engine::SharingError::RecoveryRequired {
+            crate::sync_engine::FolderSyncServiceError::RecoveryRequired
+        } else {
+            crate::sync_engine::FolderSyncServiceError::Journal
+        },
+    )
 }
 
 #[cfg(unix)]

@@ -1,0 +1,17 @@
+<resources>
+    <string name="interlink_alert_channel">Import reviews</string>
+    <string name="interlink_alert_channel_detail">Reminders to review drives and cameras attached to your paired Pi. An alert never approves an import.</string>
+    <plurals name="interlink_alert_title">
+        <item quantity="one">Source ready to review</item>
+        <item quantity="other">%1$d sources ready to review</item>
+    </plurals>
+    <string name="interlink_alert_counts">%1$s eligible files · %2$s</string>
+    <string name="interlink_alert_body">%1$s · %2$s\n%3$s\nTo: Photo imports · %4$s available\nOpen Interlink to review. Originals stay on the source.</string>
+    <string name="interlink_alert_private">An attached source needs review in Interlink</string>
+    <string name="interlink_alert_enabled">Import alerts are allowed</string>
+    <string name="interlink_alert_disabled">Import alerts are off</string>
+    <string name="interlink_alert_detail">Get a reminder when a drive or camera on your Pi is ready to review. Sync must be running. Android power saving can delay checks.</string>
+    <string name="interlink_alert_allow">Allow import alerts</string>
+    <string name="interlink_alert_settings">Notification settings</string>
+    <string name="interlink_alert_settings_failed">Notification settings could not open. You can change them in Android settings.</string>
+</resources>

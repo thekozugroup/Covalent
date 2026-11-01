@@ -12,7 +12,7 @@ the rclone MIT license, Covalent's license, Go's notices, and the selected
 dependencies' notices. Source records are retained where the collector requires
 them. Adding a dependency requires new target evidence.
 
-The macOS build uses Go 1.26.7, arm64, and CGO disabled. Android uses Go 1.26.7,
+The macOS build uses Go 1.26.10, arm64, and CGO disabled. Android uses Go 1.26.10,
 NDK 27.1.12297006, API 26 PIE executables, and 16 KiB segment alignment on both
 arm64 and x86_64. Linux builders use the exact target architecture in the pinned
 Go container and CGO disabled. All builds use the pinned module graph and

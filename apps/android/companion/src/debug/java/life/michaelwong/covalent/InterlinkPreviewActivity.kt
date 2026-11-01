@@ -1,0 +1,119 @@
+package life.michaelwong.covalent
+
+import android.os.Bundle
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.*
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import life.michaelwong.covalent.model.*
+import life.michaelwong.covalent.ui.FolderShareCard
+import life.michaelwong.covalent.ui.FolderSyncOverview
+import life.michaelwong.covalent.appliance.*
+
+/** Debug-only visual fixture. Every value is synthetic; import callbacks change only local rendering. */
+class InterlinkPreviewActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
+        val previewMode = intent.getStringExtra("previewMode")
+        val awaitingRun = previewMode == "run-awaiting-confirmation"
+        val link = FolderShare(
+            offerId = "preview-link", folderId = "preview-pictures", label = "Pictures",
+            peerId = "preview-pi", incoming = awaitingRun, phase = FolderSharePhase.READY,
+            expiresAtUnixMs = null, expired = false, linkPolicy = FolderLinkPolicy(),
+            peerConnection = PeerConnectionState.DISCONNECTED,
+            linkSettings = if (awaitingRun) FolderLinkSettingsState(0,
+                FolderLinkSettings(FolderLinkPolicy(), false, FolderLinkCadence.Manual),
+                "example-change", "preview-pi", true, null, null) else null,
+            linkRun = if (awaitingRun) FolderLinkRunSummary(1, 1, 0,
+                FolderLinkRunPhase.RUNNING, 1, 2, null, null, null, null, emptyList()) else null,
+        )
+        val status = FolderSyncStatus(
+            availability = FolderSyncAvailability.AVAILABLE,
+            lifecycle = if (awaitingRun) FolderSyncLifecycle.RUNNING else FolderSyncLifecycle.STOPPED,
+            issue = null, healthFreshness = FolderHealthFreshness.NEVER_OBSERVED,
+            peers = listOf(FolderSyncPeer("preview-pi", "Living room Pi")),
+            shares = listOf(link), folders = emptyList(),
+        )
+        val phone = ApplianceIdentity("11111111-1111-4111-8111-111111111111", "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE", "b".repeat(20))
+        val pi = ApplianceIdentity("22222222-2222-4222-8222-222222222222", "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI", "a".repeat(20))
+        val selected = SelectedAppliance(phone, pi, "Living room Pi", "44444444-4444-4444-8444-444444444444")
+        val importExample = interlinkImportExample(selected, previewMode?.startsWith("camera-") == true, previewMode != "camera-connection-only")
+        val importPreview = previewMode?.startsWith("import-") == true || previewMode?.startsWith("camera-") == true
+        if (previewMode == "notification" && android.os.Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            life.michaelwong.covalent.node.NodeProviderNotification.createChannel(this)
+            getSystemService(android.app.NotificationManager::class.java).notify(9901,
+                life.michaelwong.covalent.node.NodeProviderNotification.create(this,
+                    "Example data · Ready to sync shared folders"))
+        }
+        if (previewMode == "import-alert" && android.os.Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            val notification = importAlert(PiImportsState(selected.copy(name = "Example data · Living room Pi"),
+                PiImportsObservation(selected.confirmedGeneration!!, true, importExample.context), emptyList(), true))
+            notification?.let { InterlinkImportNotifications(this).post(it, false) }
+        }
+        val dashboard = ApplianceDashboardState(
+            selection = selected,
+            connection = when (previewMode) {
+                "offline", "run-awaiting-confirmation" -> ApplianceConnectionState.UNAVAILABLE
+                "approval" -> ApplianceConnectionState.APPROVAL_REQUIRED
+                else -> ApplianceConnectionState.CONNECTED
+            },
+            context = ApplianceContext(phone, listOf(pi)), candidates = listOf(ApplianceCandidate(pi, selected.name)),
+            observation = if (previewMode in setOf("offline", "approval", "run-awaiting-confirmation")) null else
+                ApplianceObservation(selected.confirmedGeneration!!, ApplianceSyncState.RUNNING, 1, true),
+            platform = if (previewMode != "storage" && !importPreview) null else AppliancePlatformObservation(selected.confirmedGeneration!!, true,
+                PiPlatformSnapshot(true, true, false, listOf(PiImportSource("a".repeat(64), false, "Camera SD card", true, false,
+                    "DCIM/GPhoto/Imports/912666d028529101", PiPreviewState.READY, 320, 1_400_000_000)), 8_500_000_000,
+                    PiUpdateState(true, true, false))),
+        )
+        setContent {
+            var review by remember { mutableStateOf(if (previewMode in setOf("import-confirmation", "camera-confirmation", "camera-connection-only")) importExample else null) }
+            val exampleAction = PiSavedImport(1, importExample.choice(PiImportMode.ONCE), importExample.choice(PiImportMode.ONCE).canonicalPayload(), "example-only",
+                importExample.source, false, null, null)
+            val imports = PiImportsState(selected, PiImportsObservation(selected.confirmedGeneration!!, true, importExample.context),
+                if (previewMode == "import-pending") listOf(exampleAction) else emptyList(), true)
+            InterlinkTheme {
+                InterlinkScaffold { padding ->
+                    Column(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding)
+                        .verticalScroll(rememberScrollState()).padding(20.dp, 14.dp),
+                        verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                        Text("Example data · visual preview", style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        InterlinkApplianceCard(dashboard, false, {}, {})
+                        if (previewMode == "alert-settings") InterlinkDriveAlertsSetting()
+                        if (previewMode == "storage" || importPreview) InterlinkPlatformCard(dashboard, if (importPreview) imports else null) { _, pause ->
+                            review = importExample.copy(pause = pause)
+                        }
+                        if (importPreview) InterlinkImportRequests(dashboard, imports, false, {}, {})
+                        Text("Your photo links", style = MaterialTheme.typography.headlineMedium,
+                            fontWeight = FontWeight.SemiBold)
+                        Text(stringResource(R.string.interlink_subtitle))
+                        FolderSyncOverview(status, true, emptySet(), false, {})
+                        FolderShareCard(
+                            status = status, share = link, peerName = "Living room Pi",
+                            hasFolder = true, hasPendingRepair = false, busy = false,
+                            addDestination = {}, showLinkSettings = awaitingRun,
+                            savedSettingsChange = null, savedRunRequest = null,
+                            editSettings = { _, _ -> }, retrySettings = {}, reviewSettings = { _, _ -> },
+                            mutate = {}, runNow = {}, reviewRun = {}, localFolderName = "Pictures",
+                        )
+                        Text("Example data · visual preview", style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+                review?.let { InterlinkImportConfirmation(it, false, { review = null }, { review = null }) }
+            }
+        }
+    }
+}

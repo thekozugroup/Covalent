@@ -36,7 +36,14 @@ class ReleaseTests(unittest.TestCase):
         self.env = dict(zip(release.KEY_VARIABLES, (str(self.key), "private-store-password", "interlink", "private-key-password")))
         self.env["INTERLINK_ANDROID_CERTIFICATE_SHA256"] = PIN
         self.debug = False
-        self.badging = "package: name='life.michaelwong.interlink' versionCode='1' versionName='0.1.0-dev'\n"
+        self.badging = "launchable-activity: name='life.michaelwong.covalent.InterlinkActivity'\npackage: name='life.michaelwong.interlink' versionCode='1' versionName='0.1.0-dev'\n"
+        self.manifest = (
+            'E: manifest (line=2)\n'
+            '  E: application (line=10)\n'
+            '    A: http://schemas.android.com/apk/res/android:name(0x01010003)="life.michaelwong.covalent.InterlinkApplication"\n'
+            '      E: activity (line=20)\n'
+            '        A: http://schemas.android.com/apk/res/android:name(0x01010003)="life.michaelwong.covalent.InterlinkActivity"\n'
+        )
         self.signed_cert = PIN
         self.signer_label = "Signer #1"
         self.signer_count = "Number of signers: 1\n"
@@ -51,7 +58,7 @@ class ReleaseTests(unittest.TestCase):
         if name == "keytool":
             output = CERT if "-exportcert" in command else (b"Owner: CN=Android Debug" if self.debug else b"Owner: CN=Interlink Test")
         elif name == "aapt2":
-            output = self.badging.encode()
+            output = (self.manifest if command[2] == "xmltree" else self.badging).encode()
         elif name == "apksigner":
             if command[1] == "sign":
                 Path(command[command.index("--out") + 1]).write_bytes(Path(command[-1]).read_bytes())
@@ -119,6 +126,63 @@ class ReleaseTests(unittest.TestCase):
         self.badging += "application-debuggable\n"
         with self.assertRaisesRegex(ValueError, "debuggable"):
             self.sign()
+
+    def test_missing_generic_or_other_application_refuses_before_signing(self):
+        original = self.manifest
+        for name in ("android.app.Application", "life.michaelwong.covalent.CovalentApplication", ""):
+            self.args.output_directory = self.root / ("invalid-app-" + (name or "missing"))
+            with self.subTest(name=name):
+                self.manifest = original.replace("life.michaelwong.covalent.InterlinkApplication", name)
+                with self.assertRaisesRegex(ValueError, "Application"):
+                    self.sign()
+                self.assertFalse(any(c[1] == "sign" for c in self.commands))
+
+    def test_child_attribute_cannot_supply_missing_application_class(self):
+        self.manifest = self.manifest.replace(
+            '    A: http://schemas.android.com/apk/res/android:name(0x01010003)="life.michaelwong.covalent.InterlinkApplication"\n', "")
+        self.manifest += '        A: http://schemas.android.com/apk/res/android:name(0x01010003)="life.michaelwong.covalent.InterlinkApplication"\n'
+        with self.assertRaisesRegex(ValueError, "Application"):
+            self.sign()
+
+    def test_missing_or_duplicate_application_element_refuses(self):
+        original = self.manifest
+        for tree in ("", original + original):
+            self.args.output_directory = self.root / ("invalid-tree-" + str(len(tree)))
+            with self.subTest(tree=tree):
+                self.manifest = tree
+                with self.assertRaisesRegex(ValueError, "Application"):
+                    self.sign()
+
+    def test_duplicate_application_name_refuses(self):
+        self.manifest = self.manifest.replace('      E: activity',
+            '    A: http://schemas.android.com/apk/res/android:name(0x01010003)="android.app.Application"\n      E: activity')
+        with self.assertRaisesRegex(ValueError, "Application"):
+            self.sign()
+
+    def test_missing_wrong_or_multiple_launcher_refuses(self):
+        original = self.badging
+        for launcher in ("", "launchable-activity: name='life.michaelwong.covalent.InterlinkPreviewActivity'",
+                         "launchable-activity: name='life.michaelwong.covalent.InterlinkActivity'\nlaunchable-activity: name='other.Activity'"):
+            self.args.output_directory = self.root / ("invalid-launcher-" + str(len(launcher)))
+            with self.subTest(launcher=launcher):
+                self.badging = launcher + "\n" + original.split("\n", 1)[1]
+                with self.assertRaisesRegex(ValueError, "launcher"):
+                    self.sign()
+
+    def test_preview_component_refuses_in_release(self):
+        self.manifest += '      E: activity (line=24)\n        A: http://schemas.android.com/apk/res/android:name(0x01010003)="life.michaelwong.covalent.InterlinkPreviewActivity"\n'
+        with self.assertRaisesRegex(ValueError, "preview"):
+            self.sign()
+
+    def test_android_namespace_alias_accepts_same_application(self):
+        self.manifest = self.manifest.replace("http://schemas.android.com/apk/res/android:", "android:")
+        self.sign()
+
+    def test_oversized_manifest_refuses_before_signing(self):
+        self.manifest += " " * (256 * 1024)
+        with self.assertRaisesRegex(ValueError, "inspection bound"):
+            self.sign()
+        self.assertFalse(any(c[1] == "sign" for c in self.commands))
 
     def test_post_sign_certificate_mismatch_refuses(self):
         self.signed_cert = "0" * 64

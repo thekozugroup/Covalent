@@ -69,6 +69,7 @@ pub enum SharingError {
     SettingsPending,
     RunConflict,
     RunPending,
+    RecoveryRequired,
 }
 
 impl fmt::Display for SharingError {
@@ -82,6 +83,7 @@ impl fmt::Display for SharingError {
             Self::FolderUnavailable => "the selected folder needs access again",
             Self::LimitExceeded => "folder sharing reached its local limit",
             Self::PersistenceUncertain => "folder sharing needs state recovery",
+            Self::RecoveryRequired => "unconfirmed files need review before changing this folder",
             Self::SettingsConflict => {
                 "link settings changed on another device; review them and try again"
             }
@@ -533,6 +535,38 @@ impl FolderSharingJournal {
     /// classify mutation failures; it is not a worker-launch authorization.
     pub fn revision(&self) -> u64 {
         self.store.revision()
+    }
+
+    pub(super) fn recovery_reader(
+        &self,
+        active: BTreeSet<Uuid>,
+    ) -> Result<super::rclone::RecoveryReader, SharingError> {
+        self.store
+            .payload()
+            .map_err(|_| SharingError::PersistenceUncertain)?;
+        let configuration = self
+            .engine
+            .config()
+            .map_err(|_| SharingError::InvalidState)?;
+        let mut folders = BTreeSet::new();
+        for share in self.snapshot.shares.iter().filter(|share| {
+            !share.removed
+                && share.commit.is_some()
+                && share.offer.link_policy.is_some()
+                && share.offer.target_device_id == self.engine.device_id()
+        }) {
+            let trust = observe_trust(&configuration, share.peer_identity.device_id)?
+                .ok_or(SharingError::UntrustedPeer)?;
+            if !trust.matches(share) {
+                return Err(SharingError::UntrustedPeer);
+            }
+            folders.insert(share.offer.folder_id);
+        }
+        Ok(super::rclone::RecoveryReader::new(
+            Arc::clone(&self.installation),
+            folders,
+            active,
+        ))
     }
 
     /// Validate an authenticated address proof without changing durable state.
@@ -1905,6 +1939,9 @@ impl FolderSharingJournal {
         {
             return Err(SharingError::AlreadyShared);
         }
+        if changes_root || self.snapshot.pending_root_reset.is_some() {
+            self.require_root_reset_safe(folder_id)?;
+        }
         Ok(PreparedRootRepair {
             journal: Arc::clone(&self.preparation_identity),
             expected_revision: self.store.revision(),
@@ -1946,11 +1983,13 @@ impl FolderSharingJournal {
             {
                 return Err(SharingError::InvalidState);
             }
+            self.require_root_reset_safe(pending.folder_id)?;
             return Ok(Some(pending.folder_id));
         }
         if !prepared.changes_root {
             return Ok(None);
         }
+        self.require_root_reset_safe(prepared.folder_id)?;
         let mut next = self.snapshot.clone();
         next.shares[index].root = Some(prepared.replacement.clone());
         next.pending_root_reset = Some(PendingRootReset {
@@ -1960,6 +1999,20 @@ impl FolderSharingJournal {
         });
         self.persist(next)?;
         Ok(Some(prepared.folder_id))
+    }
+
+    fn require_root_reset_safe(&self, folder_id: Uuid) -> Result<(), SharingError> {
+        super::rclone::ensure_folder_reset_safe(&self.installation, folder_id).map_err(|error| {
+            // Only a refusal before any root commit lets a client discard its
+            // proposed choice. A retained reset may already name that root.
+            if error == super::EngineSessionError::PendingCopyRecoveryRequired
+                && self.snapshot.pending_root_reset.is_none()
+            {
+                SharingError::RecoveryRequired
+            } else {
+                SharingError::PersistenceUncertain
+            }
+        })
     }
 
     /// Prepare and persist an offline repair. This method never launches a

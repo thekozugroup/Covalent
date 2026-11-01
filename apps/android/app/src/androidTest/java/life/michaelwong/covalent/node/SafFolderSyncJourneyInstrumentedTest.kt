@@ -73,6 +73,7 @@ import life.michaelwong.covalent.model.FolderSyncLifecycle
 import life.michaelwong.covalent.model.NetworkPairingDirection
 import life.michaelwong.covalent.model.NetworkPairingState
 import life.michaelwong.covalent.model.NodeConnection
+import life.michaelwong.covalent.sync.FolderLinkSettingsChangeStore
 import life.michaelwong.covalent.sync.FolderSyncGrantStore
 import life.michaelwong.covalent.sync.SafFolderGrant
 import life.michaelwong.covalent.sync.SafFolderGrantStore
@@ -241,7 +242,8 @@ class SafFolderSyncJourneyInstrumentedTest {
                     "${failure.message}\n" +
                         recoveryDiagnostic("source", connectionA, "initial-manual") +
                         "\n" +
-                        recoveryDiagnostic("destination", connectionB, "initial-manual"),
+                        recoveryDiagnostic("destination", connectionB, "initial-manual") +
+                        "\n" + runUiDiagnostic(folderId.toString()),
                     failure,
                 )
             }
@@ -919,6 +921,28 @@ class SafFolderSyncJourneyInstrumentedTest {
         client.folderSyncStatus(connection.baseUrl, connection.token).shares.single {
             !it.incoming && it.offerId == offerId
         }
+
+    private fun runUiDiagnostic(folderId: String): String {
+        val saved = runCatching {
+            FolderLinkSettingsChangeStore(context).runRecords().singleOrNull { it.folderId == folderId }
+        }
+        val buttons = runCatching {
+            val candidates = compose.onAllNodes(hasTestTag("folder-link-run-$folderId"))
+            val nodes = candidates.fetchSemanticsNodes()
+            nodes.size to nodes.indices.count { index ->
+                runCatching { candidates[index].assertIsEnabled(); true }.getOrDefault(false)
+            }
+        }
+        // Counts, booleans and revisions only; never dump UI text, grants or credentials.
+        return "COVALENT_RUN_UI_DIAGNOSTIC savedReadable=${saved.isSuccess} " +
+            "savedRequest=${saved.getOrNull() != null} " +
+            "requiresReview=${saved.getOrNull()?.requiresReview} " +
+            "expectedGeneration=${saved.getOrNull()?.expectedGeneration} " +
+            "settingsRevision=${saved.getOrNull()?.settingsRevision} " +
+            "storeError=${saved.exceptionOrNull()?.javaClass?.name} " +
+            "runButtons=${buttons.getOrNull()?.first} enabledRunButtons=${buttons.getOrNull()?.second} " +
+            "surfaceError=${buttons.exceptionOrNull()?.javaClass?.name}"
+    }
 
     private fun recoveryDiagnostic(label: String, connection: NodeConnection, requestId: String): String =
         runCatching {

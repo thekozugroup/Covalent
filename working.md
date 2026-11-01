@@ -1,3 +1,759 @@
+# Interlink identity and Caddy security qualification — 2026-11-01
+
+Interlink already has its own minimal vector mark, adaptive/themed Android icon,
+serif app title and native MaterialExpressiveTheme/MotionScheme. The current
+actual dashboard/import captures were reviewed and shown with explicit example
+labels. This iteration does not change the UI or claim full device acceptance.
+
+Caddy now selects the official JOSE v3 security backport0e502b87c7aa and v4.1.7.
+Eight rejection cases are part of the native Docker build; compiled metadata
+checks prevent either branch drifting. The fresh module scan exposed compiled
+HTML findingsGO-2026-6860/6866 despite Unknown severity, so x/net moves to0.62.0
+with its required x/crypto/text/sys/sync/term/tools updates. Other reviewed
+Caddy/Go/CEL/gRPC/compression/OpenTelemetry selections remain pinned. The complete
+image security gate stays unchanged; no advisory or severity is suppressed.
+
+Both exact Linux ELF builds pass the current Grype High/Critical cutoff, with
+149 SBOM packages each. One retained Unknown match is GO-2026-5932; its OpenPGP
+packages are absent from both actual compiled graphs. Eighteen evidence tests,
+upstream HTML tests, source container contract and eight host TLS/proxy/CA-restart
+checks pass. Target source/license pins and checksums are regenerated; CA
+provenance is explicitly reference-only, not newly installed runtime proof.
+Bounded exact evidence: artifacts/evidence/caddy-jose-20261101/ (under1MB).
+
+Native full-image CI must rebuild/verify installed CA metadata and run complete
+image scans. Existing hosted API37 and private Android owner-approval acceptance
+remain separate unresolved gates. Production companion signing, real roaming,
+physical removable-media/cloud/deletion/migration and empty-userdata gold-image
+acceptance remain open. No release, physical update or updater barrier bypass is
+performed. Pi/phone/accounts/media/identities/pairings/journals are untouched.
+
+Cleanup independently verified: task scratch, scanner/module/build caches,
+ELFs and generated test CA keys are absent. Owned Caddy/backend PIDs and ports
+are gone; shared ADB5037/5038 and Go SDK remain. No VM/AVD/container/Docker engine
+was created. Whole-volume free space increases 8,774,017,024B across
+cleanup; concurrent APFS activity limits attribution. Under1MB of exact evidence
+is retained for source/CI review, with no temporary binary or test environment.
+
+# Receiving-run uncertainty and actual Pi admission — 2026-11-01
+
+The previous complete platform component build was progress. Actual Pi inspection
+now works through the direct Ethernet cable and verifies the same hardware/boot,
+four Covalent identity digests and all16 originally signed installed components.
+The Pi remains0.2.3 sequence6; its source phone is offline in Tailscale. An incoming
+run retains its source-owned running record after its deadline. Idle admission
+correctly refuses it. No journal, service, account/media or updater state is
+reset/stopped/changed, and no upgrade is forced. Temporary network/debug resources
+are restored/removed; private physical audit remains separate from UI proof.
+
+That observation exposed a receiving-card presentation gap. After the recorded
+deadline, an incoming run whose source connection cannot be freshly confirmed
+shows Waiting for source and a retained-progress explanation. It no longer
+claims Transfer running or repeats generic connection uncertainty. The source-
+owned phase/generation/signed state stay unchanged. Fresh observed local copy,
+scanning/error priorities and connected-source observations retain their existing
+behavior. Outgoing/no-deadline and terminal run history retain their old rules.
+No cleanup, mutation retry or updater-idle authority derives from the display.
+
+Full269 JVM tests pass, zero failures/errors/skips, including four added boundary,
+stale/connected-source, local-copy, missing-deadline/outgoing and terminal-record
+checks. Companion debug lint has no errors. The normal full-producer debug APK
+is52,474,852B, debug certificate20a69239; native package checks pass both ABIs.
+APK SHA2566e8b80cdf761e7a3958735335c7fc9c7e520ba08f9db63a89c22713bf939c98a.
+This is QA signing, not an installable production release or physical phone update.
+
+The new actual native receiving-card transition passes in light/default and
+dark/200% text: source uncertainty appears, generic/running/completed claims do
+not, then fresh local-copy observation restores running. After real Get started
+and actual Android notification consent, all24 registered component/owner/alert/
+notification cases pass by exact name on the owned API36 ARM64 16KiB guest. The
+initial direct batch lacks those host/notification prerequisites and fails; both
+original results are retained before the admitted run. No assertion/deadline is
+relaxed. The new class is included in the existing strict API37 registry and its
+three host harness tests pass; API36 is not a replacement for that API37 journey.
+
+The native example-data previews keep the Interlink logo and serif title, clear
+source/destination and card settings. Complete explanation frames are retained
+in docs/brand/interlink-run-awaiting-source-{light,large-dark}.png. Initial clipped
+frames are superseded, not published. Capture initialization overwrote the UI
+receipt; its original overwritten value is retained and the passed record is
+recovered from the hash-verified exact test stdout, without rerunning/altering
+tests. Private audit records that derivation explicitly. No raw signed-in screen
+or personal media is captured. Framework/boot remain unchanged, font/night are
+restored, and original animation values remain unchanged.
+
+Public native source and private component package still pin e4013a1: no Rust,
+dependency, version, platform runtime or signed package bytes change here. Source
+hashes bind the tested APK; physical upgrade/recovery, full bonded settings and
+roaming, actual SD/USB/camera/cloud/cleanup and gold image remain required. Public
+e4013a1 hosted CI fails its Android/container/release gate; private fce30f0 passes
+Linux but fails owner approval instrumentation. Keep both PR bases/drafts and
+all original release gates; no merge, release, flash or real account/media change.
+
+Cleanup verified: owned AVD Interlink_Run_Confirmation_API36 (emulator-5586), its
+registration/writable data, owned ADB5041, listeners5586/5587, three task module
+build links and scratch interlink-run-confirmation-1793548677765978000-20959-0
+are absent; all recorded owned processes exited. Shared ADB76421/93998, shared
+tooling/caches, pre-existing empty .kotlin and other owners' tasks remain. Final
+scratch removal shows1,495,564,288B more whole-volume free space after the AVD
+was already deleted; concurrent/APFS activity limits attribution. No APK/build/
+AVD is retained. Two canonical PNGs (~0.31MiB) and the bounded private UI/physical
+audits (~0.8MiB total) retain the exact evidence and known failed prerequisites.
+
+# Import compatibility across companion/platform updates — 2026-11-01
+
+The previous signed camera stage was progress. This stage fixes its mixed-version
+read gap: old requests keep exact original operation bytes and receive validated
+volume-only context1. Modern requests sign an optional context_version2 and can
+receive volume/camera context. Projection keeps the full bond, volume tuple,
+preview and protected space; cameras are omitted and disclosed, never relabelled.
+Invalid modern data is rejected before projection. No proof, bond or outbox is
+rewritten, and the mutation/readback/withdrawal paths retain their prior rules.
+
+A modern reader can make one legacy query only when an authenticated pinned
+connection closes before any reply bytes. Refused/busy/invalid signatures or
+malformed/partial/oversized frames never downgrade. TLS, full identity and owner
+checks remain on the second read, under the existing shared45-second budget.
+This supports legacy volume hosts and the intermediate camera-capable host that
+predates the version field. A versioned-context NoResponse is a local transport
+result, not a new wire grant or advertised capability.
+
+Full355 node unit tests pass with zero failures/ignored/filtered, including real
+authenticated QUIC old/new/transitional read paths, legacy volume admission on a
+modern camera host, revocation and no unsafe fallback. Exact legacy operation
+bytes and version/signature binding are checked. Workspace/all-target/all-feature
+clippy with warnings denied, format and foundation are checked separately in the
+private audit. The first network fixture fails its immediate port-rebind check:
+Quinn's detached endpoint driver can retain its socket after wait_idle/drop. The
+corrected fixture waits within3seconds for actual socket rebind, with no changed
+product deadline or waived cleanup assertion. Original failure remains separate.
+
+No Kotlin/UI, dependency, lockfile, release version, actual phone/Pi or account/
+media changes. Prior265 JVM/14 UI checks describe the previous normal APK; no
+new APK/native platform bundle is claimed here. The next platform pin/build must
+use this exact committed public source. Physical old-APK/roaming/import/cloud,
+remaining headless settings, signed updates/recovery and gold-image acceptance
+remain open. Older b5d7159 hosted CI passes foundation/Rust/macOS/dependency work
+but container scans report go-jose security findings; its Android job is tracked
+separately. Private7c9bddd CI passes Linux/root-camera work then fails owner UI
+behind a System UI ANR dialog. Original failures are retained; no reset, dismissal,
+waiver or speculative cause is claimed. No release or merge.
+
+# Signed camera review in Interlink — 2026-11-01
+
+Adds canonical schema2 camera approvals/withdrawals with separate signing domains;
+legacy volume schema1 bytes, domains and durable outbox records remain unchanged.
+Strict modern context reports independent camera/volume journals and availability,
+plus explicit remember capability. Camera-only hosts work without volumes. An
+unstable camera can import once per connection; an inert checkbox is replaced
+with a clear explanation. Stable sources require explicit remember consent;
+drive review discloses the identification file. Pending work blocks its own
+service kind. Saved pauses must match the complete bond and kind.
+
+The existing separate Interlink link mark, serif name, adaptive/monochrome icon,
+MaterialExpressiveTheme, dynamic colours and expressive motion remain canonical.
+Normal debug/native-producer package verification passes (52,464,088B). All265
+Android JVM tests and14 native API36 component tests pass, zero failures/skips;
+large camera text keeps the reason, original-retention note and actions reachable.
+Core179/node349 tests pass with denied-warning workspace/all-target/all-feature
+clippy, format and foundation. Real authenticated QUIC tests cover both kinds,
+lost replies/readback and no replay. The public camera proof fixture has real
+Ed25519 signatures from a pinned synthetic signer; its private keys were never
+saved. The alert harness derives all23 current test names and refuses missing,
+unexpected, duplicate, skipped or failed results; three parser/ownership tests pass.
+The complete API37 alert journey has not been rerun for this camera stage.
+
+Actual example-data PNGs live once in docs/brand/interlink-camera-*.png. Normal
+Application, app ID and native producers are retained; no visual-only manifest
+or production signing substitution. The same guest boot/framework identities
+and1.0x animations remain, and font/night restore is verified. Two initial UI
+preflight attempts reject an unset animator setting; that owned guest's default
+is made explicit at1.0x for the final run, then restored during cleanup. A shared
+ADB discovery stall is preserved in diagnostics; a separate owned server avoids
+mDNS auto-connect without restarting shared services. The original Android root
+fixture compile-name collision and corrected37-check pass remain distinct in the
+private audit.
+
+The private Pi bridge still needs its matching native pin/build qualification.
+Mixed old readers refuse context2; coordinated upgrade acceptance is required.
+No phone/Pi install, real USB/camera import, cloud confirmation/deletion, production
+signed release, merge, ROM/flash or gold-image acceptance is claimed. Full cards
+larger than free Pi space still require a future batching/confirmed-cleanup design.
+
+# Native Interlink drive confirmations — 2026-11-01
+
+Previous turn was progress: public6d7bd47 and privatef286162 were signed/pushed/
+verified with separate transport and native root evidence. Current companion
+connects strict API models/client, fresh source-bound review, once/explicit
+remember/pause and saved result/check/withdraw controls. A new source defaults
+to once; an already remembered source keeps its saved choice. Double submission,
+stale source/owner/selection, malformed data and foreign identities refuse.
+Offline request history is labelled and disabled. Polling is foreground only;
+background alerts, camera parity and remaining headless settings remain.
+
+A discovered recovery bug is fixed in the shared outbox: unknown old-bond requests
+could block a newly approved controller forever, especially after the old card
+disappeared. Fresh context must prove the complete new root/native bond. Only
+same-bond uncertainty blocks a new once/remember; old outcomes stay unknown and
+cannot execute again. Bounded pruning may retire old non-executable history for
+that same Pi without fabricating acknowledgement. Current-bond protection stays.
+Actual QUIC revoke/reapprove/late-proof and bounded-history tests cover this.
+
+Full node345/0 and JVM250/0 tests pass, zero ignored/filtered. Workspace/all-target/
+all-feature clippy passes with warnings denied. Final API36 native UI:10/0 in
+17.719s; normal-manifest companion lint:0 errors/11 existing warnings. Foundation
+and65-operation/484-reference/128-client-call contract pass. Final light and
+dark200% confirmation captures live once in docs/brand; boot/system-server/
+surface-flinger identities and1.0x animations remain unchanged. Font/night are
+restored. Complete native producers were omitted only in the separate preview
+APK; normal production package/worker/startup gates remain. Final source/preview/
+cleanup evidence is in the private platform audit. The first JVM attempt lacked
+SDK environment; the next caught offline
+history during a pending-state edit, then the final250 pass. Initial UI capture
+was too wordy; the polished confirmation keeps source/destination/counts/space
+and moves the raw path behind Folder details. Source data and Google backup
+claims stay distinct. No new dependency, lockfile, version, physical install,
+release/merge or gold claim. See docs/interlink-imports.md.
+
+# Phone import transport and durable pending requests — 2026-11-01
+
+Adds an optional fixed native import host, strict context/receipt models and
+owner-gated signed QUIC operations. Five local authenticated API operations
+provide context, one confirmed send, saved requests, readback and withdrawal.
+The outbox persists proof/source before network mutation; duplicates/restart
+never dispatch again. A distinct withdrawal signature prevents reusing approval
+as cancellation. Later acknowledged pause can supersede uncertain older work
+for that source. Unsafe/missing/changed state refuses without reset; sync remains
+available. No address or Pi token is saved. See appliance-import-transport.md.
+
+Verification: full core177/0 and node343/0 tests (zero ignored/filtered), including
+real pinned QUIC and durable restart/lost-reply/withdrawal cases. Workspace,
+all-target/all-feature clippy passes with warnings denied; format and foundation
+pass (65 API operations/484 references). No dependency/version/lockfile changes.
+The original compile failures and corrected runs remain separate in the private
+task audit. Test UDP endpoints explicitly close and rebind after each test.
+
+Android UI/client integration, actual Pi adapter/native/package qualification,
+full phone/Pi roaming/import/cloud and gold-image gates remain. The private Pi
+bridge is being extended coherently; no device/app install or release is claimed.
+Existing Interlink independent identity/Material Expressive theme stays intact.
+
+# Signed phone import choice contract — 2026-11-01
+
+Added covalent-core::appliance_import: canonical, bounded once/remember/off volume
+choices signed with the actual DeviceIdentity and a separate domain. The proof
+binds full phone/Pi keys, root/native generations, action/session/sequence,
+source hash and exact attachment/preview. Only retain-originals is representable.
+Strict dalek verification rejects weak keys, malformed/noncanonical signatures,
+changed owners/generations/tuples and ambiguous/missing/duplicate JSON. Existing
+ordinary identity verification is unchanged; signing_message is crate-visible
+so the new verifier uses the exact existing framing implementation.
+
+All176 core unit tests pass (zero ignored/filtered), including6 new adversarial
+contract tests. Core lib/tests clippy passes with denied warnings; whole-workspace
+format passes. An initial clippy invocation selected Homebrew's driver despite
+pinned rustc, causing E0514; rerun with the matching toolchain PATH passes without
+purging caches or weakening checks. No dependency/version/lockfile change.
+
+This is a shared primitive, not a new remote operation or permission. Expected
+bond must come from privileged owner-approved private state, followed by locked
+revocation/preview/ledger admission. Phone transport/outbox and the Pi root mirror
+remain to be connected. No capability flag is enabled, device state changed,
+release/merge or gold claim. See docs/appliance-import-approval.md. Bounded audit
+and disposable task cleanup are retained in the private Interlink checkout.
+
+# Owner-bonded Pi platform observations — 2026-10-31
+
+Interlink now reads cached card/drive previews, protected Pi space and signed
+update readiness through the existing pinned, signed owner-control channel.
+The card displays source/destination, partial/unknown/cached counts and saved
+settings distinctly. Old counts disappear on lost services, changed bonds or
+new Pi selection. Camera sizes remain unknown. Cached observations never grant
+import, update-change, cleanup or deletion authority. No mutating operation is
+introduced; attachment-bound once/remember confirmation is the next control gap.
+
+NodeRuntimeConfig has an explicit optional async native reader. Ordinary nodes
+are unsupported. Before/after full owner checks, one read permit and bounded
+host futures prevent stale disclosure/overlap. The Pi adapter uses a fixed local
+root-peer-verified socket,32KiB bound and whole-response deadline. The root host
+projects existing service state and permits the shell UID only that exact read.
+No token, auth URL, raw error, arbitrary path or source filename is returned.
+See docs/appliance-platform.md and the OpenAPI60-route contract.
+
+Final local proof: full node336/0 in97.53s, zero ignored/filtered; workspace/all-
+target/all-feature clippy with denied warnings; Android JVM241/0; five native
+API36 UI tests in9.961s, including200%text partial/unknown details; frozen lint
+has0 errors/11 warnings. Foundation passes:60 operations,445 references and123
+verb-checked client call sites. Pi projection has40 checks on host JVM and
+Android36; their exact JSON matches the Rust/Kotlin fixture. Three real Unix
+socket tests pass, including peer credentials and a7second dripping-response
+limit. These do not establish a real Android privileged broker or physical Pi.
+
+The new native storage screenshot is canonical once in docs/brand. The visual
+APK uses a separate preview identity, generic Application and omitted native
+producers. It proves rendering/component behavior, not full native companion
+packaging/startup or real pairing/import/cloud acceptance. Normal gates remain.
+The owned guest boot/framework identities remain unchanged. Test apps/AVD/data/
+registration/ports are removed after capture; shared ADB and SDKs remain.
+
+The first Rust test compile catches a fixture borrow conflict, then passes.
+A temporary adapter harness first overpins an uncached Rustix version, then its
+Mac socket paths exceed AF_UNIX limits. It now reuses exact workspace lock
+versions and relative fixture paths without changing global working directory.
+All attempts remain distinct in private audit2026-10-31-platform-snapshot.
+Actual native bridge/frame behavior is never inferred from a compilation alone.
+
+## Earlier owner-comparison iteration
+
+# Interlink comparison before owner approval — 2026-10-31
+
+The approval-required dashboard now displays this phone and the selected Pi's
+comparison fingerprints; connected status hides them. Full keys remain the
+identity checks. The isolated debug preview uses matching synthetic identities
+with the private Pi owner-approval fixture. No production node, package, phone
+or Pi was installed/approved during this iteration.
+
+Three final API36 native component tests pass in6.677s: both comparison labels
+and their removal, connection-loss/stale-running removal, and200%text actions.
+Frozen companion lint and test-source compilation pass; normal native/package
+gates are untouched. This Android UI-only change does not alter Rust, worker or
+cryptographic transport inputs. Prior JVM237/0 is its earlier run, not rerun.
+Actual screenshot: docs/brand/interlink-owner-approval.png. The visual fixture
+uses a generic Application and omits native producers, as documented below.
+
+At64846fe hostedCI41251837350 passes foundation, Rust/contracts, dependency delta,
+Mac bundle and Mac integration/UI. Both container vulnerability scans fail;
+API37 is still running at this checkpoint. No manual rerun or scan exemption.
+Private Pi source now provides local explicit owner approval and revocation;
+real upgrade/approval, mutating controls, drive consent and roaming remain gates.
+Bound test/source/signature/cleanup evidence is retained in the private platform
+audit artifacts/validation/2026-10-31-controller-approval. The temporary fixture
+packages and owned emulator/AVD are removed after capture, preserving shared ADB.
+
+## Earlier selected-Pi dashboard iteration
+
+Interlink now calls the existing authenticated read-only controller/status APIs.
+An explicit choice stores the phone and Pi full paired keys, display name and
+last confirmed bond generation in credential-encrypted storage. Selection never
+silently chooses a discovered address, changes pairings or grants Pi authority.
+Confirmation rereads current full pairing; saved-choice CAS/readback prevents a
+late status from replacing a newer choice or publishing connected for it.
+Missing/damaged/future saved state never becomes empty setup. First run waits
+for explicit phone-node setup; disabled/offline/refused routes retain the Pi.
+
+The native header card distinguishes checking, connected, phone/Pi unavailable,
+owner approval, changed/revoked identity, unsupported control and saved-state
+attention. Pi service health is distinct from control reachability. No transfer
+completion or Google Photos backup/deletion claim is inferred. Visible polling
+is lifecycle-bound/serialized, with manual refresh, and installs no new service.
+Read bodies are bounded and refuse redirects; raw server messages stay out of UI.
+The existing photo-link setup remains below, with no migration/retarget of links.
+See docs/interlink-dashboard.md for the exact boundaries and remaining control work.
+
+Full Android JVM237/0 includes11 new control/selection tests. Two final native
+API36 Compose component tests pass on one unchanged emulator framework in4.496s:
+connection-loss/stale-running removal, service-unavailable separation and200%font
+reachable/disabled actions. Light/dark/unavailable/large-text actual previews use
+synthetic data and live canonically in docs/brand. The separate visual APK uses
+an isolated generic Application with native producers omitted; this establishes
+UI behavior, not real node startup/pairing, production signing or native release
+packaging. Normal package/producer gates remain unchanged. Frozen companion
+lintDebug has0 errors/11 existing warning categories. Foundation and OpenAPI
+coverage pass:59 runtime operations,433 references and122 client call sites.
+
+Initial lint attempts overlap source construction and fail in Kotlin FIR/UAST
+analysis. Full test-source compilation plus stable-source lint passes, including
+one final frozen-source run. The first emulator process terminates before boot
+because AVD manager registers inside task ANDROID_USER_HOME/avd. Pointing the
+same AVD launch at that observed registry boots normally. No observation timeout
+causes a restart. The successful guest boot/system_server/surfaceflinger identities
+stay unchanged through instrumentation and all captures. Failures and corrections
+are retained distinctly, not relabelled as passes.
+
+Prior697364c hostedCI41249267431 is terminal: Rust/contracts, Android foundation,
+dependency delta, Mac bundle and Mac integration/UI pass. Its full maintained-
+worker suite passes9/0, zero ignored/filtered, in1202.36s. API37 stops before
+instrumentation: dumpsys window has no SnapshotCache Task block, so the guest
+snapshot switch cannot be verified/called. Both container contracts pass before
+strict Caddy go-jose High scan refusal. These are open acceptance gates; no
+manual rerun, snapshot bypass, scan exemption or billing change is made.
+Rust/Cargo/Go inputs are unchanged by this Android-only feature. No fresh Rust/
+worker/native-device result is inferred; earlier qualified runtime evidence keeps
+its own exact source boundary.
+
+No phone/Pi access or production mutation. Preview/test packages, APKs and owned
+Interlink_Dashboard_36_32899 AVD/data/registration are removed. Emulator39248 and
+netsimd39284 exit normally; boot25d1cb29-8a64-4b85-b02d-fd0a6d853fad stays stable.
+CleanOS interlink-bonded-dashboard-1793487630376507000-32899-0 owns remaining
+compiler/log resources until closeout. Final evidence, source pin/readback and
+cleanup follow privately. Shared ADB76421/5037, SDKs/caches/source/keys, other
+active work and prior migration candidate stay protected. Goal remains active
+for Pi owner setup, privileged settings/import confirmation, route roaming,
+hosted/security/base gates, signed migration/rollback, cloud proof and gold image.
+
+# Safe destination changes and Interlink identity — 2026-10-31
+
+Destination changes now refuse retained unconfirmed-copy proof during consent
+preflight, after exact worker reap and at actual policy reset. Renewing the same
+root keeps the evidence. A late pre-commit refusal reconciles unchanged consent
+instead of unnecessarily leaving that configuration stopped. Private policy
+opens are nonblocking and reject writerless FIFOs. This grants no overwrite,
+adoption, cloud confirmation or deletion authority.
+
+The specific 409 folder_sync_recovery_required contract guarantees the proposed
+root was never committed. Android durably drops only the matching proposal on
+that explicit protocol1/nonretryable response; uncertain outcomes, old contracts,
+failed saves and already-committed reset intents remain replayable. Root guards
+preserve policy bytes, original media and other folders' proof. Owner review
+and explicit resolution are still unfinished.
+
+Interlink now has its own vector link mark, adaptive/themed icons, native
+MaterialExpressiveTheme/MotionScheme, coherent older-Android light/dark roles,
+dynamic colours on Android12+, and a serif wordmark without Back. Actual native
+light/dark/200%-font previews use synthetic saved/offline Pictures data and are
+retained canonically in docs/brand. This visual-only fixture omits native
+producers under a temporary manifest/application identity; it is not runtime,
+pairing, production signing or release-package acceptance. Normal companion
+producer/package gates remain intact. Shared notification branding remains
+future work; see docs/brand/README.md for scope and official design references.
+
+Final node331/0, Android JVM226/0, Swift error-copy14/0, console92/0, denied-warning
+workspace/all-target/all-feature clippy, Android26 ARM64 node/JNI, foundation and
+OpenAPI route checks pass. Companion lintDebug has0 errors/11 warnings (dependency,
+obsolete-SDK and unused-resource notices). The root regression fails unchanged
+2e5dc0a at its intended safety assertion. The real-worker acknowledgement-loss/
+collision/root-refusal/restart case passes on the final runtime in42.20s.
+An earlier full nine-case guard run passes9/0 in1179.69s. The final full nine-case
+run is still executing at this commit after the added precommit/committed-reset
+distinction and explicit-busy setup fix; its terminal source-bound receipt will
+be retained with the appliance audit and PR metadata. Original60s file assertions,
+two-test concurrency and the real15minute scheduled transfer remain unchanged.
+
+Hosted 2e5dc0a CI41244102155 is terminal: worker8/1 fails an explicitly retryable
+503 on POST /sync/folders, so the test setup now uses the existing bounded exact-
+request retry for that route too. Android unit copy coverage fails the missing
+invalid_request mapping now fixed here; API37 stops before instrumentation when
+that prerequisite fails. SharedRust, dependency delta and Mac bundle pass.
+Container contracts pass before Caddy's go-jose High advisory refusal. CodeQL is
+a separate successful run41244102185. No release-ready or fresh hosted-pass
+claim follows these local fixes; no scan exemption or manual rerun is made.
+
+Solstice stays away; no phone/Pi access, account, pairing, originals, network,
+installed services, updater, release or gold image changed. UI AVD
+Interlink_UI_36_94259, emulator5596, preview app/data and temporary APK have been
+removed and independently checked. CleanOS task
+gphoto-destination-proof-guard-1793483003145301000-94259-0 owns remaining compiler/
+worker/log resources until full checks finish; final cleanup, signed source pin,
+adapted native checking and bounded receipts follow privately. Shared ADB76421,
+SDKs/caches, signing keys, other active work and the prior migration candidate
+remain protected. Goal stays active for owner controls/import confirmations,
+roaming, hosted/security gates, migration/cloud and physical-image acceptance.
+
+# Console recovery request copy — 2026-10-31
+
+Hosted b195719 CI41243265310 passes foundation, formatting, strict clippy,
+full all-feature workspace tests and smoke, then refuses the missing console
+message for the new invalid_request code. Added a reload instruction to the
+existing authored error catalog. All92 console tests pass locally; the same
+existing coverage test fails on unchanged b195719 before the entry is added.
+This follow-up changes no Rust, API, worker, policy or authority byte. It is a
+console message fix, not a device/UI journey or production acceptance.
+
+Below records the runtime qualification. The first task is fully cleaned;
+small follow-up CleanOS gphoto-recovery-console-copy-1793482298507956000-85466-0
+owns console test logs/tmp and exact source-preparation checking until closeout.
+Final source pin, cleanup/evidence and PR readback are retained privately. No
+phone/Pi access or installation. Root-reset proof preservation, owner review,
+current hosted gates and the remaining PRD acceptance remain open.
+
+# Unconfirmed-copy isolation — 2026-10-31
+
+Hosted a7d5788 run41236588580 supplied a contrary collection witness: seven
+worker cases passed, one deletion barrier failed after an unacknowledged copy
+left the destination requiring recovery. The local eight-case pass remains
+valid only for its own run. The destination now holds uncertain unowned paths
+and independent local-file collisions while unrelated new files can advance.
+Full admitted source proofs remain unchanged; held files never acquire deletion
+ownership from later success. The whole link remains incomplete. Restore
+permission releases a hold only when the destination is absent. See
+docs/unconfirmed-copy-recovery.md for safety, API and rollback boundaries.
+
+A local-authenticated read-only recovery endpoint reports bounded redacted
+counts, with null observations when unavailable. It runs metadata reads outside
+the lifecycle lock and preserves admission through cancellation. No companion
+review/mutation, overwrite approval or cloud confirmation is implemented here.
+Two pinned Unicode libraries provide conservative case/normalization holds;
+all pre-existing dependency resolutions remain unchanged.
+Existing explicit destination-root replacement resets folder policy. A hold-safe
+archive/refusal and owner review remain required before any production install;
+never use root repair/reset as an unconfirmed-copy bypass.
+
+Final full node suite:325 passed. Dependency advisories, bans, licenses and
+sources pass. Android26 ARM64 node/JNI checking and foundation pass. Focused
+real-worker recovery/restart case passes and fails on a7d5788 as expected. Full
+nine-case concurrent transfer suite passes9/0,0 ignored/filtered in1180.77s, at
+two-test concurrency, original60s file deadlines and the real fifteen-minute
+schedule. Final strict clippy and actual receive-only Pi-adapted lib/native-entry
+check pass with exact8 modifications/4 generated files and two existing entry
+warnings. The48,709,632B owned source cache is independently removed. OpenAPI
+routes and pinned lint pass. No linked/signed bundle or device install is claimed.
+
+The same hosted run passes every named Covalent API37 instrumentation test
+(86 baseline plus the real SAF journey), then Interlink's separate permission
+journey fails at ADB input with a broken pipe. Both container package contracts
+pass before the Caddy go-jose High advisory refusal. These are still open gates;
+no suppression, automatic rerun or production-ready claim is made.
+
+Solstice is away. No phone/Pi connection, production install, account, pairing,
+original media, release or gold image changed this iteration. CleanOS task
+gphoto-uncertain-copy-progress-1793478524895342000-61124-0 owns current temporary
+builds, real worker and fixtures. Its Go SDK/archive are already removed; active
+Rust/worker resources remain until checks finish. Shared ADB76421/5037, stopped
+Colima, SDKs, keys and previous migration candidate are preserved. Final source
+pin, evidence, cleanup and draft PR readback follow successful qualification.
+
+# Independent continuous fanout — 2026-10-31
+
+Draft separates continuous destination generations while preserving pending
+writers' immutable proof/deadline. Source-only retained state is bounded to one
+entry per destination, with one preparing inventory. Per-peer commits/reports,
+expiry, restart, member revocation, settings cancellation and aggregate summaries
+are handled together. Settings cancellation restores the common generation used
+by manual/scheduled clients. Receiver wire fields remain unchanged. Old source
+rollback refuses retained state; do not strip journals to bypass that refusal.
+Only complete unchanged source authorization permits generation-only server reuse.
+
+Both new regressions fail on prior5747776 at the intended boundary. Focused
+candidate worker test passes two post-inventory edits while a peer is offline,
+unchanged source-server receipt, source reopen/returning-peer catchup and original
+preservation.318 full node tests, full strict clippy and foundation pass. A test
+fixture's mistaken member-only pause assumption was corrected to member removal;
+its earlier317/1 failure is retained. Final full eight-case worker concurrency,
+Android26 ARM64 production node/JNI checking passes; actual Pi adaptation checking is pending. Original
+file deadlines/concurrency and real fifteen-minute scheduled test remain enabled.
+
+Prior hosted41234049724 is terminal: real-worker6/1 fails online fanout;
+both full image/package contracts pass before strict Caddy go-jose High refusal;
+API37 fails at emulator startup missing the settings service, before application
+admission diagnostics. Older generation0 Manual Run Now failure remains separate.
+See docs/sync-runtime-progress.md. No new dependency or advisory suppression.
+
+Solstice is away and ADB inventory is empty. No physical-device, production,
+account, pairing, media, release or gold-image change. CleanOS task
+ gphoto-independent-fanout-1793475630128666000-35596-0 owns the temporary builds,
+worker, fixtures and logs. Go SDK/archive removed after exact worker rebuild;
+remaining compiler/worker resources stay needed for running checks. Shared ADB
+76421/5037, stopped Colima, SDKs, signing keys and old migration candidate remain
+preserved. Final evidence, cleanup, source pin and PR readback follow this stage.
+
+# Receiver-copy progress and remaining batch stalls — 2026-10-31
+
+Functional source53d1004147ccee0ebcdfb4076455d8cd0f27bd89 preserves unchanged
+receiving jobs across destination-only configuration/generation updates, holding
+their exact runtime/root/SAF/worker leases. Active root, peer, policy or generation
+changes retain the stop boundary; source authorization still replaces its
+read-only SFTP server. Finished work wakes the existing service without starving
+independent health probes. Active jobs own atomic policy staging; every fresh
+copy retains strict policy validation. SAF reservations unwind on prepare errors,
+avoid double counting within a runtime and remain counted across overlapping
+runtimes. No new dependency, process or persistent schema is introduced.
+
+Android settings reuses the exact request/change ID only after an explicitly
+typed retryable503 busy refusal, with bounded backoff. Unknown responses are not
+replayed. Harness acceptance/settings uses that same protocol contract; original
+file deadlines/concurrency remain.316 node tests,223 actual Android JVM tests,
+full all-target/all-feature clippy, foundation, Android26 ARM64 production node/
+JNI and the actual Pi adaptation library/native-entry check pass. No APK or
+production bundle is linked/installed as acceptance; generated-entry warnings
+remain. Worker tree9eec016c4843e1d82167cbb932e356ab030adb12 and Mac workerf68c6ae
+are unchanged from the qualified worker refresh.
+
+Full seven-case worker run:6 pass,1 fail (collection deletion barrier),0 ignored,
+0 filtered. Real15minute scheduled transfer and natural worker shutdown pass.
+A separate paired run passes collection/remount/permission recovery but fails
+online fanout after the other destination stops. That contrary witness remains
+open even though fanout passes in the complete run. The source owns one active
+folder batch: stale-index failure at an online destination cannot get a fresh
+inventory while another destination stays pending. No journal erase, forced peer
+completion, longer file deadline or serial-only acceptance is used. The first
+wake-only candidate also exposed an unrelated-copy restart and retryable-busy
+fixture failure; its already-failed remainder was explicitly cancelled, not
+claimed passed. Temporary timing traces are fully removed. Baseline remount
+arrived at60876ms after a60000ms deadline; it remains failed.
+
+Prior hosted CI41228352491 on1778cf9 builds/validates both container packages,
+then strict Grype rejects go-josev3.0.5/v4.1.4 in Caddy for GHSA-mgcc-cww5-fp2q.
+No suppression or source-provenance weakening. API37 passes86 baseline tests,
+then the actual SAF Manual Run Now journey fails with both nodes at generation0
+and no pending request. This differs from the older missing-service error.
+New bounded saved-request/button-state diagnostics compile; no local device
+execution or assumed click-race fix is claimed. See docs/sync-runtime-progress.md
+and artifacts/evidence/sync-concurrency/ for exact scope and remaining work.
+
+No phone/Pi access, production installation, media/account/pairing mutation,
+merge, signed release or gold-image claim. Solstice stays outside this work.
+Next: isolate source fanout generations without disturbing pending writers;
+resolve concurrent collection timing and Android manual admission; fix Caddy's
+separate container gate; then continue companion owner/import controls and
+hardware/migration/cloud/gold acceptance. Preserve old journals and originals.
+
+# Maintained worker and concurrent-sync qualification — 2026-10-31
+
+Updated chi5.3.1→5.4.0 and x/net0.60→0.62 (MVS crypto0.58 plus
+related x modules), all four module-digest consumers and every macOS binary/
+notice/signing verifier together. Exact Go1.26.10 worker tree is
+9eec016c4843e1d82167cbb932e356ab030adb12. Actual macOS ARM64 and Android26
+ARM64/x64 workers build with full target notices and provenance. Mac packaging,
+ad-hoc signing and repeated byte-identical builds pass. Full node library:
+312 passed; denied-warning clippy, foundation, workflow and collector contracts pass.
+
+Strict source govulncheck1.9.0 reports zero vulnerable imported packages/calls.
+One required-module advisory, GO-2026-5932, concerns OpenPGP code absent from all
+three exact compiled target graphs; no suppression. Stripped binary scans fall
+back to possible module-level symbols and are not misreported as executed-code
+findings or as clean scans. Sanitized hashes and scope: artifacts/evidence/worker-security/.
+
+Previous CI41221509985 passes shared Rust/security, Android foundation and both
+Mac gates. Both container images build but the final guard refuses a stale
+packaged-evidence reference. Regenerated canonical references with the production
+collector, first reproducing every old sealed field exactly; unchanged Caddy/
+Go stage inputs justify preserving their installed-database digests. Added an
+early source/reference hash check. Full exact-current image gates remain required.
+The API37 emulator reaches Interlink permission recovery, then adb reports
+missing-service/exit20 on input tap; no cause or passing acceptance is inferred.
+
+Executed all seven maintained-worker cases: five pass, collection/remount and
+three-node delivery fail under two-test concurrency. Both failing scenarios pass
+separately on the final worker. A paired final-worker reproduction still fails
+(initial transfer and mount return); fresh status shows running batches with
+pending destinations at the original sixty-second file deadline. Cause remains
+open. Added bounded failure status snapshots and the existing redacted error
+sink to the test helper, retaining waits/assertions, and added the complete
+seven-case gate to CI. No serialization, filtered passing acceptance, retry mask,
+production shutdown rewrite or journal deletion is applied.
+
+The scheduled case intentionally waits a real fifteen minutes and passed in the
+full run. An additional redundant diagnostic was cancelled after discovering
+that cadence, without a successful result claim. Stack sampling established no
+shutdown deadlock. Temporary shutdown instrumentation was removed.
+
+No phone access, production installation, media/account/pairing change or release.
+The private appliance source may advance after published source identity and
+adaptation checking; gold/physical/cloud confirmation gates remain open.
+Task-owned SDK/builds/fixtures are tracked privately and cleaned after this stage.
+
+# Runtime provenance follow-up — 2026-10-31
+
+Exact-head hosted CI41220252198 passed the new Python package resolution and
+BusyBox compilation/wire checks, then refused Alpine runtime evidence because
+the OpenSSL upgrade also selected musl1.2.5-r24 while the source lock described r23.
+The strict guard is preserved. Runtime now explicitly pins both musl and its
+utilities to r24, with installed-version assertions and the complete corresponding
+aports tree fd05fc094264bce4fb76efc6c7f61ba4abfcb609. The reviewed recipe adds
+CVE-2026-6042/CVE-2026-107891 inputs and replaces the older iconv patch input.
+Every recipe Git blob, APKBUILD SHA512, tree digest and source/notice bound is
+checked; unrelated origin records are unchanged.
+
+Actual disposable containers assert their APK architectures for arm64 and amd64.
+All non-BusyBox runtime package metadata matches the lock, accounting explicitly
+for the image's documented removal of apk-tools/libapk/zlib. Local BusyBox
+replacement is excluded from this base-stage comparison; full image acceptance
+remains hosted work. Full source/notice/bundle collection passes using real
+hash-locked sources and explicitly synthetic installed/builder databases.
+This qualifies source packaging, not actual final-image installation. Collector,
+verifier and container-contract tests pass. Rust source/Cargo/toolchain inputs are
+byte-identical to3ebbecf, whose full suite/clippy/Android checks already passed;
+no duplicate Rust rebuild is needed for this container-only follow-up.
+
+Six default-branch Go alerts select already-patched OpenTelemetry minimums on
+this branch. The remaining worker go-chi/chi v5.3.1 alert GHSA-j6qf-3m9c-vwj3
+needs its own reviewed5.4.0 dependency/source-digest refresh and worker validation.
+No route-reachability exemption or alert dismissal is applied. Solstice remains
+offline; no device changes occur.
+
+# Appliance build security refresh — 2026-10-31
+
+Updated the Tokio dependency floor and lock from1.53.1 to1.53.3 for
+RUSTSEC-2026-0386. No workspace AsyncFd call sites exist; no unsafe code or
+advisory suppression is added. Other lockfile entries/edges are unchanged.
+Alpine builder/test stages now pin Python3.12.16-r0 with its matching runtime
+assertion. The standalone BusyBox builder also uses the shipping builder's
+OpenSSL3.5.9-r0. Existing source verification, notices and runtime gates remain.
+
+Replaced the audit-check publisher with checksum-pinned native cargo-audit0.22.2,
+using the same read-only permissions for every PR, including forks. Strict audit
+warnings, failed downloads/checksums/version checks and cargo-deny remain fatal.
+No Check API token or permission escalation is required.
+
+Validation: full all-feature workspace tests pass, including312 node library
+tests and actual local QUIC transfer/deduplication tests. Seven maintained-worker
+integration tests are explicitly ignored; not claimed executed. Full workspace
+all-target/all-feature clippy with warnings denied, formatting, foundation,
+workflow lint and Android26 ARM64 node/JNI library checks pass. cargo-audit0.22.2
+rejects the old lock for the exact Tokio advisory and accepts the new lock;
+cargo-deny0.20.2 advisories/bans/licenses/sources passes with its configured
+non-fatal duplicate-version warnings. Twelve exact build packages resolve and
+Python's version assertion passes in disposable containers requested for both
+linux/arm64 and linux/amd64. The Linux audit archive's checksum, member extraction
+and static x86-64 ELF are independently verified; execution here uses the official
+macOS build. Sanitized input/test bindings: artifacts/evidence/security-refresh/.
+
+No phone access, device change, signed release, full container image acceptance
+or gold-image acceptance. Hosted exact-head CI remains the release boundary.
+Task containers and pulled image are removed and independently absent, and the
+pre-existing Colima VM is restored stopped with its images/containers preserved.
+Compiler scratch stays active only through ROM source-pin/adaptation checking;
+cleanup evidence is maintained by the private appliance workspace.
+
+# Appliance controller bond and signed read-only status — 2026-10-31
+
+Added a separate local-owner controller bond and covalent-appliance/1 transport
+on the existing QUIC endpoint. Sync pairing alone does not grant control. The
+owner approves a full paired public identity with a generation; replacement
+requires revocation. Exact grant retries are idempotent, stale consent cannot
+reinstate authority, and peer revocation immediately blocks control. Private
+atomic state and an exclusive lifetime lock refuse damaged/aliased/special
+records and duplicate stores. Missing nullable fields fail closed.
+
+The local bearer API can grant/revoke a bond and request the paired appliance's
+signed, redacted sync status. Requests remain loopback-only, bounded to4KiB;
+the remote wire uses pinned TLS, signatures, freshness, replay admission and
+identity-bound replies. No remote mutation, root IPC access, source deletion or
+cloud-backup claim is introduced. Reuses current dependencies, endpoint and
+stream admission; no extra APK/service/thread is added.
+
+Validation: lint with warnings denied;312 full native-node host tests; Android26
+ARM64 production check and test build;9 selected security/API/actual-QUIC tests
+on the physical Android36 Pi5. Both current-source host and Pi tests pass. API
+coverage matches58 operations and428 references; isolated route fixtures also
+cover a non-versioned path after an API path. The checker no longer assigns
+that path's method to the preceding API. Test source bindings and a sanitized
+receipt are in artifacts/evidence/appliance-control/.
+
+Recovery follow-up keeps the controller on its dedicated protocol even when the
+folder service is absent. Owner status remains authenticated, reports unavailable
+sync with an explicit null record count, and refuses contradictory signed data.
+Schema cases and actual Pi dispatch exercise this boundary. Core node/identity
+startup failure and independent privileged host control remain separate gaps.
+
+The canonical local workspace preserves the latest existing companion adaptive
+work (base4a89c2f). Its Rust/Cargo inputs matched Pi-pinned1e549763 before this
+change. Original synced work is preserved. Temporary physical test data, binary,
+ports, Ethernet configuration and connections are removed and verified. Task
+scratch ownership and final cleanup are recorded in the private appliance workspace.
+A mixed Homebrew/rustup compiler
+cache was discarded only within task scratch; final checks use one pinned
+rustup1.97.1 toolchain. Shared toolchains/caches are retained.
+
+The installed Pi is unchanged0.2.3; no phone access, app installation, production
+restart, migration or release. Local owner approval UI, companion dashboard,
+privileged settings/feature controls, attachment/preview-bound import consent,
+camera previews, roaming and booted upgrade/recovery remain open. Do not widen
+root IPC permissions based on an ordinary sync grant or this native status bond.
+See docs/appliance-control.md for the exact read-only boundary.
+
+---
+
 # Adaptive companion status and home screen — 2026-10-21
 
 Software-first UI milestone: a retained manual/paused photo link stays configured
@@ -796,3 +1552,74 @@ Next: safe Pictures journal recovery, full-folder completion, phone-to-Pi
 nearby discovery and cellular handoff, plus the separate GPhoto OS acceptance
 gates. Preserve originals and account/pairing state. No Pi drive was flashed
 as part of this Covalent release.
+
+
+# Normal Interlink startup and release entrypoints — 2026-11-01
+
+The full normal companion, including both native JNI/worker/guardian producers,
+passes debug/minified release/AAB/SBOM/lint/package gates and 250 JVM tests in
+530.456s. APK sources remain c3f1ba0; this iteration changes release validation.
+The release checker now admits only the real Interlink Application/launcher and
+refuses a preview component. All 29 policy tests and actual SDK 36/37 disposable
+signing smokes pass;11 invalid entrypoint variants failed against the old gate.
+The normal debug APK 231001c0df5f7a027252257f6e1553a1960f916390426dea3b1557df57c01a00
+passes fresh first-run opt-in, both API37 permission recovery routes, one actual
+reboot with automatic foreground-host/native readiness without opening its
+Activity (20.912s stable), and 15 native component tests. Device/TLS/key-envelope
+hashes and APK/UID survive reboot. Canonical first-run screenshot is in docs/brand.
+These are unpaired local ARM64/4-KiB-page checks, not physical/cloud acceptance.
+Hosted c3f1ba0 CI41289561149 remains failed: general Covalent baseline85/86,
+Back-navigation focus failure; both container image scans also fail. Private
+b695b75 CI41290102402 passes both jobs. Nothing is waived or promoted. Details,
+exact scope and cleanup: docs/interlink-startup-recovery.md; bounded private audit
+artifacts/validation/2026-11-01-native-companion-startup. Continue with background
+alerts/camera/remote settings and actual Pi/Solstice/import/update/cloud/image
+gates; preserve the legacy Pictures journal and originals. No DCIM authorization.
+
+
+# Background drive review reminders — 2026-11-01
+
+Interlink now uses its existing native-host lifetime to check the selected Pi
+and post private read-only drive reminders while the screen is closed. No new
+service, dependency or permission. One serial I/O worker uses bounded API reads;
+owner epochs/selection checks reject late results. Automatic/unready/oversized
+sources and unresolved current-bond work suppress prompts. Accepted/withdrawn/
+paused previews do not prompt again; new previews can. Notifications contain no
+approval action or credential and open fresh review in the real launcher.
+Actual app/channel permission is visible and updates after consent/settings.
+
+All 262 JVM tests pass; the full normal native package/lint/SBOM/alignment/budget
+checks pass, with 11,484-byte release growth. Frozen full-package pass 158.080s;
+actual permission/reboot 63.166s/57.118s (20.919s stable); background native/notice
+checks 4/0 in 13.884s; component checks 16/0 in 29.654s. Runtime APK:
+dd9520b70afc9fbdd4f3796e0f2189b38bde22f7079fd6c01c03ad0acdd4312a.
+The original premature fixture-stop crash remains separate; corrected admission
+waits for real native readiness. The final combined automated journey passes
+all20 checks plus real notification consent in54.485s; exact APK/identity/boot
+readbacks match. Its first19/20 fixture race is retained; waiting for the real
+resumed launcher fixes cleanup without changing the runtime APK or deadlines.
+Three harness regressions and workflow parsing pass; CI runs this journey after
+the original permission gate. No gate is waived. Source/evidence/canonical
+images and limits: docs/interlink-background-alerts.md and the private audit
+artifacts/validation/2026-11-01-background-drive-alerts. Phone power saving can
+delay checks; no push deadline or actual protected Pi transfer is claimed.
+
+Actual Pi rediscovery verifies its known identity, bcm2712 and API 36. Read-only health confirms unchanged boot and four identity
+digests, 0.2.3, four native services running, no new import/camera service, and
+incomplete/running incoming runs with disconnected peers. No physical account,
+media, service, peer or updater change. Preserve the legacy Pictures journal
+and idle admission; do not force migration. Camera approval, uncertain-outcome
+alerts, other headless settings, actual phone/Pi/roaming/import/update/cloud and
+gold-image gates remain. No DCIM authorization or production companion signing.
+
+Hosted1811e18 run41292423124 passes Android foundation, all86 baseline device
+checks and SAF, then fails on the companion permission harness's Settings tap
+(ADB exit20). Both container image scans fail too. Private ef8bff1 run41292634020
+passes both platform jobs. New-head hosted CI remains independent.
+
+Cleanup verified: both disposable packages, owned AVD/data/registrations/ports,
+three marked module builds, task scratch and all3567 recorded process identities
+are gone. Scoped Pi forwarding/ADB is disconnected; physical data untouched.
+Shared ADB76421/93998, other active task, pinned Go SDK and recovery candidate
+remain. Observed free-space increase4,409,475,072B includes concurrent APFS
+activity; exact evidence and retention paths are in the private audit.

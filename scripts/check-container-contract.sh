@@ -24,6 +24,19 @@ alpine_lock="$repo_root/packaging/docker/alpine/runtime-source-lock.json"
 alpine_packaged_lock="$repo_root/packaging/docker/alpine/packaged-evidence-lock.json"
 runtime_digest="sha256:fd791d74b68913cbb027c6546007b3f0d3bc45125f797758156952bc2d6daf40"
 
+# Catch stale reference data before spending a full multi-architecture build.
+python3 -B - "$alpine_lock" "$alpine_packaged_lock" <<'PY'
+import hashlib
+import json
+from pathlib import Path
+import sys
+
+source, packaged = map(Path, sys.argv[1:])
+reviewed = json.loads(packaged.read_bytes())
+if reviewed.get("sourceLockSHA256") != hashlib.sha256(source.read_bytes()).hexdigest():
+    raise SystemExit("Alpine source and packaged evidence locks differ; regenerate both reference targets")
+PY
+
 require_text() {
   expected=$1
   path=$2
@@ -74,17 +87,23 @@ fi
 # Current stdlib advisories require go1.26.10; GOTOOLCHAIN=local makes this
 # directive the floor the compiler itself enforces. Lowering it re-opens them.
 require_text "go 1.26.10" "$caddy_gomod"
+require_text "github.com/go-jose/go-jose/v3 v3.0.6-0.20261030183946-0e502b87c7aa // indirect" "$caddy_gomod"
+require_text "github.com/go-jose/go-jose/v4 v4.1.7 // indirect" "$caddy_gomod"
+require_text '$2 == "github.com/go-jose/go-jose/v3" && $3 == "v3.0.6-0.20261030183946-0e502b87c7aa"' "$dockerfile"
+require_text '$2 == "github.com/go-jose/go-jose/v4" && $3 == "v4.1.7"' "$dockerfile"
+require_text 'COPY packaging/docker/caddy/security_test.go ./' "$dockerfile"
+require_text "RUN go test -count=1 -timeout=30s -run '^TestJWKSecurityBoundaries$' ." "$dockerfile"
 require_text "google.golang.org/grpc v1.83.2 // indirect" "$caddy_gomod"
 require_text '$2 == "google.golang.org/grpc" && $3 == "v1.83.2"' "$dockerfile"
 require_text "grpc drifted from reviewed v1.83.2" "$dockerfile"
-require_text "golang.org/x/text v0.42.0" "$caddy_gomod"
+require_text "golang.org/x/text v0.43.0" "$caddy_gomod"
 require_text "go.opentelemetry.io/otel v1.45.0" "$caddy_gomod"
 require_text "github.com/google/cel-go v0.30.0" "$caddy_gomod"
-require_text "golang.org/x/crypto v0.57.0" "$caddy_gomod"
-require_text "x/crypto drifted from reviewed v0.57.0" "$dockerfile"
+require_text "golang.org/x/crypto v0.58.0" "$caddy_gomod"
+require_text "x/crypto drifted from reviewed v0.58.0" "$dockerfile"
 require_text '"go1.26.10"' "$dockerfile"
-require_text "golang.org/x/net v0.60.0" "$caddy_gomod"
-require_text "x/net drifted from reviewed v0.60.0" "$dockerfile"
+require_text "golang.org/x/net v0.62.0" "$caddy_gomod"
+require_text "x/net drifted from reviewed v0.62.0" "$dockerfile"
 require_text "go.opentelemetry.io/otel/sdk/log v0.21.0" "$caddy_gomod"
 require_text "OTel log SDK drifted from reviewed v0.21.0" "$dockerfile"
 require_text "go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc v0.21.0" "$caddy_gomod"

@@ -1,0 +1,14 @@
+{
+  "scope": "Local real Linux ELF builds and scans; host TLS behavior; source reference only for CA metadata. Full native images and physical Pi/phone not accepted.",
+  "JOSESecurityCases": 8,
+  "evidenceUnitTests": 18,
+  "hostRuntimeChecks": 8,
+  "htmlUpstreamTests": "pass",
+  "sourceContainerContract": "pass",
+  "grypeHighCriticalPerTarget": 0,
+  "retainedUnknownMatch": "GO-2026-5932; affected OpenPGP packages absent from both compiled graphs",
+  "newHTMLFindings": "GO-2026-6860/6866 were compiled; fixed with x/net0.62.0, not waived",
+  "nativeContainerEngine": "unavailable; none started",
+  "productVersion": "unchanged",
+  "PiPhoneMutation": false
+}

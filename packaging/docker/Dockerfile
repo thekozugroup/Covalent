@@ -16,8 +16,8 @@ COPY --chmod=0555 scripts/collect-sync-engine-notices.py /usr/local/bin/collect-
 COPY --chmod=0444 packaging/sync-engine/engine-guardian.c /tmp/engine-guardian.c
 COPY --chmod=0444 LICENSE /tmp/Covalent-LICENSE.txt
 RUN apk add --no-cache \
-      python3=3.12.15-r0 \
-    && test "$(python3 --version)" = "Python 3.12.15" \
+      python3=3.12.16-r0 \
+    && test "$(python3 --version)" = "Python 3.12.16" \
     && build-linux-sync-engine worker /tmp/rclone-source /engine-worker "$TARGETARCH" \
     && mkdir -m 0700 /engine-evidence \
     && collect-go-target-license-inventory \
@@ -52,11 +52,10 @@ COPY --from=sync-engine-worker /engine-notices /engine-notices
 RUN build-linux-sync-engine package \
       /engine-worker /tmp/engine-guardian.c /engine-notices /sync-engine "$TARGETARCH"
 
-# Caddy is compiled here rather than lifted out of caddy:2.11.4-alpine, whose
-# published binary is linked against go1.26.3. That toolchain accounted for ten
-# of the twelve high/critical findings the Grype gate reported, and no Caddy tag
-# fixes it: 2.11.4 is the newest x.y.z-alpine upstream publishes, so the only
-# lever left is to control the toolchain ourselves.
+# Caddy is compiled here with the reviewed toolchain and dependency overrides.
+# The original caddy:2.11.4-alpine binary used go1.26.3, which accounted for ten
+# of twelve high/critical findings in the original scan. Newer Caddy tags alone
+# still leave the JOSE v3 branch affected; pin the official security backport.
 #
 # This is not a fork. packaging/docker/caddy imports the upstream modules used
 # by the shipped Caddyfile and runtime checks, without unrelated standard
@@ -94,6 +93,8 @@ WORKDIR /build
 COPY packaging/docker/caddy/go.mod packaging/docker/caddy/go.sum ./
 RUN go mod download
 COPY packaging/docker/caddy/main.go ./
+COPY packaging/docker/caddy/security_test.go ./
+RUN go test -count=1 -timeout=30s -run '^TestJWKSecurityBoundaries$' .
 # -trimpath keeps absolute build paths out of the binary so the two release
 # runners produce the same bytes; -s -w drops the symbol and DWARF tables, which
 # keeps the combined runtime within its reviewed image budget.
@@ -108,18 +109,22 @@ RUN set -eu; \
       || { echo 'caddy toolchain drifted from reviewed go1.26.10' >&2; exit 1; }; \
     grep -q 'github.com/caddyserver/caddy/v2[[:space:]]\+v2\.11\.5-0\.20260711231708-b2693fb63a30' /tmp/buildinfo \
       || { echo 'caddy source snapshot drifted from v2.11.5-0.20260711231708-b2693fb63a30' >&2; exit 1; }; \
+    awk '$1 == "dep" && $2 == "github.com/go-jose/go-jose/v3" && $3 == "v3.0.6-0.20261030183946-0e502b87c7aa" { found = 1 } END { exit !found }' /tmp/buildinfo \
+      || { echo 'JOSE v3 drifted from upstream RSA/JWK security backport 0e502b87c7aa' >&2; exit 1; }; \
+    awk '$1 == "dep" && $2 == "github.com/go-jose/go-jose/v4" && $3 == "v4.1.7" { found = 1 } END { exit !found }' /tmp/buildinfo \
+      || { echo 'JOSE v4 drifted from reviewed v4.1.7' >&2; exit 1; }; \
     awk '$1 == "dep" && $2 == "google.golang.org/grpc" && $3 == "v1.83.2" { found = 1 } END { exit !found }' /tmp/buildinfo \
       || { echo 'grpc drifted from reviewed v1.83.2 (GHSA-hrxh-6v49-42gf, GHSA-vp52-pcj8-j9qc, GHSA-2v4p-qf9q-27wj)' >&2; exit 1; }; \
-    grep -q 'golang.org/x/text[[:space:]]\+v0\.42\.0' /tmp/buildinfo \
-      || { echo 'x/text drifted from reviewed v0.42.0 (GO-2026-5970)' >&2; exit 1; }; \
+    grep -q 'golang.org/x/text[[:space:]]\+v0\.43\.0' /tmp/buildinfo \
+      || { echo 'x/text drifted from reviewed v0.43.0 (GO-2026-5970)' >&2; exit 1; }; \
     grep -q 'go.opentelemetry.io/otel[[:space:]]\+v1\.45\.0' /tmp/buildinfo \
       || { echo 'OpenTelemetry drifted from reviewed v1.45.0 (GO-2026-5158)' >&2; exit 1; }; \
     grep -q 'github.com/google/cel-go[[:space:]]\+v0\.30\.0' /tmp/buildinfo \
       || { echo 'cel-go drifted from reviewed v0.30.0 (GO-2026-6094)' >&2; exit 1; }; \
-    grep -q 'golang.org/x/crypto[[:space:]]\+v0\.57\.0' /tmp/buildinfo \
-      || { echo 'x/crypto drifted from reviewed v0.57.0 (GO-2026-6354/6355)' >&2; exit 1; }; \
-    awk '$1 == "dep" && $2 == "golang.org/x/net" && $3 == "v0.60.0" { found = 1 } END { exit !found }' /tmp/buildinfo \
-      || { echo 'x/net drifted from reviewed v0.60.0 (GO-2026-6612)' >&2; exit 1; }; \
+    grep -q 'golang.org/x/crypto[[:space:]]\+v0\.58\.0' /tmp/buildinfo \
+      || { echo 'x/crypto drifted from reviewed v0.58.0 (GO-2026-6354/6355)' >&2; exit 1; }; \
+    awk '$1 == "dep" && $2 == "golang.org/x/net" && $3 == "v0.62.0" { found = 1 } END { exit !found }' /tmp/buildinfo \
+      || { echo 'x/net drifted from reviewed v0.62.0 (GO-2026-6612/6860/6866)' >&2; exit 1; }; \
     awk '$1 == "dep" && $2 == "go.opentelemetry.io/otel/sdk/log" && $3 == "v0.21.0" { found = 1 } END { exit !found }' /tmp/buildinfo \
       || { echo 'OTel log SDK drifted from reviewed v0.21.0 (GHSA-hjf4-fphr-2h65)' >&2; exit 1; }; \
     awk '$1 == "dep" && $2 == "go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc" && $3 == "v0.21.0" { found = 1 } END { exit !found }' /tmp/buildinfo \
@@ -150,7 +155,7 @@ COPY --chmod=0444 LICENSE /build/LICENSE
 # Root owns the evidence directories; owner write permits unprivileged docker cp extraction.
 RUN set -eu; \
     case "$TARGETARCH" in amd64|arm64) ;; *) echo 'unsupported Caddy target architecture' >&2; exit 64 ;; esac; \
-    apk add --no-cache python3=3.12.15-r0; \
+    apk add --no-cache python3=3.12.16-r0; \
     GOOS=linux GOARCH="$TARGETARCH" CGO_ENABLED=0 \
       go list -mod=readonly -deps -json . > "/tmp/caddy-go-target-deps-linux-${TARGETARCH}.ndjson"; \
     test -s "/tmp/caddy-go-target-deps-linux-${TARGETARCH}.ndjson"; \
@@ -182,7 +187,7 @@ RUN apk add --no-cache \
       linux-headers=6.16.12-r0 \
       openssl-dev=3.5.9-r0 \
       perl=5.42.2-r0 \
-      python3=3.12.15-r0 \
+      python3=3.12.16-r0 \
       sudo=1.9.17_p2-r0 \
       utmps-dev=0.1.3.1-r0 \
       utmps-static=0.1.3.1-r0 \
@@ -224,9 +229,9 @@ RUN abuild-keygen -a -i -n \
 FROM alpine:3.23@sha256:fd791d74b68913cbb027c6546007b3f0d3bc45125f797758156952bc2d6daf40 AS runtime-base
 COPY --from=ca-bundle-input /ca-bundle.apk /tmp/ca-bundle.apk
 # Alpine published the fixed OpenSSL security revision after the pinned 3.23.5
-# base image was assembled. Install only those two signed repository packages
-# at exact versions: a future repository change can fail this build, but cannot
-# silently select a different runtime. Both libraries are retained because
+# base image was assembled. Install the reviewed OpenSSL and musl security
+# packages at exact versions: a future repository change can fail this build,
+# but cannot silently select a different runtime. Both libraries are retained because
 # apk-tools and BusyBox ssl_client require them even though Covalent and Caddy
 # are statically linked and do not load OpenSSL. BusyBox ssl_client retains both.
 RUN apk --keys-dir /usr/share/apk/keys add --no-cache --no-network /tmp/ca-bundle.apk \
@@ -236,8 +241,12 @@ RUN apk --keys-dir /usr/share/apk/keys add --no-cache --no-network /tmp/ca-bundl
     && apk add --no-cache --upgrade \
       libcrypto3=3.5.9-r0 \
       libssl3=3.5.9-r0 \
+      musl=1.2.5-r24 \
+      musl-utils=1.2.5-r24 \
     && apk info -e 'libcrypto3=3.5.9-r0' \
     && apk info -e 'libssl3=3.5.9-r0' \
+    && apk info -e 'musl=1.2.5-r24' \
+    && apk info -e 'musl-utils=1.2.5-r24' \
     && addgroup -S -g 65532 covalent \
     && adduser -S -D -H -u 65532 -G covalent -s /sbin/nologin covalent \
     && install -d -m 0700 -o 65532 -g 65532 /home/covalent /config /data /restore
@@ -246,7 +255,7 @@ RUN apk --keys-dir /usr/share/apk/keys add --no-cache --no-network /tmp/ca-bundl
 FROM runtime-base AS busybox-package-test
 COPY --from=busybox-package-builder /home/package-builder/output/ /packages/
 COPY --chmod=0555 packaging/docker/alpine/busybox-cve-2025-60876/tests/test_wget_request_target.py /test_wget_request_target.py
-RUN apk add --no-cache python3=3.12.15-r0 \
+RUN apk add --no-cache python3=3.12.16-r0 \
     && set -- \
       /packages/busybox-1.37.0-r1000.apk \
       /packages/busybox-binsh-1.37.0-r1000.apk \

@@ -1,6 +1,14 @@
 //! Local authenticated API, embedded accessible console, discovery, and peer transport.
 
 pub mod advertised_address;
+#[cfg(unix)]
+mod appliance_control;
+#[cfg(unix)]
+mod appliance_import_outbox;
+#[cfg(unix)]
+pub mod appliance_imports;
+#[cfg(unix)]
+pub mod appliance_platform;
 pub mod discovery;
 mod display_names;
 pub mod first_run_claim;
@@ -531,6 +539,8 @@ pub struct AppState {
     transport_certificate: Option<Arc<Vec<u8>>>,
     network_pairing: Arc<NetworkPairingManager>,
     display_names: Arc<display_names::DisplayNameStore>,
+    #[cfg(unix)]
+    controller_bond: Option<Arc<appliance_control::ControllerBondStore>>,
     first_run_claim: Option<Arc<first_run_claim::FirstRunClaim>>,
     discovery_controller: Option<Arc<discovery::DiscoveryController>>,
     archive_limits: ArchiveLimits,
@@ -545,9 +555,32 @@ pub struct AppState {
     recovery_state: Option<Arc<RecoveryStateStore>>,
     #[cfg(unix)]
     folder_sync: sync_engine::FolderSyncRuntimeState,
+    #[cfg(unix)]
+    import_outbox: Option<Arc<appliance_import_outbox::ImportOutbox>>,
 }
 
 impl AppState {
+    /// Installs a read-only host bridge once. Damaged owner authority still denies control.
+    #[cfg(unix)]
+    pub fn with_appliance_platform(
+        self,
+        reader: Arc<dyn appliance_platform::AppliancePlatformReader>,
+    ) -> Self {
+        if let Some(bond) = &self.controller_bond {
+            let _ = bond.platform.set(reader);
+        }
+        self
+    }
+    #[cfg(unix)]
+    pub fn with_appliance_imports(
+        self,
+        host: Arc<dyn appliance_imports::ApplianceImportHost>,
+    ) -> Self {
+        if let Some(bond) = &self.controller_bond {
+            let _ = bond.imports.set(host);
+        }
+        self
+    }
     /// Creates local state. The token must come from private durable storage.
     pub fn new(
         engine: Arc<Engine>,
@@ -581,6 +614,18 @@ impl AppState {
         let display_names = Arc::new(display_names::DisplayNameStore::open(
             data_directory.join("display-names.json"),
         )?);
+        #[cfg(unix)]
+        let controller_bond = appliance_control::ControllerBondStore::open(
+            data_directory.join("controller-bond.json"),
+            engine.public_identity(),
+        )
+        .map(Arc::new);
+        #[cfg(unix)]
+        let import_outbox = appliance_import_outbox::ImportOutbox::open(
+            data_directory.join("appliance-import-outbox.json"),
+            engine.public_identity(),
+        )
+        .map(Arc::new);
         Ok(Self {
             engine,
             platform_tier,
@@ -592,6 +637,10 @@ impl AppState {
             transport_certificate: None,
             network_pairing,
             display_names,
+            #[cfg(unix)]
+            controller_bond,
+            #[cfg(unix)]
+            import_outbox,
             first_run_claim: None,
             discovery_controller: None,
             archive_limits: ArchiveLimits::default(),
@@ -1339,7 +1388,7 @@ pub fn validate_cleartext_api_bind(address: SocketAddr) -> Result<(), CoreError>
 
 /// Builds the stable versioned local API and static console router.
 pub fn router(state: AppState) -> Router {
-    Router::new()
+    let router = Router::new()
         .route("/", get(index))
         .route("/assets/app.css", get(css))
         .route("/assets/app.js", get(javascript))
@@ -1352,6 +1401,7 @@ pub fn router(state: AppState) -> Router {
         .route("/healthz", get(health))
         .route("/api/v1/status", get(status))
         .route("/api/v1/sync/status", get(sync_api::status))
+        .route("/api/v1/sync/recovery", get(sync_api::recovery))
         .route("/api/v1/sync/display-names", post(sync_api::display_name))
         .route("/api/v1/sync/folders", post(sync_api::offer))
         .route("/api/v1/sync/accept", post(sync_api::accept))
@@ -1432,7 +1482,45 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/api/v1/restores/archive/execute",
             post(restore_archive_execute),
+        );
+    #[cfg(unix)]
+    let router = router
+        .route(
+            "/api/v1/appliance/controller",
+            get(appliance_control::bond_status)
+                .post(appliance_control::grant_controller)
+                .delete(appliance_control::revoke_controller)
+                .layer(DefaultBodyLimit::max(4096)),
         )
+        .route(
+            "/api/v1/appliance/status",
+            post(appliance_control::remote_status).layer(DefaultBodyLimit::max(4096)),
+        )
+        .route(
+            "/api/v1/appliance/platform",
+            post(appliance_control::remote_platform).layer(DefaultBodyLimit::max(4096)),
+        )
+        .route(
+            "/api/v1/appliance/imports/context",
+            post(appliance_control::import_context).layer(DefaultBodyLimit::max(4096)),
+        )
+        .route(
+            "/api/v1/appliance/imports/confirm",
+            post(appliance_control::confirm_import).layer(DefaultBodyLimit::max(4096)),
+        )
+        .route(
+            "/api/v1/appliance/imports/actions",
+            get(appliance_control::import_actions),
+        )
+        .route(
+            "/api/v1/appliance/imports/check",
+            post(appliance_control::check_import).layer(DefaultBodyLimit::max(4096)),
+        )
+        .route(
+            "/api/v1/appliance/imports/withdraw",
+            post(appliance_control::withdraw_import).layer(DefaultBodyLimit::max(4096)),
+        );
+    router
         .fallback(not_found)
         .method_not_allowed_fallback(method_not_allowed)
         .layer(DefaultBodyLimit::max(MAX_LOCAL_API_BODY_BYTES))
@@ -6641,6 +6729,52 @@ mod tests {
         ));
         let engine = Arc::new(Engine::open(options).expect("test engine"));
         AppState::new(engine, PlatformTier::Tier1, TEST_TOKEN.to_owned()).expect("state")
+    }
+
+    #[tokio::test]
+    async fn folder_recovery_requires_auth_and_rejects_query_before_unavailable() {
+        let directory = TempDir::new().unwrap();
+        let state = test_state(&directory);
+        for (method, path, authorized, expected) in [
+            (
+                "GET",
+                "/api/v1/sync/recovery",
+                false,
+                StatusCode::UNAUTHORIZED,
+            ),
+            (
+                "GET",
+                "/api/v1/sync/recovery?path=private-secret",
+                false,
+                StatusCode::UNAUTHORIZED,
+            ),
+            ("GET", "/api/v1/sync/recovery", true, StatusCode::CONFLICT),
+            (
+                "GET",
+                "/api/v1/sync/recovery?path=private-secret",
+                true,
+                StatusCode::BAD_REQUEST,
+            ),
+            (
+                "POST",
+                "/api/v1/sync/recovery",
+                true,
+                StatusCode::METHOD_NOT_ALLOWED,
+            ),
+        ] {
+            let mut request = Request::builder().method(method).uri(path);
+            if authorized {
+                request = request.header(header::AUTHORIZATION, format!("Bearer {TEST_TOKEN}"));
+            }
+            let response = router(state.clone())
+                .oneshot(request.body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), expected);
+            let bytes = response.into_body().collect().await.unwrap().to_bytes();
+            let body = String::from_utf8_lossy(&bytes);
+            assert!(!body.contains("private-secret") && !body.contains(TEST_TOKEN));
+        }
     }
 
     #[tokio::test]

@@ -6,7 +6,7 @@
       event entirely outside this repository into a red build on unrelated
       changes. Real vulnerability detection is gated elsewhere and stays fatal:
       dependency-review-action (fail-on-severity: high), cargo-deny check
-      advisories, rustsec/audit-check, CodeQL, and Dependabot security alerts.
+      advisories, cargo-audit, CodeQL, and Dependabot security alerts.
     -->
     <issue id="GradleDependency" severity="ignore" />
     <issue id="NewerVersionAvailable" severity="ignore" />

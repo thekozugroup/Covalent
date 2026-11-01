@@ -1,0 +1,225 @@
+{
+  "cwd": "/Users/michaelwong/Developer/Covalent",
+  "argv": [
+    "sh",
+    "-c",
+    "python3 -B scripts/test-collect-caddy-distribution-evidence.py && python3 -B scripts/test-verify-caddy-distribution-evidence.py && sh scripts/check-container-contract.sh"
+  ],
+  "plannedOutput": "/private/tmp/ai-development/caddy-security-refresh-1793551697040573000-67364-0/logs/final-evidence-contracts.log",
+  "processes": [
+    {
+      "pid": 84643,
+      "ppid": 84532,
+      "start": "Sun Nov 1 12:05:13 2026",
+      "command": "<defunct>"
+    },
+    {
+      "pid": 84646,
+      "ppid": 84643,
+      "start": "Sun Nov 1 12:05:14 2026",
+      "command": "python3"
+    },
+    {
+      "pid": 84649,
+      "ppid": 84643,
+      "start": "Sun Nov 1 12:05:14 2026",
+      "command": "sh"
+    },
+    {
+      "pid": 84745,
+      "ppid": 84649,
+      "start": "Sun Nov 1 12:05:14 2026",
+      "command": "(grep)"
+    },
+    {
+      "pid": 84751,
+      "ppid": 84649,
+      "start": "Sun Nov 1 12:05:14 2026",
+      "command": "(python3.11)"
+    },
+    {
+      "pid": 84752,
+      "ppid": 84751,
+      "start": "Sun Nov 1 12:05:14 2026",
+      "command": "sh"
+    },
+    {
+      "pid": 84755,
+      "ppid": 84752,
+      "start": "Sun Nov 1 12:05:14 2026",
+      "command": "sleep"
+    },
+    {
+      "pid": 84756,
+      "ppid": 84752,
+      "start": "Sun Nov 1 12:05:14 2026",
+      "command": "sleep"
+    },
+    {
+      "pid": 84757,
+      "ppid": 84752,
+      "start": "Sun Nov 1 12:05:14 2026",
+      "command": "sleep"
+    },
+    {
+      "pid": 84769,
+      "ppid": 84766,
+      "start": "Sun Nov 1 12:05:15 2026",
+      "command": "sleep"
+    },
+    {
+      "pid": 84770,
+      "ppid": 84766,
+      "start": "Sun Nov 1 12:05:15 2026",
+      "command": "sleep"
+    },
+    {
+      "pid": 84771,
+      "ppid": 84766,
+      "start": "Sun Nov 1 12:05:15 2026",
+      "command": "sleep"
+    },
+    {
+      "pid": 84766,
+      "ppid": 84751,
+      "start": "Sun Nov 1 12:05:15 2026",
+      "command": "sh"
+    },
+    {
+      "pid": 84780,
+      "ppid": 84751,
+      "start": "Sun Nov 1 12:05:16 2026",
+      "command": "(bash)"
+    },
+    {
+      "pid": 84800,
+      "ppid": 84796,
+      "start": "Sun Nov 1 12:05:16 2026",
+      "command": "sleep"
+    },
+    {
+      "pid": 84801,
+      "ppid": 84796,
+      "start": "Sun Nov 1 12:05:16 2026",
+      "command": "sleep"
+    },
+    {
+      "pid": 84796,
+      "ppid": 84751,
+      "start": "Sun Nov 1 12:05:16 2026",
+      "command": "sh"
+    },
+    {
+      "pid": 84799,
+      "ppid": 84796,
+      "start": "Sun Nov 1 12:05:16 2026",
+      "command": "sleep"
+    },
+    {
+      "pid": 84811,
+      "ppid": 84751,
+      "start": "Sun Nov 1 12:05:17 2026",
+      "command": "sh"
+    },
+    {
+      "pid": 84814,
+      "ppid": 84811,
+      "start": "Sun Nov 1 12:05:17 2026",
+      "command": "sleep"
+    },
+    {
+      "pid": 84815,
+      "ppid": 84811,
+      "start": "Sun Nov 1 12:05:17 2026",
+      "command": "sleep"
+    },
+    {
+      "pid": 84816,
+      "ppid": 84811,
+      "start": "Sun Nov 1 12:05:17 2026",
+      "command": "sleep"
+    },
+    {
+      "pid": 84825,
+      "ppid": 84751,
+      "start": "Sun Nov 1 12:05:18 2026",
+      "command": "(bash)"
+    },
+    {
+      "pid": 84827,
+      "ppid": 84825,
+      "start": "Sun Nov 1 12:05:18 2026",
+      "command": "(sleep)"
+    },
+    {
+      "pid": 84828,
+      "ppid": 84825,
+      "start": "Sun Nov 1 12:05:18 2026",
+      "command": "(sleep)"
+    },
+    {
+      "pid": 84829,
+      "ppid": 84825,
+      "start": "Sun Nov 1 12:05:18 2026",
+      "command": "(sleep)"
+    },
+    {
+      "pid": 84842,
+      "ppid": 84751,
+      "start": "Sun Nov 1 12:05:19 2026",
+      "command": "sh"
+    },
+    {
+      "pid": 84844,
+      "ppid": 84842,
+      "start": "Sun Nov 1 12:05:19 2026",
+      "command": "sleep"
+    },
+    {
+      "pid": 84845,
+      "ppid": 84842,
+      "start": "Sun Nov 1 12:05:19 2026",
+      "command": "sleep"
+    },
+    {
+      "pid": 84846,
+      "ppid": 84842,
+      "start": "Sun Nov 1 12:05:19 2026",
+      "command": "sleep"
+    },
+    {
+      "pid": 84885,
+      "ppid": 84858,
+      "start": "Sun Nov 1 12:05:20 2026",
+      "command": "(bash)"
+    },
+    {
+      "pid": 84889,
+      "ppid": 84885,
+      "start": "Sun Nov 1 12:05:20 2026",
+      "command": "(bash)"
+    },
+    {
+      "pid": 84858,
+      "ppid": 84649,
+      "start": "Sun Nov 1 12:05:20 2026",
+      "command": "python3"
+    },
+    {
+      "pid": 84890,
+      "ppid": 84889,
+      "start": "Sun Nov 1 12:05:20 2026",
+      "command": "(gtimeout)"
+    },
+    {
+      "pid": 84938,
+      "ppid": 84649,
+      "start": "Sun Nov 1 12:05:21 2026",
+      "command": "(grep)"
+    }
+  ],
+  "state": "exited",
+  "exit": 0,
+  "seconds": 7.362,
+  "logSha256": "17d38a84f8140ce61c660e4456fe36e2bdffc57500d98ddfdcf6f3c78551131d"
+}

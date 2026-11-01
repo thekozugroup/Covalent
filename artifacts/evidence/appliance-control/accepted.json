@@ -1,0 +1,49 @@
+{
+  "format": 1,
+  "baseRevision": "4a89c2fdff3e5eea0cadcc10ea45a9cc93b0c32d",
+  "rustToolchain": "rustup1.97.1",
+  "sourceBindingsFile": "source-inputs.json",
+  "sourceBindingsSha256": "28893f90016dd0a3abf66634ff79c470613dc85c161807e3d7158a7c7048a6f5",
+  "hostLibrary": {
+    "passed": 312,
+    "failed": 0,
+    "ignored": 0,
+    "testThreads": 2
+  },
+  "clippyWarningsDenied": true,
+  "android": {
+    "target": "aarch64-linux-android",
+    "minSdk": 26,
+    "productionLibraryCheck": true,
+    "testBuild": true
+  },
+  "physicalPi": {
+    "model": "Raspberry Pi5",
+    "runtime": "Android36",
+    "transport": "direct USB Ethernet",
+    "targetedTestsPassed": 9,
+    "otherTestsFiltered": 296,
+    "fixtureOnly": true,
+    "productionInstall": false,
+    "phoneAccess": false,
+    "artifactSha256": "f499c80c9121cf03fda7cac11eaab8f734796942bd50f8968d7488e5081d8e60",
+    "executionSeconds": 1.687,
+    "temporaryFilesPortsAndNetworkRemoved": true
+  },
+  "apiContract": {
+    "operations": 58,
+    "references": 428,
+    "clientOperations": 50,
+    "clientCallSites": 120,
+    "clientTrees": 7,
+    "isolatedFixturesPass": true
+  },
+  "limits": [
+    "Read-only status capability; no companion UI or remote settings/import confirmation",
+    "No actual removable drive/camera or cloud-backup verification",
+    "No installed appliance upgrade, roaming or gold-image acceptance"
+  ],
+  "recoveryWithoutFolderService": true,
+  "statusSchemaCasesPassed": 9,
+  "signedMaliciousStatusCasesRejected": 10
+}
