@@ -1,0 +1,381 @@
+{
+  "finalCleanup": {
+    "allRecordedProcessIdentitiesAbsent": true,
+    "allocatedRemovedFinalStageBytes": 2476482560,
+    "avdName": "GPhoto_Updates_QA_63817",
+    "avdRegistryDataAndRunningRegistrationAbsent": true,
+    "closedPorts": [
+      5044,
+      5596,
+      5597,
+      8556
+    ],
+    "measurementLimit": "Volume free-space changes include concurrent activity and APFS sharing; not a dedicated accounting of physically reclaimed blocks.",
+    "observedFreeAfter": 468800503808,
+    "observedFreeDeltaAcrossAvdAndFinalStages": 4175388672,
+    "observedFreeDeltaFinalStage": 2185052160,
+    "schema": 1,
+    "scratchAbsent": true,
+    "sharedAdb5037Unchanged": true,
+    "taskId": "interlink-update-outbox-1793565758880390000-63817-0",
+    "taskRegistrationAbsent": true,
+    "temporaryApksElfsPreparedCheckoutAndBuildCachesRemoved": true,
+    "unrelatedOatmealTaskPreserved": true
+  },
+  "fullProducerBuild": {
+    "apkBytes": 51787340,
+    "apkSha256": "d993199b184dbd857c59e0359a1d8aff31f04020a9a2e04701e82ff4b34d3752",
+    "native": {
+      "lib/arm64-v8a/libandroidx.graphics.path.so": {
+        "bytes": 10096,
+        "sha256": "41e9a793c43a0f4fddb19e33f346bace464f30f888ba7b9eaf96294ea115bfb6"
+      },
+      "lib/arm64-v8a/libcovalent_android_jni.so": {
+        "bytes": 10560504,
+        "sha256": "c11435b2f0885babd99075f97d9b3bee956605726deda0ebc1c7450e4f10eb3e"
+      },
+      "lib/arm64-v8a/libcovalentrclone.so": {
+        "bytes": 21648992,
+        "sha256": "3a7a988f379135668e7852e1b931c9332490dde03c87055db3337a6dc5806ffe"
+      },
+      "lib/arm64-v8a/libengineguardian.so": {
+        "bytes": 14912,
+        "sha256": "2fcc818aa81d0c470ceb632022c924481cee63feef86521d16404856a73f7253"
+      },
+      "lib/x86_64/libandroidx.graphics.path.so": {
+        "bytes": 10760,
+        "sha256": "4e56c996f13670e70082658de7880c4020eabf4f25e43387f88ed78a713fc9f0"
+      },
+      "lib/x86_64/libcovalent_android_jni.so": {
+        "bytes": 12390392,
+        "sha256": "9c8d0cd45cf20001c173e4ec6b3973f20b189cc693710ac11b3d23954ea49805"
+      },
+      "lib/x86_64/libcovalentrclone.so": {
+        "bytes": 23228960,
+        "sha256": "94598fa47aa42e870ab9714e99a30378aa4aa13ed34dcdbfed4b87d04a6f661c"
+      },
+      "lib/x86_64/libengineguardian.so": {
+        "bytes": 14616,
+        "sha256": "b12ecb82d6c7b695a74ef4f9ad131a6d50fa9cd8597c8d8111ce5ec480ce1d28"
+      }
+    },
+    "nativeProducersExcluded": false,
+    "sourceRevision": "4f6741fa680bd8e31558b757f47a46967d4d94b9"
+  },
+  "healthAfter": {
+    "animations": {
+      "animator_duration_scale": "1.0",
+      "transition_animation_scale": "1.0",
+      "window_animation_scale": "1.0"
+    },
+    "framework": {
+      "bootId": "3694b56b-ca7d-404b-9a79-ebf1f75d03ee",
+      "surfaceflinger": {
+        "pid": "498",
+        "startTicks": "1612"
+      },
+      "system_server": {
+        "pid": "634",
+        "startTicks": "1753"
+      }
+    },
+    "noAnr": true
+  },
+  "healthBefore": {
+    "density": "Physical density: 420",
+    "fingerprint": "google/sdk_gphone16k_arm64/emu64a16k:16/BE2A.250530.026.F3/13894323:userdebug/dev-keys",
+    "hardware": "ranchu",
+    "result": "passed",
+    "samples": [
+      {
+        "animations": {
+          "animator_duration_scale": "1.0",
+          "transition_animation_scale": "1.0",
+          "window_animation_scale": "1.0"
+        },
+        "framework": {
+          "bootId": "3694b56b-ca7d-404b-9a79-ebf1f75d03ee",
+          "surfaceflinger": {
+            "pid": "498",
+            "startTicks": "1612"
+          },
+          "system_server": {
+            "pid": "634",
+            "startTicks": "1753"
+          }
+        },
+        "noAnr": true
+      },
+      {
+        "animations": {
+          "animator_duration_scale": "1.0",
+          "transition_animation_scale": "1.0",
+          "window_animation_scale": "1.0"
+        },
+        "framework": {
+          "bootId": "3694b56b-ca7d-404b-9a79-ebf1f75d03ee",
+          "surfaceflinger": {
+            "pid": "498",
+            "startTicks": "1612"
+          },
+          "system_server": {
+            "pid": "634",
+            "startTicks": "1753"
+          }
+        },
+        "noAnr": true
+      },
+      {
+        "animations": {
+          "animator_duration_scale": "1.0",
+          "transition_animation_scale": "1.0",
+          "window_animation_scale": "1.0"
+        },
+        "framework": {
+          "bootId": "3694b56b-ca7d-404b-9a79-ebf1f75d03ee",
+          "surfaceflinger": {
+            "pid": "498",
+            "startTicks": "1612"
+          },
+          "system_server": {
+            "pid": "634",
+            "startTicks": "1753"
+          }
+        },
+        "noAnr": true
+      },
+      {
+        "animations": {
+          "animator_duration_scale": "1.0",
+          "transition_animation_scale": "1.0",
+          "window_animation_scale": "1.0"
+        },
+        "framework": {
+          "bootId": "3694b56b-ca7d-404b-9a79-ebf1f75d03ee",
+          "surfaceflinger": {
+            "pid": "498",
+            "startTicks": "1612"
+          },
+          "system_server": {
+            "pid": "634",
+            "startTicks": "1753"
+          }
+        },
+        "noAnr": true
+      }
+    ],
+    "screen": "Physical size: 1080x2400"
+  },
+  "installed": {
+    "debugOnly": true,
+    "initialInspectionCorrection": "First inspection expected InterlinkMainActivity; actual declared normal launcher is InterlinkActivity. Installed bytes and native checks already matched.",
+    "native": {
+      "lib/arm64-v8a/libandroidx.graphics.path.so": {
+        "bytes": 10096,
+        "sha256": "41e9a793c43a0f4fddb19e33f346bace464f30f888ba7b9eaf96294ea115bfb6"
+      },
+      "lib/arm64-v8a/libcovalent_android_jni.so": {
+        "bytes": 10560504,
+        "sha256": "c11435b2f0885babd99075f97d9b3bee956605726deda0ebc1c7450e4f10eb3e"
+      },
+      "lib/arm64-v8a/libcovalentrclone.so": {
+        "bytes": 21648992,
+        "sha256": "3a7a988f379135668e7852e1b931c9332490dde03c87055db3337a6dc5806ffe"
+      },
+      "lib/arm64-v8a/libengineguardian.so": {
+        "bytes": 14912,
+        "sha256": "2fcc818aa81d0c470ceb632022c924481cee63feef86521d16404856a73f7253"
+      },
+      "lib/x86_64/libandroidx.graphics.path.so": {
+        "bytes": 10760,
+        "sha256": "4e56c996f13670e70082658de7880c4020eabf4f25e43387f88ed78a713fc9f0"
+      },
+      "lib/x86_64/libcovalent_android_jni.so": {
+        "bytes": 12390392,
+        "sha256": "9c8d0cd45cf20001c173e4ec6b3973f20b189cc693710ac11b3d23954ea49805"
+      },
+      "lib/x86_64/libcovalentrclone.so": {
+        "bytes": 23228960,
+        "sha256": "94598fa47aa42e870ab9714e99a30378aa4aa13ed34dcdbfed4b87d04a6f661c"
+      },
+      "lib/x86_64/libengineguardian.so": {
+        "bytes": 14616,
+        "sha256": "b12ecb82d6c7b695a74ef4f9ad131a6d50fa9cd8597c8d8111ce5ec480ce1d28"
+      }
+    },
+    "nativeIdenticalToFullBuild": true,
+    "normalApplicationAndLauncher": true,
+    "packages": {
+      "life.michaelwong.interlink": {
+        "apkBytes": 51787340,
+        "installedSameBytes": true,
+        "sha256": "b95f874db9207cb6865246a1b3fc40310a05903ff945aecc8a4abb830d5163e1"
+      },
+      "life.michaelwong.interlink.test": {
+        "apkBytes": 1269352,
+        "installedSameBytes": true,
+        "sha256": "464b0132ef6c5e7f20c321fbadfc28c56bb1e88782e21eee33c7845d367e7dec"
+      }
+    },
+    "physicalDeviceTested": false
+  },
+  "logSha256": {
+    "companion-normal-apks.log": "96e45dac3408e3c1983abb28f3d40dc6bf2be69d90af333e0867f46f930289b5",
+    "companion-single-tap-apks.log": "7601d114e4a86f76111c1ab07f6740a89a380a262f8ceb7f87f587e38cc005c6",
+    "normal-native-package-check.log": "d937961e50f627ee49e357e6a09f625b749646db14cf3ebfde17ea7a71b16ff4",
+    "ui-full-native-suite.log": "94d9585b5730e7bd76c208f7de88bc4e6d40718515599bc3d508bf17ef8bca6c",
+    "ui-new-native-tests.log": "f15f34f26be46a471ca620c4c78cdf4e8a5b915ecd06c2e9c8d1f875d52014d5"
+  },
+  "nativeSourceRevision": "4f6741fa680bd8e31558b757f47a46967d4d94b9",
+  "nativeTests": {
+    "api": 36,
+    "api37AdmissionClaimed": false,
+    "applicationReplaced": false,
+    "ignored": 0,
+    "passed": 29,
+    "realNativeJournalStopRestart": true,
+    "result": "passed",
+    "skipped": 0,
+    "tests": [
+      "life.michaelwong.covalent.InterlinkDashboardInstrumentedTest#approvalShowsBothFingerprintsAndConnectedStateHidesThem",
+      "life.michaelwong.covalent.InterlinkDashboardInstrumentedTest#connectionLossRetainsSelectedPiWithoutOldRunningOrCloudClaims",
+      "life.michaelwong.covalent.InterlinkDashboardInstrumentedTest#driveAlertPermissionSettingsRemainReachableWithLargeText",
+      "life.michaelwong.covalent.InterlinkDashboardInstrumentedTest#largeTextKeepsDeviceNameAndBothActionsReachableAndRejectsDoubleSubmission",
+      "life.michaelwong.covalent.InterlinkDashboardInstrumentedTest#largeTextKeepsPartialAndUnknownStorageDetailsReachable",
+      "life.michaelwong.covalent.InterlinkDashboardInstrumentedTest#platformCountsDisappearWhenSystemDetailsOrControllerApprovalAreLost",
+      "life.michaelwong.covalent.InterlinkImportAlertsInstrumentedTest#actualNativeHostStartsOneObserverBeforeTheScreenCloses",
+      "life.michaelwong.covalent.InterlinkImportAlertsInstrumentedTest#backgroundLoopPostsWithoutResumingAnActivityAndStopRemovesIt",
+      "life.michaelwong.covalent.InterlinkImportAlertsInstrumentedTest#notificationIsPrivateAndOpensReviewWithoutAnApprovalAction",
+      "life.michaelwong.covalent.InterlinkImportAlertsInstrumentedTest#notificationTapOpensTheRealInterlinkLauncher",
+      "life.michaelwong.covalent.InterlinkImportsInstrumentedTest#cameraControlsAppearOnceAndVolumePendingDoesNotBlockThem",
+      "life.michaelwong.covalent.InterlinkImportsInstrumentedTest#cameraWithoutSerialCanOnlyImportOnceAndShowsWhy",
+      "life.michaelwong.covalent.InterlinkImportsInstrumentedTest#largeTextCameraExplanationAndOriginalsStayReachableWithoutAnInactiveToggle",
+      "life.michaelwong.covalent.InterlinkImportsInstrumentedTest#largeTextKeepsPreviewRememberAndConfirmationReachable",
+      "life.michaelwong.covalent.InterlinkImportsInstrumentedTest#newSourceDefaultsToOnceAndCannotSubmitTwice",
+      "life.michaelwong.covalent.InterlinkImportsInstrumentedTest#offlineHistoryHasNoActiveControlsAndChangedSelectionHidesIt",
+      "life.michaelwong.covalent.InterlinkImportsInstrumentedTest#pendingRequestBlocksNewImportAndOffersPauseWithoutCloudClaims",
+      "life.michaelwong.covalent.InterlinkImportsInstrumentedTest#rememberRequiresExplicitChoiceAndBusyConfirmationCannotChangeIt",
+      "life.michaelwong.covalent.InterlinkNotificationInstrumentedTest#folderAttentionTakesPriorityOverReadinessAndNeverClaimsCloudBackup",
+      "life.michaelwong.covalent.InterlinkNotificationInstrumentedTest#installedBrandAndImmutableActionsBelongToInterlink",
+      "life.michaelwong.covalent.InterlinkNotificationInstrumentedTest#smallIconHasTransparentCornersAndOneOpaqueColour",
+      "life.michaelwong.covalent.InterlinkRunStatusInstrumentedTest#disconnectedExpiredRunShowsConfirmationInsteadOfRunningOrCompleted",
+      "life.michaelwong.covalent.InterlinkUpdateNativeInstrumentedTest#nativeUpdateJournalSurvivesActualHostStopAndRestartWithoutChangingIdentity",
+      "life.michaelwong.covalent.InterlinkUpdatesInstrumentedTest#inFlightChangeKeepsTheSwitchDisabledUntilFreshPiStateArrives",
+      "life.michaelwong.covalent.InterlinkUpdatesInstrumentedTest#largeTextKeepsBothUnconfirmedRecoveryActionsReachableWithoutAutoApplying",
+      "life.michaelwong.covalent.InterlinkUpdatesInstrumentedTest#offlineBusyUnconfiguredAndMissingHistoryCannotChangePolicy",
+      "life.michaelwong.covalent.InterlinkUpdatesInstrumentedTest#switchRequestsChangeAndWaitsForFreshConfirmedState",
+      "life.michaelwong.covalent.ui.InterlinkLayoutInstrumentedTest#idleSavedLinkKeepsSetupWhileAttentionAndDestinationStayActionable",
+      "life.michaelwong.covalent.ui.InterlinkLayoutInstrumentedTest#largeTextStacksBothEndpointsAndKeepsRefreshReachable"
+    ]
+  },
+  "noPhysicalPiPhoneOrCloudAcceptance": true,
+  "openGates": [
+    "Full current-head Linux/root CI",
+    "Hosted Android36 readiness and API37 platform failure repair",
+    "Production companion signing and distribution",
+    "Actual Pi/phone restart, roaming, update/recovery",
+    "Physical media import, Google backup and deletion safety",
+    "Blank-userdata physical gold image"
+  ],
+  "render": {
+    "captureCorrections": [
+      "Initial enabled capture preceded rendered content and was replaced after UI readback.",
+      "A pending launch delivered an intent to the existing Activity; capture replaced after finishing and reading back the unconfirmed state.",
+      "First package inspection expected InterlinkMainActivity; actual normal launcher is InterlinkActivity.",
+      "Package check-permission is unsupported on this guest; actual tests and package dump independently verify grant."
+    ],
+    "examplesOnly": true,
+    "fontScaleAfter": "1.0",
+    "fontScaleBefore": "1.0",
+    "fontScaleDuring": "2.0",
+    "motion": "1.0x unchanged",
+    "nativeSourceRevision": "4f6741fa680bd8e31558b757f47a46967d4d94b9",
+    "nightAfter": "no",
+    "nightBefore": "no",
+    "nightDuring": "yes",
+    "notificationPermission": "actual permission-controller UI grant, no shell grant",
+    "remotePiChanged": false,
+    "screenshots": {
+      "interlink-updates-enabled.png": {
+        "bytes": 167437,
+        "sha256": "7ea50c00600c64793014bfeb6b995c2e1edc7b67e4e9e22e096a7f8341d89e7c"
+      },
+      "interlink-updates-pending-large-dark.png": {
+        "bytes": 193564,
+        "sha256": "2f91c118d289e88d428525f8148987ff30f4b7c6ea32f5bbac0a0f3db9d1ecf8"
+      },
+      "interlink-updates-pending.png": {
+        "bytes": 179473,
+        "sha256": "5793119e0287dffed6642278280121f361acda7c7cd7ec8de3d4955cc7ceac6e"
+      }
+    }
+  },
+  "schema": 1,
+  "scope": "Owned empty Android36 guest, normal Application and JNI/worker package; synthetic Pi presentation data only",
+  "sourceHashes": {
+    "apps/android/app/build.gradle.kts": "8c7e1b26e832a27b466d2b862f11433487e88159f97958ff073d016602e85ed1",
+    "apps/android/app/src/main/java/life/michaelwong/covalent/appliance/ApplianceImports.kt": "b8ff02e3dc27d304546335364d734a261c58e11efbeafde410011bb2a238b946",
+    "apps/android/app/src/main/java/life/michaelwong/covalent/appliance/ApplianceUpdates.kt": "3a6faacc22a30804e320c0f2776dd43d1121f7a6952e902c02019748a0be4a90",
+    "apps/android/app/src/main/java/life/michaelwong/covalent/appliance/NodeApplianceApi.kt": "b2cbae3ce83c866a31b89f3bd4c5337b652d520844c0e045adc6696fcf078e48",
+    "apps/android/app/src/main/java/life/michaelwong/covalent/data/CovalentNodeClient.kt": "4b3ab61862a5811795b120313d1e117041fefdcbae10acb1402b7c97f7aa66e2",
+    "apps/android/app/src/test/java/life/michaelwong/covalent/appliance/ApplianceUpdatesTest.kt": "0e46f1f5eb38b67d10b4930b43cf1b283b406cdff7f020675cd8eb3711fe116a",
+    "apps/android/companion/src/androidTest/java/life/michaelwong/covalent/InterlinkDashboardInstrumentedTest.kt": "51fbcf9a5313d24adbdc3d0d7da2e3409ec5cbaca163862f685078b526ee4f25",
+    "apps/android/companion/src/androidTest/java/life/michaelwong/covalent/InterlinkUpdateNativeInstrumentedTest.kt": "beae1409b0231ad19e10cf72acb8209269a8a706b5477882ef87ae1e478c0706",
+    "apps/android/companion/src/androidTest/java/life/michaelwong/covalent/InterlinkUpdatesInstrumentedTest.kt": "5068090747f99e4b14cd59f61e21c752ab9fd2e5444402db2bbdb3affd1caf3b",
+    "apps/android/companion/src/debug/java/life/michaelwong/covalent/InterlinkPreviewActivity.kt": "cf021977f6dd6c3077ef6da299edb639c80ca7c078b6ade7c9f19182fe499461",
+    "apps/android/companion/src/debug/java/life/michaelwong/covalent/InterlinkUpdateExample.kt": "f234b6a25b68caf66c19a1923ff9daae4bdd7ee5da36d11c595c24aae9309259",
+    "apps/android/companion/src/main/java/life/michaelwong/covalent/InterlinkDashboard.kt": "166555b12681374a9e1453f0c149e8395df82d5ee61dd9037129904d35e8cf05",
+    "apps/android/companion/src/main/java/life/michaelwong/covalent/InterlinkPlatformCard.kt": "fcbf21103100d3510d0822cdd1c36d1dba93e4797077207ce33c4ba83931efc1",
+    "apps/android/companion/src/main/java/life/michaelwong/covalent/InterlinkUpdates.kt": "5fd16fe301f5c862e0b1d512fd68adcd2fda1f86d5cb4c58c3c39f64eef9db60",
+    "apps/android/companion/src/main/res/values/interlink-updates.xml": "f28c3cc70cacdf656c34bc758b4ab924f9f46ac34565e31048f1d12683a34bec",
+    "crates/covalent-node/src/appliance_control.rs": "19e84b5743185b1fe0ccf3b85035129ae60fabae21db558e7361684228fc2896",
+    "crates/covalent-node/src/appliance_control/imports.rs": "c358fb46e19300351c76b8918989f128f8573b5a67b7968ea6c7985b12b43172",
+    "crates/covalent-node/src/appliance_control/updates.rs": "4d6346a8a84d28063d2b35f03005003644d5860c81c3d2e3afb615c23cd3caaf",
+    "crates/covalent-node/src/appliance_control/updates_tests.rs": "73a8bffd964348294ec0166af403dfdcb7cfd103ee390206779da7b6882b616a",
+    "crates/covalent-node/src/appliance_import_outbox.rs": "ba4b6a47bea7362f16cd1a1d55604fbf2dcaf14bcc1c598d4c6aa7012a9180c3",
+    "crates/covalent-node/src/appliance_update_outbox.rs": "60b3be331be82df894c5d2b92405506249742d7c449dc7c150c333aa3787a611",
+    "crates/covalent-node/src/lib.rs": "7dcf9ef0ccb5f808452571ff7e22e4ceb0168943c60feb64724b80ae6c8610ba",
+    "crates/covalent-node/src/private_state_file.rs": "5f71e6e2e2cd84a080b916745b6a84594e052991cef161a3bc40b41ab4dddc65",
+    "crates/covalent-node/tests/fixtures/appliance-updates.json": "fe2049296d548a89116bfed2cd64cb69b320dc553d137c3d3ecdf689942b9963",
+    "docs/interlink-update-settings.md": "9c34c07e8c72819e11f4618b06ce9b6d14b7467f8bd56942ce76bb983aae8b45",
+    "scripts/interlink-api37-alert-test.py": "b7e69decc80e59d47022804f98af886bc627058b1923a50319dc2c3082bbe8bc"
+  },
+  "uiEnvironmentCleanup": {
+    "avdAllocatedKiB": 1943728,
+    "avdDataAbsent": true,
+    "avdRegistrationAbsent": true,
+    "closedPorts": [
+      5044,
+      5596,
+      5597,
+      8556
+    ],
+    "dedicatedAdbPidAbsent": 79907,
+    "freeAfterAvdDelete": 466635501568,
+    "freeBeforeAvdDelete": 464645165056,
+    "guestStopped": true,
+    "observedFreeDelta": 1990336512,
+    "processesAbsent": [
+      79813,
+      79935,
+      79944
+    ],
+    "runningRegistrationAbsent": true,
+    "sharedPreserved": [
+      "ADB5037",
+      "ADB5038",
+      "SDK/system images",
+      "other AVDs",
+      "signers",
+      "Pi and phone state"
+    ]
+  },
+  "uiOnlyRepack": {
+    "allEightPackagedNativeObjectsByteIdentical": true,
+    "excludedAlreadyCompletedProducers": [
+      ":app:buildAndroidJni",
+      ":app:buildAndroidSyncEngine"
+    ],
+    "releaseProducerRequirementsChanged": false
+  }
+}

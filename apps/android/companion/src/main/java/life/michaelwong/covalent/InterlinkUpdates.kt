@@ -1,9 +1,7 @@
 package life.michaelwong.covalent
 
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.toggleable
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -20,15 +18,16 @@ import life.michaelwong.covalent.appliance.*
 @Composable
 internal fun InterlinkUpdatesCard(
     dashboard: ApplianceDashboardState, updates: PiUpdatesState, busy: Boolean,
-    request: (Boolean) -> Unit, check: (PiSavedUpdate) -> Unit,
+    request: (Boolean) -> Unit, check: (PiSavedUpdate) -> Unit, working: Boolean = false, saving: Boolean = false,
 ) {
     val selected = dashboard.selection ?: return
     val connected = dashboard.connection == ApplianceConnectionState.CONNECTED
+    val checking = dashboard.connection == ApplianceConnectionState.CHECKING && busy
     val context = updates.observation?.context?.takeIf {
-        connected && updates.selected == selected && it.bond.appliance == selected.appliance &&
-            it.bond.controller == selected.local && it.bond.nativeGeneration == dashboard.observation?.bondGeneration
+        (connected || checking) && updates.selected == selected && it.bond.appliance == selected.appliance &&
+            it.bond.controller == selected.local && it.bond.nativeGeneration == (if (checking) selected.confirmedGeneration else dashboard.observation?.bondGeneration)
     }
-    val canChange = context?.configured == true && !context.busy && updates.actionsAvailable && !busy
+    val canChange = connected && context?.configured == true && !context.busy && updates.actionsAvailable && !busy
     val latest = updates.actions.filter { it.choice.bond.appliance == selected.appliance && it.choice.bond.controller == selected.local }
         .maxByOrNull { it.order }
     Card(Modifier.fillMaxWidth().testTag("interlink-updates-card")) {
@@ -44,7 +43,10 @@ internal fun InterlinkUpdatesCard(
                     Switch(checked = context.enabled, onCheckedChange = null, enabled = canChange)
                 }
             }
+            if (working) LinearProgressIndicator(Modifier.fillMaxWidth().testTag("interlink-updates-progress"))
             Text(stringResource(when {
+                saving -> R.string.interlink_updates_saving
+                working -> R.string.interlink_updates_checking
                 dashboard.connection == ApplianceConnectionState.CHECKING -> R.string.interlink_updates_checking
                 dashboard.connection == ApplianceConnectionState.APPROVAL_REQUIRED -> R.string.interlink_updates_approve_phone
                 !connected -> R.string.interlink_updates_reconnect
@@ -72,21 +74,4 @@ internal fun InterlinkUpdatesCard(
             }
         }
     }
-}
-
-@Composable
-internal fun InterlinkUpdateConfirmation(review: PiUpdateReview, busy: Boolean, dismiss: () -> Unit, confirm: () -> Unit) {
-    AlertDialog(
-        onDismissRequest = { if (!busy) dismiss() },
-        title = { Text(stringResource(if (review.choice.enabled) R.string.interlink_updates_enable_title else R.string.interlink_updates_pause_title)) },
-        text = { Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text(review.selected.name, style = MaterialTheme.typography.titleMedium)
-            Text(stringResource(if (review.choice.enabled) R.string.interlink_updates_enable_detail else R.string.interlink_updates_pause_detail))
-            Text(stringResource(R.string.interlink_updates_confirmation_detail), style = MaterialTheme.typography.bodySmall)
-        } },
-        confirmButton = { Button(enabled = !busy, onClick = { if (!busy) confirm() }, modifier = Modifier.testTag("interlink-updates-confirm")) {
-            Text(stringResource(R.string.interlink_updates_confirm))
-        } },
-        dismissButton = { TextButton(enabled = !busy, onClick = dismiss) { Text(stringResource(R.string.action_cancel)) } },
-    )
 }

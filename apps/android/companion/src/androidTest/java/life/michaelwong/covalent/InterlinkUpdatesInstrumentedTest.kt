@@ -26,7 +26,7 @@ class InterlinkUpdatesInstrumentedTest {
     private fun dashboard()=ApplianceDashboardState(selected,ApplianceConnectionState.CONNECTED,
         observation=ApplianceObservation(selected.confirmedGeneration!!,ApplianceSyncState.RUNNING,1,true))
 
-    @Test fun switchRequestsReviewAndWaitsForFreshConfirmedState() {
+    @Test fun switchRequestsChangeAndWaitsForFreshConfirmedState() {
         val state=mutableStateOf(interlinkUpdateExample(selected));var requested:Boolean?=null
         compose.setContent {InterlinkTheme {InterlinkUpdatesCard(dashboard(),state.value,false,{requested=it},{})}}
         compose.onNodeWithTag("interlink-automatic-updates").assertIsOff().performClick().assertIsOff()
@@ -61,19 +61,13 @@ class InterlinkUpdatesInstrumentedTest {
         compose.onNodeWithTag("interlink-updates-keep").performScrollTo().assertIsDisplayed().performClick()
         compose.runOnIdle {assertEquals(1,checks);assertEquals(false,requested)}
     }
-    @Test fun largeTextConfirmationRequiresExplicitActionAndDismissesAfterOneSubmit() {
-        val ctx=interlinkUpdateExample(selected).observation!!.context!!
-        val review=PiUpdateReview(selected,ctx,PiUpdateChoice(ctx.bond,"99999999-9999-4999-8999-999999999999",ctx.revision!!,true))
-        val shown=mutableStateOf(true);var submissions=0
-        compose.setContent {
-            val density=LocalDensity.current
-            CompositionLocalProvider(LocalDensity provides Density(density.density,2f)) {
-                InterlinkTheme {if(shown.value)InterlinkUpdateConfirmation(review,false,{shown.value=false},{submissions++;shown.value=false})}
-            }
-        }
-        compose.runOnIdle {assertEquals(0,submissions)}
-        compose.onNodeWithTag("interlink-updates-confirm").assertIsDisplayed().performClick()
-        compose.onNodeWithTag("interlink-updates-confirm").assertDoesNotExist()
-        compose.runOnIdle {assertEquals(1,submissions)}
+    @Test fun inFlightChangeKeepsTheSwitchDisabledUntilFreshPiStateArrives() {
+        val state=mutableStateOf(interlinkUpdateExample(selected));val working=mutableStateOf(true);var requests=0
+        compose.setContent {InterlinkTheme {InterlinkUpdatesCard(dashboard(),state.value,working.value,{requests++},{},working=working.value,saving=working.value)}}
+        compose.onNodeWithTag("interlink-automatic-updates").assertIsOff().assertIsNotEnabled()
+        compose.onNodeWithTag("interlink-updates-progress").assertIsDisplayed()
+        compose.runOnIdle {assertEquals(0,requests);state.value=interlinkUpdateExample(selected,enabled=true);working.value=false}
+        compose.onNodeWithTag("interlink-automatic-updates").assertIsOn().assertIsEnabled()
+        compose.onNodeWithTag("interlink-updates-progress").assertDoesNotExist()
     }
 }

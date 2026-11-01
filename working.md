@@ -1,3 +1,45 @@
+# Single-tap Interlink settings qualified on Android36 — 2026-11-01
+
+Implementation progress. The switch applies an explicit choice in one tap,
+shows progress and remains disabled until fresh Pi readback. Cached confirmed
+state stays visible but disabled during refresh. Missing acknowledgements retain
+read-only recovery and explicit replacement; import confirmations are unchanged.
+The extra update dialog and seven unused strings are removed.
+
+The full normal JNI/worker producer build succeeds (both ABIs), with normal
+Application/launcher and all eight packaged native objects verified. The UI-only
+repack reuses those byte-identical native objects; no release producer requirement
+is waived. Installed APK and test APK match host SHA256 exactly. All29 named native
+cases pass on one owned Android36/16KiB guest with no skips, including actual
+private update-journal/service stop/restart and stable identity. Actual permission
+controller UI grants notifications. Boot, system_server and surfaceflinger remain
+unchanged with no ANR; all motion scales remain1.0x. Light and 200% text/dark
+examples are reviewed, font/night restored. Canonical three screenshots are in
+docs/brand; they explicitly use example Pi data, never a remote policy mutation.
+All372 node/48 appliance unit and strict Clippy checks from source4f6741f still
+apply: native/contract hashes are unchanged. Bounded final receipt is
+artifacts/evidence/interlink-update-outbox/android-execution.json; earlier
+source-checks.json intentionally records the pre-execution source checkpoint.
+
+Private platform pin advances to public4f6741fa680bd8e31558b757f47a46967d4d94b9.
+Its adapted production ARM64/API26 ELF compiles, four16KiB LOAD segments;
+it is not executed or installed. Bundle contracts11 pass. No new signed bundle,
+release, image, Pi/phone/account/media change or DCIM authorization is claimed.
+API37 graphics and hosted Android36 ANR acceptance remain unresolved; this local
+Android36 pass does not waive either. Actual Pictures, LAN/Tailscale roaming,
+removable imports, Google backup/deletion and physical gold-image gates remain.
+
+Task interlink-update-outbox-1793565758880390000-63817-0 is fully removed and
+independently verified: AVD GPhoto_Updates_QA_63817 data/registry/running record,
+all recorded processes and ports5044/5596/5597/8556 absent. Temporary APKs/ELFs,
+prepared source and build outputs removed. Shared ADB5037 PID76421/start time,
+SDKs/caches/signers/candidates/recovery/source and unrelated Oatmeal task remain.
+Observed volume free gain across AVD/final cleanup is4,175,388,672B; this includes
+concurrent APFS activity and is not unique-block accounting. Bounded raw logs,
+initial failures and cleanup proof are retained in the private platform audit
+artifacts/validation/2026-11-01-interlink-update-outbox. Both existing draft PR
+heads/bases remain unchanged. Goal active; actual installation follows admission.
+
 # Durable update choices and companion controls — 2026-11-01
 
 Previous turn made implementation progress. This turn adds the phone's persisted

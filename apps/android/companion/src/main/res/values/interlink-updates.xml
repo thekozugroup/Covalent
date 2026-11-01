@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="interlink_updates_confirm">Confirm</string>
     <string name="interlink_updates_toggle">Automatic updates</string>
+    <string name="interlink_updates_saving">Saving update setting…</string>
     <string name="interlink_updates_checking">Checking update settings…</string>
     <string name="interlink_updates_approve_phone">Approve this phone on your Pi to manage updates.</string>
     <string name="interlink_updates_reconnect">Reconnect to your Pi to manage updates.</string>
@@ -14,11 +14,5 @@
     <string name="interlink_updates_check">Check status</string>
     <string name="interlink_updates_keep">Keep current setting</string>
     <string name="interlink_updates_observed">The current Pi setting is confirmed. The earlier request result is unknown.</string>
-    <string name="interlink_updates_enable_title">Enable automatic updates?</string>
-    <string name="interlink_updates_pause_title">Pause automatic updates?</string>
-    <string name="interlink_updates_enable_detail">Your Pi will check for signed system updates and install them when it is safe.</string>
-    <string name="interlink_updates_pause_detail">Automatic system update checks will pause. Photo syncing continues.</string>
-    <string name="interlink_updates_confirmation_detail">This replaces earlier unconfirmed choices once your Pi confirms it. The switch changes after fresh Pi settings are read.</string>
-    <string name="interlink_updates_review_failed">Cannot review this change. Refresh your Pi settings and try again.</string>
     <string name="interlink_updates_result_unconfirmed">The update setting change is unconfirmed. Check status before assuming it applied.</string>
 </resources>

@@ -19,6 +19,18 @@ native cards and adaptive endpoints remain shared with Covalent.
 
 ## Captured implementation
 
+- `interlink-updates-enabled.png`: native single-tap automatic-update switch,
+  Interlink mark and serif title. The displayed policy is labelled example data.
+- `interlink-updates-pending.png`: a missing acknowledgement shows the requested
+  choice separately from current Pi state, with Check status and Keep current
+  setting. No automatic retry or optimistic success is implied.
+- `interlink-updates-pending-large-dark.png`: the same recovery state at 200%
+  system text in dark mode, scrolled to both actions without clipping. Font/night
+  settings were restored; all animation scales stayed at 1.0x. The normal APK's
+  native libraries match the full producer build exactly. All29 native checks
+  pass on an owned Android36 guest, including actual journal/service restart.
+  These examples do not prove a policy change on the physical Pi.
+
 - `interlink-run-awaiting-source-light.png` and
   `interlink-run-awaiting-source-large-dark.png`: actual normal debug package,
   native receiving card and explicit example data. An expired source-owned run

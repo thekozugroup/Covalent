@@ -13,6 +13,12 @@ general backup-server and archive-recovery flows. Deletion/restore policy
 switches are unavailable in the appliance companion. Original files stay on
 the phone; Google Photos controls cleanup on the Pi.
 
+The approved Pi's automatic updates have a native one-tap switch. A setting is
+saved before sending and displayed as confirmed only after Pi readback. Lost
+acknowledgements stay visible with read-only status recovery; restarting the app
+does not send the choice again. Offline or unavailable settings cannot be changed.
+See [the settings contract](../../../docs/interlink-update-settings.md).
+
 Build a development APK from `apps/android`:
 
 ```sh

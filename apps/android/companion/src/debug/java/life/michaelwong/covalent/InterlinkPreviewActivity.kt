@@ -79,9 +79,6 @@ class InterlinkPreviewActivity : ComponentActivity() {
         )
         setContent {
             val updateExample = interlinkUpdateExample(selected, pending = previewMode == "updates-pending", enabled = previewMode == "updates-enabled")
-            var updateReview by remember { mutableStateOf(if (previewMode == "updates-confirmation") updateExample.observation!!.context!!.let {
-                PiUpdateReview(selected,it,PiUpdateChoice(it.bond,"99999999-9999-4999-8999-999999999999",it.revision!!,true))
-            } else null) }
             var review by remember { mutableStateOf(if (previewMode in setOf("import-confirmation", "camera-confirmation", "camera-connection-only")) importExample else null) }
             val exampleAction = PiSavedImport(1, importExample.choice(PiImportMode.ONCE), importExample.choice(PiImportMode.ONCE).canonicalPayload(), "example-only",
                 importExample.source, false, null, null)
@@ -95,9 +92,8 @@ class InterlinkPreviewActivity : ComponentActivity() {
                         Text("Example data · visual preview", style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant)
                         InterlinkApplianceCard(dashboard, false, {}, {})
-                        if (previewMode?.startsWith("updates-") == true) InterlinkUpdatesCard(dashboard, updateExample, false,
-                            request = { enabled -> updateExample.observation!!.context!!.let { updateReview=PiUpdateReview(selected,it,
-                                PiUpdateChoice(it.bond,"99999999-9999-4999-8999-999999999999",it.revision!!,enabled)) } }, check = {})
+                        if (previewMode?.startsWith("updates-") == true) InterlinkUpdatesCard(dashboard, updateExample, previewMode == "updates-saving",
+                            request = {}, check = {}, working = previewMode == "updates-saving", saving = previewMode == "updates-saving")
                         if (previewMode == "alert-settings") InterlinkDriveAlertsSetting()
                         if (previewMode == "storage" || importPreview) InterlinkPlatformCard(dashboard, if (importPreview) imports else null) { _, pause ->
                             review = importExample.copy(pause = pause)
@@ -120,7 +116,6 @@ class InterlinkPreviewActivity : ComponentActivity() {
                     }
                 }
                 review?.let { InterlinkImportConfirmation(it, false, { review = null }, { review = null }) }
-                updateReview?.let { InterlinkUpdateConfirmation(it, false, { updateReview = null }, { updateReview = null }) }
             }
         }
     }

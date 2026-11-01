@@ -5,9 +5,10 @@ Pi automatic updates from the approved Interlink phone. The signed core command,
 Pi atomic policy transaction and root verifier exist. The node now carries fixed
 context/apply/lookup operations over its authenticated appliance QUIC channel,
 with an explicitly installed privileged host bridge. The phone now has a durable exact-request outbox, bounded authenticated local
-APIs and a Material3 Expressive confirmation/control surface. Source compilation
-and host contracts pass; normal-package Android execution and installed Pi/phone
-acceptance are separate gates.
+APIs and a Material3 Expressive settings card. The standard switch applies an
+explicit choice in one tap. It shows progress and stays disabled until fresh
+Pi state returns. Unknown outcomes offer recovery without automatically sending
+the choice again. Installed Pi/phone acceptance remains a separate gate.
 
 ## Authentication and transport
 
@@ -75,7 +76,9 @@ No source, account, sync pairing or import record is reset by update controls.
 
 The companion checks saved selection and full paired identities before and after
 IO, rechecks the review context before confirm, and signs only through its local
-node. The switch follows freshly read Pi state. Offline, unapproved, unsupported,
+node. The switch follows freshly read Pi state, without an optimistic success
+state or an extra confirmation dialog. During a refresh, the last confirmed
+value can remain visible but disabled. Offline, unapproved, unsupported,
 unconfigured, busy and unreadable-history states cannot change policy. An
 unconfirmed choice offers read-only Check status and an explicit Keep current
 setting choice. No root setting, key, credential or arbitrary operation is sent
@@ -89,7 +92,10 @@ qualification. The new transport tests use real paired loopback QUIC and real
 signatures with an in-memory privileged-host double. They do not prove durable
 root publication, actual LAN/Tailscale roaming or an installed Android service.
 Native adapter tests use Unix sockets and synthetic root replies; Android
-compilation is a separate check. Report exact final test results in working.md.
+compilation is a separate check. Normal-package Android36 execution covers the
+native journal across an actual host stop/restart. Rendered examples use labelled
+synthetic Pi data, so they do not claim a real remote policy change. Report exact
+final test results and source/APK hashes in working.md and the evidence receipts.
 
 No actual Pi/phone, account, pending Pictures run, source media, update candidate,
 recovery or reusable image changes in this stage. The existing hosted API37

@@ -46,21 +46,24 @@ internal fun InterlinkApplianceDashboard(manager: EmbeddedNodeManager) {
     var importReview by remember { mutableStateOf<PiImportReview?>(null) }
     var importMessage by remember { mutableStateOf<Int?>(null) }
     var updates by remember { mutableStateOf(PiUpdatesState()) }
-    var updateReview by remember { mutableStateOf<PiUpdateReview?>(null) }
+    var updateWorking by remember { mutableStateOf(false) }
+    var updateSaving by remember { mutableStateOf(false) }
     var updateMessage by remember { mutableStateOf<Int?>(null) }
 
-    fun performUpdate(selected: SelectedAppliance, operation: () -> PiSavedUpdate) {
+    fun performUpdate(selected: SelectedAppliance, applying: Boolean = false, operation: () -> PiSavedUpdate) {
         scope.launch {
             gate.withLock {
-                busy = true; updateMessage = null; updates = updates.copy(observation = null)
+                busy = true; updateWorking = true; updateSaving = applying; updateMessage = null
                 try {
                     check(state.selection == selected)
+                    if (applying) check(state.connection == ApplianceConnectionState.CONNECTED)
                     val result = withContext(Dispatchers.IO) { operation() }
                     updates = updates.copy(selected = selected,
                         actions = (listOf(result) + updates.actions.filterNot { it.choice.id == result.choice.id }).sortedByDescending { it.order })
+                    updates = withContext(Dispatchers.IO) { updatesController.refresh(selected, true) }
                 } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
-                catch (_: Exception) { updateMessage = R.string.interlink_updates_result_unconfirmed }
-                finally { busy = false; refresh++ }
+                catch (_: Exception) { updateMessage = R.string.interlink_updates_result_unconfirmed; updates = updates.copy(observation = null) }
+                finally { updateWorking = false; updateSaving = false; busy = false; refresh++ }
             }
         }
     }
@@ -88,13 +91,11 @@ internal fun InterlinkApplianceDashboard(manager: EmbeddedNodeManager) {
                     busy = true
                     state = state.copy(connection = ApplianceConnectionState.CHECKING, observation = null, platform = null)
                     imports = imports.copy(observation = null)
-                    updates = updates.copy(observation = null)
                     try {
                         state = withContext(Dispatchers.IO) { controller.refresh(manager.folderSyncRequested()) }
                         imports = withContext(Dispatchers.IO) { importsController.readForDashboard(state) }
                         updates = withContext(Dispatchers.IO) { updatesController.readForDashboard(state) }
                         if (imports.observation?.context?.bond?.let { it != importReview?.context?.bond } == true) importReview = null
-                        if (updates.observation?.context?.let { it != updateReview?.context } == true) updateReview = null
                     }
                     finally { busy = false }
                 }
@@ -104,7 +105,6 @@ internal fun InterlinkApplianceDashboard(manager: EmbeddedNodeManager) {
     }
     LaunchedEffect(state.selection, state.connection) {
         if (importReview?.selected != state.selection || state.connection !in setOf(ApplianceConnectionState.CONNECTED, ApplianceConnectionState.CHECKING)) importReview = null
-        if (updateReview?.selected != state.selection || state.connection !in setOf(ApplianceConnectionState.CONNECTED, ApplianceConnectionState.CHECKING)) updateReview = null
     }
 
     InterlinkApplianceCard(state, busy, { refresh++ }, { choosing = true })
@@ -131,28 +131,12 @@ internal fun InterlinkApplianceDashboard(manager: EmbeddedNodeManager) {
     updateMessage?.let { Text(stringResource(it), color = MaterialTheme.colorScheme.error,
         modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }) }
     InterlinkUpdatesCard(state, updates, busy,
-        request = { enabled ->
-            scope.launch {
-                gate.withLock {
-                    busy = true; updateMessage = null
-                    try {
-                        val selected = checkNotNull(state.selection)
-                        check(state.connection == ApplianceConnectionState.CONNECTED)
-                        updateReview = withContext(Dispatchers.IO) { updatesController.review(selected, enabled) }
-                    } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
-                    catch (_: Exception) { updateMessage = R.string.interlink_updates_review_failed; refresh++ }
-                    finally { busy = false }
-                }
-            }
-        },
+        request = { enabled -> state.selection?.let { selected ->
+            performUpdate(selected, applying = true) { updatesController.confirm(updatesController.review(selected, enabled)) }
+        } },
         check = { action -> state.selection?.let { selected -> performUpdate(selected) { updatesController.resolve(selected, action) } } },
+        working = updateWorking, saving = updateSaving,
     )
-    updateReview?.let { shown ->
-        InterlinkUpdateConfirmation(shown, busy, { updateReview = null }) {
-            updateReview = null
-            performUpdate(shown.selected) { updatesController.confirm(shown) }
-        }
-    }
     importReview?.let { shown ->
         InterlinkImportConfirmation(shown, busy, { importReview = null }) { mode ->
             importReview = null
