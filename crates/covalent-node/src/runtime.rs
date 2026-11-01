@@ -228,6 +228,8 @@ pub struct NodeRuntimeConfig {
     /// Optional host-owned read-only system observations. Absent on ordinary nodes.
     #[cfg(unix)]
     pub appliance_platform: Option<Arc<dyn crate::appliance_platform::AppliancePlatformReader>>,
+    #[cfg(unix)]
+    pub appliance_imports: Option<Arc<dyn crate::appliance_imports::ApplianceImportHost>>,
 }
 
 impl NodeRuntimeConfig {
@@ -265,6 +267,8 @@ impl NodeRuntimeConfig {
             defer_folder_sync_start: false,
             #[cfg(unix)]
             appliance_platform: None,
+            #[cfg(unix)]
+            appliance_imports: None,
         }
     }
 }
@@ -348,6 +352,8 @@ impl NodeRuntime {
             defer_folder_sync_start,
             #[cfg(unix)]
             appliance_platform,
+            #[cfg(unix)]
+            appliance_imports,
         } = configuration;
 
         let key_protector =
@@ -505,6 +511,10 @@ impl NodeRuntime {
         #[cfg(unix)]
         if let Some(reader) = appliance_platform {
             state = state.with_appliance_platform(reader);
+        }
+        #[cfg(unix)]
+        if let Some(host) = appliance_imports {
+            state = state.with_appliance_imports(host);
         }
         #[cfg(unix)]
         if folder_sync_access_unavailable {

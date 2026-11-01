@@ -4,6 +4,10 @@ pub mod advertised_address;
 #[cfg(unix)]
 mod appliance_control;
 #[cfg(unix)]
+mod appliance_import_outbox;
+#[cfg(unix)]
+pub mod appliance_imports;
+#[cfg(unix)]
 pub mod appliance_platform;
 pub mod discovery;
 mod display_names;
@@ -551,6 +555,8 @@ pub struct AppState {
     recovery_state: Option<Arc<RecoveryStateStore>>,
     #[cfg(unix)]
     folder_sync: sync_engine::FolderSyncRuntimeState,
+    #[cfg(unix)]
+    import_outbox: Option<Arc<appliance_import_outbox::ImportOutbox>>,
 }
 
 impl AppState {
@@ -562,6 +568,16 @@ impl AppState {
     ) -> Self {
         if let Some(bond) = &self.controller_bond {
             let _ = bond.platform.set(reader);
+        }
+        self
+    }
+    #[cfg(unix)]
+    pub fn with_appliance_imports(
+        self,
+        host: Arc<dyn appliance_imports::ApplianceImportHost>,
+    ) -> Self {
+        if let Some(bond) = &self.controller_bond {
+            let _ = bond.imports.set(host);
         }
         self
     }
@@ -604,6 +620,12 @@ impl AppState {
             engine.public_identity(),
         )
         .map(Arc::new);
+        #[cfg(unix)]
+        let import_outbox = appliance_import_outbox::ImportOutbox::open(
+            data_directory.join("appliance-import-outbox.json"),
+            engine.public_identity(),
+        )
+        .map(Arc::new);
         Ok(Self {
             engine,
             platform_tier,
@@ -617,6 +639,8 @@ impl AppState {
             display_names,
             #[cfg(unix)]
             controller_bond,
+            #[cfg(unix)]
+            import_outbox,
             first_run_claim: None,
             discovery_controller: None,
             archive_limits: ArchiveLimits::default(),
@@ -1475,6 +1499,26 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/api/v1/appliance/platform",
             post(appliance_control::remote_platform).layer(DefaultBodyLimit::max(4096)),
+        )
+        .route(
+            "/api/v1/appliance/imports/context",
+            post(appliance_control::import_context).layer(DefaultBodyLimit::max(4096)),
+        )
+        .route(
+            "/api/v1/appliance/imports/confirm",
+            post(appliance_control::confirm_import).layer(DefaultBodyLimit::max(4096)),
+        )
+        .route(
+            "/api/v1/appliance/imports/actions",
+            get(appliance_control::import_actions),
+        )
+        .route(
+            "/api/v1/appliance/imports/check",
+            post(appliance_control::check_import).layer(DefaultBodyLimit::max(4096)),
+        )
+        .route(
+            "/api/v1/appliance/imports/withdraw",
+            post(appliance_control::withdraw_import).layer(DefaultBodyLimit::max(4096)),
         );
     router
         .fallback(not_found)

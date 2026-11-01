@@ -93,12 +93,26 @@ pub enum FolderControlOperation {
         requester_id: DeviceId,
         target_id: DeviceId,
     },
+    ReadApplianceImports {
+        requester_id: DeviceId,
+        target_id: DeviceId,
+    },
+    ApplianceImport {
+        requester_id: DeviceId,
+        target_id: DeviceId,
+        operation: crate::appliance_imports::ImportOperation,
+        proof: covalent_core::appliance_import::SignedImportApproval,
+        withdrawal_signature: Option<String>,
+    },
 }
 impl FolderControlOperation {
     fn alpn(&self) -> &'static [u8] {
         if matches!(
             self,
-            Self::ReadApplianceStatus { .. } | Self::ReadAppliancePlatform { .. }
+            Self::ReadApplianceStatus { .. }
+                | Self::ReadAppliancePlatform { .. }
+                | Self::ReadApplianceImports { .. }
+                | Self::ApplianceImport { .. }
         ) {
             return APPLIANCE_CONTROL_ALPN;
         }
@@ -119,7 +133,9 @@ impl FolderControlOperation {
             Self::SendRemoval(_)
             | Self::ProbeAddress { .. }
             | Self::ReadApplianceStatus { .. }
-            | Self::ReadAppliancePlatform { .. } => false,
+            | Self::ReadAppliancePlatform { .. }
+            | Self::ReadApplianceImports { .. }
+            | Self::ApplianceImport { .. } => false,
         };
         if one_way {
             LINK_CONTROL_ALPN
@@ -142,7 +158,9 @@ impl FolderControlOperation {
             Self::CommitEndpointRoster(commit) => commit.source_id,
             Self::ProbeAddress { requester_id, .. }
             | Self::ReadApplianceStatus { requester_id, .. }
-            | Self::ReadAppliancePlatform { requester_id, .. } => *requester_id,
+            | Self::ReadAppliancePlatform { requester_id, .. }
+            | Self::ReadApplianceImports { requester_id, .. }
+            | Self::ApplianceImport { requester_id, .. } => *requester_id,
         }
     }
 
@@ -161,7 +179,9 @@ impl FolderControlOperation {
             Self::CommitEndpointRoster(commit) => Some(commit.target_id),
             Self::ProbeAddress { target_id, .. }
             | Self::ReadApplianceStatus { target_id, .. }
-            | Self::ReadAppliancePlatform { target_id, .. } => Some(*target_id),
+            | Self::ReadAppliancePlatform { target_id, .. }
+            | Self::ReadApplianceImports { target_id, .. }
+            | Self::ApplianceImport { target_id, .. } => Some(*target_id),
         }
     }
 }
@@ -194,6 +214,8 @@ pub enum FolderControlPayload {
     LinkRun(crate::sync_engine::LinkRunCommit),
     ApplianceStatus(crate::appliance_control::ApplianceStatus),
     AppliancePlatform(crate::appliance_control::AppliancePlatformStatus),
+    ApplianceImports(crate::appliance_control::ImportStatus),
+    ApplianceImportReceipt(crate::appliance_imports::ImportReceipt),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -737,6 +759,44 @@ pub async fn serve_folder_control_connection(
                     },
                     None => FolderControlPayload::Rejected,
                 }
+            } else if let FolderControlOperation::ReadApplianceImports { requester_id, .. } =
+                request.operation
+            {
+                match controller_bond {
+                    Some(bond) => match bond.read_imports(&engine, requester_id).await {
+                        Ok(value) => FolderControlPayload::ApplianceImports(value),
+                        Err(FolderControlError::Rejected) => FolderControlPayload::Rejected,
+                        Err(FolderControlError::Busy) => FolderControlPayload::Busy,
+                        Err(_) => FolderControlPayload::NeedsAttention,
+                    },
+                    None => FolderControlPayload::Rejected,
+                }
+            } else if let FolderControlOperation::ApplianceImport {
+                requester_id,
+                operation,
+                ref proof,
+                ref withdrawal_signature,
+                ..
+            } = request.operation
+            {
+                match controller_bond {
+                    Some(bond) => match bond
+                        .import_action(
+                            &engine,
+                            requester_id,
+                            operation,
+                            proof,
+                            withdrawal_signature.as_deref(),
+                        )
+                        .await
+                    {
+                        Ok(value) => FolderControlPayload::ApplianceImportReceipt(value),
+                        Err(FolderControlError::Rejected) => FolderControlPayload::Rejected,
+                        Err(FolderControlError::Busy) => FolderControlPayload::Busy,
+                        Err(_) => FolderControlPayload::NeedsAttention,
+                    },
+                    None => FolderControlPayload::Rejected,
+                }
             } else {
                 match service {
                     Some(service) => apply_remote(service, request.operation.clone()).await,
@@ -771,7 +831,9 @@ async fn apply_remote(
     match operation {
         // Administrative operations must pass the separate bond gate above.
         FolderControlOperation::ReadApplianceStatus { .. }
-        | FolderControlOperation::ReadAppliancePlatform { .. } => FolderControlPayload::Rejected,
+        | FolderControlOperation::ReadAppliancePlatform { .. }
+        | FolderControlOperation::ReadApplianceImports { .. }
+        | FolderControlOperation::ApplianceImport { .. } => FolderControlPayload::Rejected,
         FolderControlOperation::CommitEndpointRoster(commit) => {
             match service.receive_endpoint_roster(&commit).await {
                 Ok(()) => FolderControlPayload::Ack,

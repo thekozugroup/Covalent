@@ -8,6 +8,9 @@ use std::collections::BTreeSet;
 use std::os::unix::fs::PermissionsExt as _;
 use std::sync::Arc;
 
+#[path = "imports_tests.rs"]
+mod imports_tests;
+
 struct Device {
     root: tempfile::TempDir,
     engine: Arc<Engine>,

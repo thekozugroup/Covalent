@@ -45,6 +45,8 @@ pub(crate) struct ControllerBondStore {
     // None is an I/O failure, never an invitation to replace a saved bond.
     bond: Mutex<Option<ControllerBond>>,
     pub(crate) platform: OnceLock<Arc<dyn crate::appliance_platform::AppliancePlatformReader>>,
+    pub(crate) imports: OnceLock<Arc<dyn crate::appliance_imports::ApplianceImportHost>>,
+    import_ops: Arc<tokio::sync::Semaphore>,
     platform_reads: Arc<tokio::sync::Semaphore>,
 }
 
@@ -123,6 +125,8 @@ impl ControllerBondStore {
             _lock: lock,
             bond: Mutex::new(Some(bond)),
             platform: OnceLock::new(),
+            imports: OnceLock::new(),
+            import_ops: Arc::new(tokio::sync::Semaphore::new(1)),
             platform_reads: Arc::new(tokio::sync::Semaphore::new(1)),
         })
     }
@@ -554,3 +558,9 @@ pub(crate) async fn remote_platform(
 
 #[cfg(test)]
 mod tests;
+
+mod imports;
+pub use imports::ImportStatus;
+pub(crate) use imports::{
+    check_import, confirm_import, import_actions, import_context, withdraw_import,
+};

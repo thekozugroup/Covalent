@@ -1,3 +1,26 @@
+# Phone import transport and durable pending requests — 2026-11-01
+
+Adds an optional fixed native import host, strict context/receipt models and
+owner-gated signed QUIC operations. Five local authenticated API operations
+provide context, one confirmed send, saved requests, readback and withdrawal.
+The outbox persists proof/source before network mutation; duplicates/restart
+never dispatch again. A distinct withdrawal signature prevents reusing approval
+as cancellation. Later acknowledged pause can supersede uncertain older work
+for that source. Unsafe/missing/changed state refuses without reset; sync remains
+available. No address or Pi token is saved. See appliance-import-transport.md.
+
+Verification: full core177/0 and node343/0 tests (zero ignored/filtered), including
+real pinned QUIC and durable restart/lost-reply/withdrawal cases. Workspace,
+all-target/all-feature clippy passes with warnings denied; format and foundation
+pass (65 API operations/484 references). No dependency/version/lockfile changes.
+The original compile failures and corrected runs remain separate in the private
+task audit. Test UDP endpoints explicitly close and rebind after each test.
+
+Android UI/client integration, actual Pi adapter/native/package qualification,
+full phone/Pi roaming/import/cloud and gold-image gates remain. The private Pi
+bridge is being extended coherently; no device/app install or release is claimed.
+Existing Interlink independent identity/Material Expressive theme stays intact.
+
 # Signed phone import choice contract — 2026-11-01
 
 Added covalent-core::appliance_import: canonical, bounded once/remember/off volume

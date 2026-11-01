@@ -15,6 +15,8 @@ use crate::{DeviceIdentity, PublicIdentity, identity::signing_message};
 
 /// Separate from pairing, folder-control and ordinary status signatures.
 pub const IMPORT_APPROVAL_DOMAIN: &[u8] = b"covalent/appliance-import/request/v1";
+/// Withdrawal is a separate change of intent, never inferred from an approval.
+pub const IMPORT_WITHDRAWAL_DOMAIN: &[u8] = b"covalent/appliance-import/withdraw/v1";
 /// Bounds canonical signed text before parsing, signing or verification.
 pub const MAX_IMPORT_APPROVAL_BYTES: usize = 2048;
 
@@ -184,6 +186,31 @@ pub fn verify_import_approval(
     expected: &ImportApprovalBond,
     signed: &SignedImportApproval,
 ) -> Result<ImportApproval> {
+    verify_choice(expected, signed, IMPORT_APPROVAL_DOMAIN)
+}
+
+/// Withdraw only this exact approval using a fresh controller signature.
+pub fn verify_import_withdrawal(
+    expected: &ImportApprovalBond,
+    approval: &SignedImportApproval,
+    signature: &str,
+) -> Result<ImportApproval> {
+    verify_import_approval(expected, approval)?;
+    verify_choice(
+        expected,
+        &SignedImportApproval {
+            payload: approval.payload.clone(),
+            signature: signature.to_owned(),
+        },
+        IMPORT_WITHDRAWAL_DOMAIN,
+    )
+}
+
+fn verify_choice(
+    expected: &ImportApprovalBond,
+    signed: &SignedImportApproval,
+    domain: &[u8],
+) -> Result<ImportApproval> {
     expected.validate()?;
     if signed.payload.len() > MAX_IMPORT_APPROVAL_BYTES || signed.signature.len() != 86 {
         return Err(ImportApprovalRejected);
@@ -205,7 +232,7 @@ pub fn verify_import_approval(
         .verifying_key()
         .map_err(|_| ImportApprovalRejected)?
         .verify_strict(
-            &signing_message(IMPORT_APPROVAL_DOMAIN, signed.payload.as_bytes()),
+            &signing_message(domain, signed.payload.as_bytes()),
             &signature,
         )
         .map_err(|_| ImportApprovalRejected)?;
@@ -215,6 +242,37 @@ pub fn verify_import_approval(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn withdrawal_is_a_separate_exact_change_of_intent() {
+        let (phone, choice) = fixture();
+        let approval = sign_import_approval(&phone, &choice).unwrap();
+        let signature = phone.sign(IMPORT_WITHDRAWAL_DOMAIN, approval.payload.as_bytes());
+        assert!(verify_import_withdrawal(&choice.bond, &approval, &signature).is_ok());
+        assert!(verify_import_withdrawal(&choice.bond, &approval, &approval.signature).is_err());
+        assert!(
+            verify_import_approval(
+                &choice.bond,
+                &SignedImportApproval {
+                    payload: approval.payload.clone(),
+                    signature: signature.clone()
+                }
+            )
+            .is_err()
+        );
+        let mut changed = choice.clone();
+        changed.action_id = Uuid::new_v4();
+        let different = sign_import_approval(&phone, &changed).unwrap();
+        assert!(verify_import_withdrawal(&choice.bond, &different, &signature).is_err());
+        let other = DeviceIdentity::generate();
+        assert!(
+            verify_import_withdrawal(
+                &choice.bond,
+                &approval,
+                &other.sign(IMPORT_WITHDRAWAL_DOMAIN, approval.payload.as_bytes())
+            )
+            .is_err()
+        );
+    }
 
     fn fixture() -> (DeviceIdentity, ImportApproval) {
         let phone = DeviceIdentity::generate();

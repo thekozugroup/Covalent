@@ -180,6 +180,165 @@ paths:
           $ref: "#/components/responses/ClientError"
         "503":
           $ref: "#/components/responses/Conflict"
+  /api/v1/appliance/imports/context:
+    post:
+      summary: Read a fresh owner-bound drive confirmation
+      operationId: applianceImportContext
+      description: >-
+        Unix hosts only. Requires the local bearer and retained full peer identity.
+        No address or Pi token is accepted. Admission is not copy/cloud completion.
+        Unknown results are retained and checked, never automatically replayed.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ApplianceImportPeer"
+      responses:
+        "200":
+          description: Validated context or durable admission-only request state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApplianceImportsStatus"
+        "400":
+          $ref: "#/components/responses/ClientError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/ClientError"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "413":
+          $ref: "#/components/responses/ClientError"
+        "503":
+          $ref: "#/components/responses/Conflict"
+  /api/v1/appliance/imports/confirm:
+    post:
+      summary: Persist and send one explicitly confirmed import
+      operationId: applianceImportConfirm
+      description: >-
+        Unix hosts only. Requires the local bearer and retained full peer identity.
+        No address or Pi token is accepted. Admission is not copy/cloud completion.
+        Unknown results are retained and checked, never automatically replayed.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ApplianceImportChoice"
+      responses:
+        "200":
+          description: Validated context or durable admission-only request state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApplianceImportAction"
+        "400":
+          $ref: "#/components/responses/ClientError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/ClientError"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "413":
+          $ref: "#/components/responses/ClientError"
+        "503":
+          $ref: "#/components/responses/Conflict"
+  /api/v1/appliance/imports/actions:
+    get:
+      summary: Read saved import requests without sending commands
+      operationId: applianceImportActions
+      description: >-
+        Unix hosts only. Requires the local bearer and retained full peer identity.
+        No address or Pi token is accepted. Admission is not copy/cloud completion.
+        Unknown results are retained and checked, never automatically replayed.
+      responses:
+        "200":
+          description: Validated context or durable admission-only request state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApplianceImportActions"
+        "400":
+          $ref: "#/components/responses/ClientError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/ClientError"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "413":
+          $ref: "#/components/responses/ClientError"
+        "503":
+          $ref: "#/components/responses/Conflict"
+  /api/v1/appliance/imports/check:
+    post:
+      summary: Read the exact saved request receipt without replay
+      operationId: applianceImportCheck
+      description: >-
+        Unix hosts only. Requires the local bearer and retained full peer identity.
+        No address or Pi token is accepted. Admission is not copy/cloud completion.
+        Unknown results are retained and checked, never automatically replayed.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ApplianceImportActionId"
+      responses:
+        "200":
+          description: Validated context or durable admission-only request state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApplianceImportAction"
+        "400":
+          $ref: "#/components/responses/ClientError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/ClientError"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "413":
+          $ref: "#/components/responses/ClientError"
+        "503":
+          $ref: "#/components/responses/Conflict"
+  /api/v1/appliance/imports/withdraw:
+    post:
+      summary: Persist a separately signed withdrawal of an unresolved request
+      operationId: applianceImportWithdraw
+      description: >-
+        Unix hosts only. Requires the local bearer and retained full peer identity.
+        No address or Pi token is accepted. Admission is not copy/cloud completion.
+        Unknown results are retained and checked, never automatically replayed.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ApplianceImportActionId"
+      responses:
+        "200":
+          description: Validated context or durable admission-only request state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApplianceImportAction"
+        "400":
+          $ref: "#/components/responses/ClientError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/ClientError"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "413":
+          $ref: "#/components/responses/ClientError"
+        "503":
+          $ref: "#/components/responses/Conflict"
   /healthz:
     get:
       summary: Check node process readiness
@@ -3831,3 +3990,164 @@ components:
           type: string
         retryable:
           type: boolean
+
+    ApplianceImportPeer:
+      type: object
+      additionalProperties: false
+      required: [peerId]
+      properties:
+        peerId: { $ref: "#/components/schemas/DeviceId" }
+    ApplianceImportActionId:
+      type: object
+      additionalProperties: false
+      required: [actionId]
+      properties:
+        actionId: { type: string, format: uuid }
+    ApplianceImportBond:
+      type: object
+      additionalProperties: false
+      required: [appliance, controller, rootGeneration, nativeGeneration]
+      properties:
+        appliance: { $ref: "#/components/schemas/ControllerPublicIdentity" }
+        controller: { $ref: "#/components/schemas/ControllerPublicIdentity" }
+        rootGeneration: { type: string, format: uuid }
+        nativeGeneration: { type: string, format: uuid }
+    ApplianceImportChoice:
+      type: object
+      additionalProperties: false
+      required: [schemaVersion, bond, actionId, actionSession, actionSequence, sourceId, kind, mode, attachmentId, previewId, retention]
+      properties:
+        schemaVersion: { const: 1 }
+        bond: { $ref: "#/components/schemas/ApplianceImportBond" }
+        actionId: { type: string, format: uuid }
+        actionSession: { type: string, format: uuid }
+        actionSequence: { type: integer, minimum: 1, maximum: 9223372036854775807 }
+        sourceId: { $ref: "#/components/schemas/HexDigest" }
+        kind: { const: volume }
+        mode: { type: string, enum: [once, remember, off] }
+        attachmentId: { type: [string, "null"], format: uuid }
+        previewId: { type: [string, "null"], format: uuid }
+        retention: { const: retain }
+      description: Once/remember require non-null attachment/preview; off requires both null. Full canonical bytes are signed by the local node, not an app-supplied key.
+    ApplianceImportsStatus:
+      type: object
+      additionalProperties: false
+      required: [schemaVersion, applianceId, controllerId, bondGeneration, importsSupported, importsAvailable, context]
+      properties:
+        schemaVersion: { const: 1 }
+        applianceId: { $ref: "#/components/schemas/DeviceId" }
+        controllerId: { $ref: "#/components/schemas/DeviceId" }
+        bondGeneration: { type: string, format: uuid }
+        importsSupported: { type: boolean }
+        importsAvailable: { type: boolean }
+        context:
+          oneOf:
+            - { $ref: "#/components/schemas/ApplianceImportContext" }
+            - { type: "null" }
+    ApplianceImportContext:
+      type: object
+      additionalProperties: false
+      required: [schemaVersion, bond, volumeServiceAvailable, sourcesTruncated, sources, storage, withdrawalAvailable, sourceCleanupAvailable]
+      properties:
+        schemaVersion: { const: 1 }
+        bond: { $ref: "#/components/schemas/ApplianceImportBond" }
+        volumeServiceAvailable: { type: boolean }
+        sourcesTruncated: { type: boolean }
+        sources:
+          type: array
+          maxItems: 24
+          items: { $ref: "#/components/schemas/ApplianceConfirmedImportSource" }
+        storage:
+          oneOf:
+            - type: object
+              additionalProperties: false
+              required: [availableAfterReserveBytes, reserveBytes]
+              properties:
+                availableAfterReserveBytes: { type: integer, minimum: 0, maximum: 9223372036854775807 }
+                reserveBytes: { const: 2147483648 }
+            - { type: "null" }
+        withdrawalAvailable: { const: true }
+        sourceCleanupAvailable: { const: false }
+    ApplianceConfirmedImportSource:
+      type: object
+      additionalProperties: false
+      required: [sourceId, kind, name, connected, automatic, destination, preview, actionSession, actionSequence, confirmation]
+      properties:
+        sourceId: { $ref: "#/components/schemas/HexDigest" }
+        kind: { const: volume }
+        name: { type: string, minLength: 1, maxLength: 64 }
+        connected: { type: boolean }
+        automatic: { type: boolean }
+        destination: { type: string, pattern: "^DCIM/GPhoto/Imports/[0-9a-f]{16}$" }
+        preview:
+          type: object
+          additionalProperties: false
+          required: [state, counts]
+          properties:
+            state: { type: string, enum: [unavailable, pending, scanning, ready, incomplete] }
+            counts:
+              oneOf:
+                - type: object
+                  additionalProperties: false
+                  required: [eligibleFiles, eligibleBytes]
+                  properties:
+                    eligibleFiles: { type: integer, minimum: 0, maximum: 100000 }
+                    eligibleBytes: { type: integer, minimum: 0, maximum: 429496729600000 }
+                - { type: "null" }
+        actionSession: { type: string, format: uuid }
+        actionSequence: { type: integer, minimum: 1, maximum: 9223372036854775807 }
+        confirmation:
+          oneOf:
+            - type: object
+              additionalProperties: false
+              required: [attachmentId, previewId]
+              properties:
+                attachmentId: { type: string, format: uuid }
+                previewId: { type: string, format: uuid }
+            - { type: "null" }
+      description: Confirmation requires a complete connected preview and known sufficient protected space. Counts include previously imported files, not a new-transfer total.
+    ApplianceImportProof:
+      type: object
+      additionalProperties: false
+      required: [payload, signature]
+      properties:
+        payload: { type: string, maxLength: 2048 }
+        signature: { type: string, minLength: 86, maxLength: 86 }
+    ApplianceImportReceipt:
+      type: object
+      additionalProperties: false
+      required: [actionId, actionSession, actionSequence, outcome, admissionOnly, choiceDigest]
+      properties:
+        actionId: { type: string, format: uuid }
+        actionSession: { type: [string, "null"], format: uuid }
+        actionSequence: { type: [integer, "null"], minimum: 1, maximum: 9223372036854775807 }
+        outcome: { type: string, enum: [unknown, accepted, uncertain, expired, withdrawn] }
+        admissionOnly: { const: true }
+        choiceDigest: { $ref: "#/components/schemas/HexDigest" }
+      description: Unknown has null session/sequence. Expired is an invalidated confirmation, never proof of copying. Withdrawn permanently prevents this exact original action from executing.
+    ApplianceImportAction:
+      type: object
+      additionalProperties: false
+      required: [order, proof, source, withdrawalRequested, withdrawalSignature, supersededBy, receipt]
+      properties:
+        order: { type: integer, minimum: 1 }
+        proof: { $ref: "#/components/schemas/ApplianceImportProof" }
+        source: { $ref: "#/components/schemas/ApplianceConfirmedImportSource" }
+        withdrawalRequested: { type: boolean }
+        withdrawalSignature: { type: [string, "null"], minLength: 86, maxLength: 86 }
+        supersededBy: { type: [string, "null"], format: uuid }
+        receipt:
+          oneOf:
+            - { $ref: "#/components/schemas/ApplianceImportReceipt" }
+            - { type: "null" }
+      description: Persisted before the first packet. Repeated confirm only reads. Separately signed withdrawal is persisted before sending. A later acknowledged pause may supersede an uncertain earlier request for that same source.
+    ApplianceImportActions:
+      type: object
+      additionalProperties: false
+      required: [schemaVersion, actions]
+      properties:
+        schemaVersion: { const: 1 }
+        actions:
+          type: array
+          maxItems: 32
+          items: { $ref: "#/components/schemas/ApplianceImportAction" }
