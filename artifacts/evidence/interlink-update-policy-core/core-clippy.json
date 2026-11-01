@@ -1,0 +1,280 @@
+{
+  "argv": [
+    "/Users/michaelwong/.rustup/toolchains/1.97.1-aarch64-apple-darwin/bin/cargo",
+    "clippy",
+    "--locked",
+    "--offline",
+    "-p",
+    "covalent-core",
+    "--all-targets",
+    "--all-features",
+    "--",
+    "-D",
+    "warnings"
+  ],
+  "cwd": "/Users/michaelwong/Developer/Covalent",
+  "state": "exited",
+  "processes": [
+    {
+      "pid": 7799,
+      "ppid": 7777,
+      "start": "Sun Nov 1 12:44:10 2026",
+      "command": "<defunct>"
+    },
+    {
+      "pid": 7801,
+      "ppid": 7799,
+      "start": "Sun Nov 1 12:44:10 2026",
+      "command": "/Users/michaelwong/.rustup/toolchains/1.97.1-aarch64-apple-darwin/bin/cargo"
+    },
+    {
+      "pid": 7808,
+      "ppid": 7801,
+      "start": "Sun Nov 1 12:44:10 2026",
+      "command": "(rustc)"
+    },
+    {
+      "pid": 7807,
+      "ppid": 7801,
+      "start": "Sun Nov 1 12:44:10 2026",
+      "command": "/Users/michaelwong/.rustup/toolchains/1.97.1-aarch64-apple-darwin/bin/rustc"
+    },
+    {
+      "pid": 7811,
+      "ppid": 7801,
+      "start": "Sun Nov 1 12:44:10 2026",
+      "command": "(rustc)"
+    },
+    {
+      "pid": 7813,
+      "ppid": 7801,
+      "start": "Sun Nov 1 12:44:10 2026",
+      "command": "/Users/michaelwong/.rustup/toolchains/1.97.1-aarch64-apple-darwin/bin/rustc"
+    },
+    {
+      "pid": 7814,
+      "ppid": 7801,
+      "start": "Sun Nov 1 12:44:10 2026",
+      "command": "/Users/michaelwong/.rustup/toolchains/1.97.1-aarch64-apple-darwin/bin/rustc"
+    },
+    {
+      "pid": 7816,
+      "ppid": 7801,
+      "start": "Sun Nov 1 12:44:11 2026",
+      "command": "(rustc)"
+    },
+    {
+      "pid": 7821,
+      "ppid": 7801,
+      "start": "Sun Nov 1 12:44:11 2026",
+      "command": "/Users/michaelwong/.rustup/toolchains/1.97.1-aarch64-apple-darwin/bin/rustc"
+    },
+    {
+      "pid": 7823,
+      "ppid": 7801,
+      "start": "Sun Nov 1 12:44:11 2026",
+      "command": "/Users/michaelwong/.rustup/toolchains/1.97.1-aarch64-apple-darwin/bin/rustc"
+    },
+    {
+      "pid": 7826,
+      "ppid": 7801,
+      "start": "Sun Nov 1 12:44:11 2026",
+      "command": "(rustc)"
+    },
+    {
+      "pid": 7828,
+      "ppid": 7801,
+      "start": "Sun Nov 1 12:44:11 2026",
+      "command": "/Users/michaelwong/.rustup/toolchains/1.97.1-aarch64-apple-darwin/bin/rustc"
+    },
+    {
+      "pid": 7829,
+      "ppid": 7801,
+      "start": "Sun Nov 1 12:44:11 2026",
+      "command": "/Users/michaelwong/.rustup/toolchains/1.97.1-aarch64-apple-darwin/bin/rustc"
+    },
+    {
+      "pid": 7835,
+      "ppid": 7801,
+      "start": "Sun Nov 1 12:44:11 2026",
+      "command": "(rustc)"
+    },
+    {
+      "pid": 7840,
+      "ppid": 7801,
+      "start": "Sun Nov 1 12:44:12 2026",
+      "command": "/Users/michaelwong/.rustup/toolchains/1.97.1-aarch64-apple-darwin/bin/rustc"
+    },
+    {
+      "pid": 7839,
+      "ppid": 7801,
+      "start": "Sun Nov 1 12:44:12 2026",
+      "command": "/Users/michaelwong/.rustup/toolchains/1.97.1-aarch64-apple-darwin/bin/rustc"
+    },
+    {
+      "pid": 7843,
+      "ppid": 7801,
+      "start": "Sun Nov 1 12:44:12 2026",
+      "command": "/Users/michaelwong/.rustup/toolchains/1.97.1-aarch64-apple-darwin/bin/rustc"
+    },
+    {
+      "pid": 7848,
+      "ppid": 7801,
+      "start": "Sun Nov 1 12:44:12 2026",
+      "command": "(rustc)"
+    },
+    {
+      "pid": 7850,
+      "ppid": 7801,
+      "start": "Sun Nov 1 12:44:12 2026",
+      "command": "/Users/michaelwong/.rustup/toolchains/1.97.1-aarch64-apple-darwin/bin/rustc"
+    },
+    {
+      "pid": 7856,
+      "ppid": 7801,
+      "start": "Sun Nov 1 12:44:13 2026",
+      "command": "(rustc)"
+    },
+    {
+      "pid": 7860,
+      "ppid": 7801,
+      "start": "Sun Nov 1 12:44:13 2026",
+      "command": "/Users/michaelwong/.rustup/toolchains/1.97.1-aarch64-apple-darwin/bin/rustc"
+    },
+    {
+      "pid": 7863,
+      "ppid": 7801,
+      "start": "Sun Nov 1 12:44:13 2026",
+      "command": "/Users/michaelwong/.rustup/toolchains/1.97.1-aarch64-apple-darwin/bin/rustc"
+    },
+    {
+      "pid": 7866,
+      "ppid": 7801,
+      "start": "Sun Nov 1 12:44:13 2026",
+      "command": "/Users/michaelwong/.rustup/toolchains/1.97.1-aarch64-apple-darwin/bin/rustc"
+    },
+    {
+      "pid": 7868,
+      "ppid": 7801,
+      "start": "Sun Nov 1 12:44:13 2026",
+      "command": "(rustc)"
+    },
+    {
+      "pid": 7870,
+      "ppid": 7801,
+      "start": "Sun Nov 1 12:44:14 2026",
+      "command": "/Users/michaelwong/.rustup/toolchains/1.97.1-aarch64-apple-darwin/bin/rustc"
+    },
+    {
+      "pid": 7871,
+      "ppid": 7801,
+      "start": "Sun Nov 1 12:44:14 2026",
+      "command": "(rustc)"
+    },
+    {
+      "pid": 7873,
+      "ppid": 7801,
+      "start": "Sun Nov 1 12:44:14 2026",
+      "command": "(rustc)"
+    },
+    {
+      "pid": 7874,
+      "ppid": 7801,
+      "start": "Sun Nov 1 12:44:14 2026",
+      "command": "/Users/michaelwong/.rustup/toolchains/1.97.1-aarch64-apple-darwin/bin/rustc"
+    },
+    {
+      "pid": 7881,
+      "ppid": 7801,
+      "start": "Sun Nov 1 12:44:14 2026",
+      "command": "(rustc)"
+    },
+    {
+      "pid": 7880,
+      "ppid": 7801,
+      "start": "Sun Nov 1 12:44:14 2026",
+      "command": "(rustc)"
+    },
+    {
+      "pid": 7888,
+      "ppid": 7801,
+      "start": "Sun Nov 1 12:44:14 2026",
+      "command": "(rustc)"
+    },
+    {
+      "pid": 7886,
+      "ppid": 7801,
+      "start": "Sun Nov 1 12:44:14 2026",
+      "command": "(rustc)"
+    },
+    {
+      "pid": 7892,
+      "ppid": 7801,
+      "start": "Sun Nov 1 12:44:14 2026",
+      "command": "(rustc)"
+    },
+    {
+      "pid": 7893,
+      "ppid": 7801,
+      "start": "Sun Nov 1 12:44:14 2026",
+      "command": "/Users/michaelwong/.rustup/toolchains/1.97.1-aarch64-apple-darwin/bin/rustc"
+    },
+    {
+      "pid": 7897,
+      "ppid": 7801,
+      "start": "Sun Nov 1 12:44:14 2026",
+      "command": "(rustc)"
+    },
+    {
+      "pid": 7895,
+      "ppid": 7801,
+      "start": "Sun Nov 1 12:44:14 2026",
+      "command": "/Users/michaelwong/.rustup/toolchains/1.97.1-aarch64-apple-darwin/bin/clippy-driver"
+    },
+    {
+      "pid": 7900,
+      "ppid": 7801,
+      "start": "Sun Nov 1 12:44:15 2026",
+      "command": "/Users/michaelwong/.rustup/toolchains/1.97.1-aarch64-apple-darwin/bin/rustc"
+    },
+    {
+      "pid": 7907,
+      "ppid": 7801,
+      "start": "Sun Nov 1 12:44:15 2026",
+      "command": "/Users/michaelwong/.rustup/toolchains/1.97.1-aarch64-apple-darwin/bin/rustc"
+    },
+    {
+      "pid": 7909,
+      "ppid": 7801,
+      "start": "Sun Nov 1 12:44:15 2026",
+      "command": "/Users/michaelwong/.rustup/toolchains/1.97.1-aarch64-apple-darwin/bin/rustc"
+    },
+    {
+      "pid": 7916,
+      "ppid": 7801,
+      "start": "Sun Nov 1 12:44:15 2026",
+      "command": "/Users/michaelwong/.rustup/toolchains/1.97.1-aarch64-apple-darwin/bin/rustc"
+    },
+    {
+      "pid": 7917,
+      "ppid": 7801,
+      "start": "Sun Nov 1 12:44:15 2026",
+      "command": "/Users/michaelwong/.rustup/toolchains/1.97.1-aarch64-apple-darwin/bin/clippy-driver"
+    },
+    {
+      "pid": 7924,
+      "ppid": 7801,
+      "start": "Sun Nov 1 12:44:16 2026",
+      "command": "/Users/michaelwong/.rustup/toolchains/1.97.1-aarch64-apple-darwin/bin/clippy-driver"
+    },
+    {
+      "pid": 7941,
+      "ppid": 7801,
+      "start": "Sun Nov 1 12:44:18 2026",
+      "command": "(clippy-driver)"
+    }
+  ],
+  "exit": 0,
+  "seconds": 9.809,
+  "logSha256": "a715b5556dd3f660dd9dbf9376692400be43ed4f5c2c26e9bea1b48e8c25e94d"
+}

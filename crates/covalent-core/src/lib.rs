@@ -3,6 +3,7 @@
 
 /// Signed, owner-bound appliance import choices; admission remains privileged.
 pub mod appliance_import;
+pub mod appliance_updates;
 mod atomic;
 mod backup;
 mod chunker;

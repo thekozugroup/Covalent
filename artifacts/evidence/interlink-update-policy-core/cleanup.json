@@ -1,0 +1,15 @@
+{
+  "taskId": "bonded-update-setting-1793554687312399000-5709-0",
+  "scratchAndInventoryAbsent": true,
+  "ownedCompilerProcessesExited": true,
+  "vmAvdContainerServerCreated": false,
+  "sharedAdbPreserved": [
+    76421,
+    93998
+  ],
+  "sharedRustSdkAndCargoRegistryPreserved": true,
+  "preFreeBytes": 468606742528,
+  "postFreeBytes": 468873773056,
+  "scope": "Whole-volume free-space difference across final compiler scratch removal; concurrent APFS activity limits attribution.",
+  "volumeFreeBytesIncrease": 267030528
+}

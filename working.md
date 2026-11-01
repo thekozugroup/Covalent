@@ -1,3 +1,52 @@
+# Signed automatic-update choice groundwork — 2026-11-01
+
+Previous goal turn was progress: both native container jobs cleared the security
+gate and stricter owner guest qualification was signed/pushed. Both private
+5e46ee6 safety jobs now pass, including the entire configured hosted Android36
+update/repair/camera/owner/platform sequence. Original artifact digest/size/all ZIP
+CRCs, owner65/45/33 counts, three explicit no-ANR observations, unchanged framework
+IDs and current functional source hashes independently verify. Raw private hosted
+proof stays in the private GPhotoOS audit, not this public repository.
+
+The companion currently only reads update policy. This feature adds its signed
+core command boundary: one explicit automatic-update boolean, owner-approved full
+bond, stable action ID and Pi-issued settings revision. Only the approved phone
+can sign. Verification requires independently trusted bond/revision and refuses
+wrong/revoked generations, stale revisions, malformed/weak identities, unsupported
+schema, nil IDs, altered intent, noncanonical/unknown/missing/duplicate fields,
+oversize payloads and invalid signatures. Its separate Ed25519 domain cannot
+accept an import or withdrawal signature. No credential/path/URL/deletion fields.
+
+All186 core library tests pass with zero main-run ignored/filtered tests; seven
+are new boundary tests. The two expected child lock probes filter unrelated
+tests and are not extra full-suite runs. Clippy all-targets/all-features passes
+with denied warnings. Existing dependencies, import domains, wire routes and
+versions remain unchanged. Exact bounded proof is retained at
+artifacts/evidence/interlink-update-policy-core.
+
+Verification does not write or consume a settings revision. Next implement the
+locked durable Pi policy/receipt transaction, preserving credentials and changing
+revision for every local/remote choice; then native/root verification, bonded
+transport and phone outbox/readback/Expressive control. No endpoint or app switch
+is exposed before those layers exist. This is groundwork, not a completed remote
+settings feature, no-op/replay-effect proof, native Android or physical acceptance.
+
+Work is isolated on codex/interlink-update-policy from1bd5525, preserving the
+PR60 acceptance run. It has now finished: all other primary public jobs pass, but API37
+fails during permission recovery with missing Android package/input services and
+ColorBuffer errors. That terminal artifact is verified and retained in the
+private appliance audit for diagnosis, without a reset or weakened check.
+The private feature branch has the same name, based on5e46ee6. Existing PR1/PR60
+heads/bases/draft states remain untouched by these source commits.
+
+Pi/phone/accounts/media/identities/pairings/Pictures journal, existing e4013a1
+candidate/recovery packages and protected signers are unchanged. No new VM/AVD/
+container/server or device operation is performed. Owned compiler scratch and
+task inventory are independently absent; all tracked processes exited. Retained
+public core audit38,680B and private hosted/API37 audit3,776,494B.
+Volume free-space increase across final cleanup is267,030,528B,
+with concurrent APFS limits. Shared Rust/Cargo/SDK/ADB and other tasks remain.
+
 # Interlink identity and Caddy security qualification — 2026-11-01
 
 Interlink already has its own minimal vector mark, adaptive/themed Android icon,
