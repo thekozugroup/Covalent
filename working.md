@@ -1,3 +1,27 @@
+# Signed phone import choice contract — 2026-11-01
+
+Added covalent-core::appliance_import: canonical, bounded once/remember/off volume
+choices signed with the actual DeviceIdentity and a separate domain. The proof
+binds full phone/Pi keys, root/native generations, action/session/sequence,
+source hash and exact attachment/preview. Only retain-originals is representable.
+Strict dalek verification rejects weak keys, malformed/noncanonical signatures,
+changed owners/generations/tuples and ambiguous/missing/duplicate JSON. Existing
+ordinary identity verification is unchanged; signing_message is crate-visible
+so the new verifier uses the exact existing framing implementation.
+
+All176 core unit tests pass (zero ignored/filtered), including6 new adversarial
+contract tests. Core lib/tests clippy passes with denied warnings; whole-workspace
+format passes. An initial clippy invocation selected Homebrew's driver despite
+pinned rustc, causing E0514; rerun with the matching toolchain PATH passes without
+purging caches or weakening checks. No dependency/version/lockfile change.
+
+This is a shared primitive, not a new remote operation or permission. Expected
+bond must come from privileged owner-approved private state, followed by locked
+revocation/preview/ledger admission. Phone transport/outbox and the Pi root mirror
+remain to be connected. No capability flag is enabled, device state changed,
+release/merge or gold claim. See docs/appliance-import-approval.md. Bounded audit
+and disposable task cleanup are retained in the private Interlink checkout.
+
 # Owner-bonded Pi platform observations — 2026-10-31
 
 Interlink now reads cached card/drive previews, protected Pi space and signed

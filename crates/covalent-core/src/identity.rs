@@ -490,7 +490,7 @@ struct ProtectedIdentityPayload {
     private_key: Zeroizing<String>,
 }
 
-fn signing_message(domain: &[u8], message: &[u8]) -> Vec<u8> {
+pub(crate) fn signing_message(domain: &[u8], message: &[u8]) -> Vec<u8> {
     let mut signed = Vec::with_capacity(24 + domain.len() + message.len());
     signed.extend_from_slice(b"covalent/signature/v1\0");
     signed.extend_from_slice(&(domain.len() as u64).to_be_bytes());
