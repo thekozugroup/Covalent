@@ -7,7 +7,10 @@
     <string name="interlink_import_once">Import once</string>
     <string name="interlink_import_remember_action">Import &amp; remember</string>
     <string name="interlink_import_remember">Import automatically next time</string>
-    <string name="interlink_import_remember_detail">Remember only this source.</string>
+    <string name="interlink_import_remember_detail">Saves a small identification file on this drive.</string>
+    <string name="interlink_import_remember_camera">Remember this camera. No files are written to it.</string>
+    <string name="interlink_import_connection_only">Confirm each connection</string>
+    <string name="interlink_import_unstable_camera">This camera cannot be remembered reliably. Review each time you connect it.</string>
     <string name="interlink_import_originals">Originals stay on the source. Google Photos backup is separate.</string>
     <string name="interlink_import_pause_detail">Turn off automatic imports for this source. Work already accepted may still finish. Originals stay on the source.</string>
     <string name="interlink_import_counts_detail">Counts include files already imported.</string>

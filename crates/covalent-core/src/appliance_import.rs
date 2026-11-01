@@ -17,6 +17,8 @@ use crate::{DeviceIdentity, PublicIdentity, identity::signing_message};
 pub const IMPORT_APPROVAL_DOMAIN: &[u8] = b"covalent/appliance-import/request/v1";
 /// Withdrawal is a separate change of intent, never inferred from an approval.
 pub const IMPORT_WITHDRAWAL_DOMAIN: &[u8] = b"covalent/appliance-import/withdraw/v1";
+pub const IMPORT_CAMERA_APPROVAL_DOMAIN: &[u8] = b"covalent/appliance-import/approval/v2";
+pub const IMPORT_CAMERA_WITHDRAWAL_DOMAIN: &[u8] = b"covalent/appliance-import/withdraw/v2";
 /// Bounds canonical signed text before parsing, signing or verification.
 pub const MAX_IMPORT_APPROVAL_BYTES: usize = 2048;
 
@@ -34,12 +36,14 @@ pub struct ImportApprovalBond {
     pub native_generation: Uuid,
 }
 
-/// Camera consent has its own lifecycle and is not admitted by this contract.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+/// Kind is signed: a camera cannot claim a volume's admission journal.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ImportSourceKind {
     /// An observed, pinned removable-volume attachment.
     Volume,
+    /// A metadata-preview-bound PTP/MTP camera connection (schema2 only).
+    Camera,
 }
 
 /// Explicit choices shown to the owner for one attached source.
@@ -66,7 +70,7 @@ pub enum ImportRetention {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ImportApproval {
-    /// Exactly 1; unsupported contracts fail closed.
+    /// Volume schema1 or camera schema2; other combinations fail closed.
     pub schema_version: u16,
     /// Full identities and generations shown for this confirmation.
     pub bond: ImportApprovalBond,
@@ -78,7 +82,7 @@ pub struct ImportApproval {
     pub action_sequence: u64,
     /// Opaque 64-character lowercase source hash, never a caller-supplied path.
     pub source_id: String,
-    /// Only volume choices are supported in this version.
+    /// Selects the source's independent admission service and signing domain.
     pub kind: ImportSourceKind,
     /// Once, explicit remember, or off.
     pub mode: ImportApprovalMode,
@@ -133,11 +137,27 @@ impl ImportApprovalBond {
 }
 
 impl ImportApproval {
+    pub fn approval_domain(&self) -> &'static [u8] {
+        if self.schema_version == 2 {
+            IMPORT_CAMERA_APPROVAL_DOMAIN
+        } else {
+            IMPORT_APPROVAL_DOMAIN
+        }
+    }
+    pub fn withdrawal_domain(&self) -> &'static [u8] {
+        if self.schema_version == 2 {
+            IMPORT_CAMERA_WITHDRAWAL_DOMAIN
+        } else {
+            IMPORT_WITHDRAWAL_DOMAIN
+        }
+    }
     /// Validates the fixed choice before producing its canonical signing bytes.
     pub fn canonical_bytes(&self) -> Result<Vec<u8>> {
         self.bond.validate()?;
-        if self.schema_version != 1
-            || self.action_id.is_nil()
+        if !matches!(
+            (self.schema_version, self.kind),
+            (1, ImportSourceKind::Volume) | (2, ImportSourceKind::Camera)
+        ) || self.action_id.is_nil()
             || self.action_session.is_nil()
             || self.action_sequence == 0
             || self.action_sequence > i64::MAX as u64
@@ -176,7 +196,7 @@ pub fn sign_import_approval(
     let bytes = choice.canonical_bytes()?;
     Ok(SignedImportApproval {
         payload: String::from_utf8(bytes.clone()).map_err(|_| ImportApprovalRejected)?,
-        signature: phone.sign(IMPORT_APPROVAL_DOMAIN, &bytes),
+        signature: phone.sign(choice.approval_domain(), &bytes),
     })
 }
 
@@ -186,7 +206,7 @@ pub fn verify_import_approval(
     expected: &ImportApprovalBond,
     signed: &SignedImportApproval,
 ) -> Result<ImportApproval> {
-    verify_choice(expected, signed, IMPORT_APPROVAL_DOMAIN)
+    verify_choice(expected, signed, false)
 }
 
 /// Withdraw only this exact approval using a fresh controller signature.
@@ -202,14 +222,14 @@ pub fn verify_import_withdrawal(
             payload: approval.payload.clone(),
             signature: signature.to_owned(),
         },
-        IMPORT_WITHDRAWAL_DOMAIN,
+        true,
     )
 }
 
 fn verify_choice(
     expected: &ImportApprovalBond,
     signed: &SignedImportApproval,
-    domain: &[u8],
+    withdrawal: bool,
 ) -> Result<ImportApproval> {
     expected.validate()?;
     if signed.payload.len() > MAX_IMPORT_APPROVAL_BYTES || signed.signature.len() != 86 {
@@ -232,7 +252,14 @@ fn verify_choice(
         .verifying_key()
         .map_err(|_| ImportApprovalRejected)?
         .verify_strict(
-            &signing_message(domain, signed.payload.as_bytes()),
+            &signing_message(
+                if withdrawal {
+                    choice.withdrawal_domain()
+                } else {
+                    choice.approval_domain()
+                },
+                signed.payload.as_bytes(),
+            ),
             &signature,
         )
         .map_err(|_| ImportApprovalRejected)?;
@@ -242,6 +269,71 @@ fn verify_choice(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn recorded_android_volume_and_camera_proofs_keep_their_original_domains() {
+        for raw in [
+            include_str!("../../../apps/android/app/src/test/resources/appliance-imports.json"),
+            include_str!(
+                "../../../apps/android/app/src/test/resources/appliance-camera-imports.json"
+            ),
+        ] {
+            let value: serde_json::Value = serde_json::from_str(raw).unwrap();
+            let bond: ImportApprovalBond =
+                serde_json::from_value(value["context"]["bond"].clone()).unwrap();
+            let proof: SignedImportApproval =
+                serde_json::from_value(value["action"]["proof"].clone()).unwrap();
+            let choice = verify_import_approval(&bond, &proof).unwrap();
+            assert_eq!(choice.canonical_bytes().unwrap(), proof.payload.as_bytes());
+            assert!(
+                verify_import_withdrawal(
+                    &bond,
+                    &proof,
+                    value["withdrawalSignature"].as_str().unwrap()
+                )
+                .is_ok()
+            );
+        }
+    }
+    #[test]
+    fn camera_schema2_signatures_and_withdrawal_cannot_cross_version_kind_or_intent() {
+        let (phone, mut camera) = fixture();
+        camera.schema_version = 2;
+        camera.kind = ImportSourceKind::Camera;
+        let proof = sign_import_approval(&phone, &camera).unwrap();
+        assert_eq!(
+            verify_import_approval(&camera.bond, &proof).unwrap(),
+            camera
+        );
+        let withdrawal = phone.sign(camera.withdrawal_domain(), proof.payload.as_bytes());
+        assert!(verify_import_withdrawal(&camera.bond, &proof, &withdrawal).is_ok());
+        for domain in [
+            IMPORT_APPROVAL_DOMAIN,
+            IMPORT_WITHDRAWAL_DOMAIN,
+            IMPORT_CAMERA_WITHDRAWAL_DOMAIN,
+        ] {
+            let wrong = SignedImportApproval {
+                payload: proof.payload.clone(),
+                signature: phone.sign(domain, proof.payload.as_bytes()),
+            };
+            assert!(verify_import_approval(&camera.bond, &wrong).is_err());
+        }
+        assert!(verify_import_withdrawal(&camera.bond, &proof, &proof.signature).is_err());
+        for (version, kind) in [
+            (1, ImportSourceKind::Camera),
+            (2, ImportSourceKind::Volume),
+            (3, ImportSourceKind::Camera),
+        ] {
+            let mut invalid = camera.clone();
+            invalid.schema_version = version;
+            invalid.kind = kind;
+            assert!(invalid.canonical_bytes().is_err());
+        }
+        let altered = SignedImportApproval {
+            payload: proof.payload.replace("\"camera\"", "\"volume\""),
+            signature: proof.signature.clone(),
+        };
+        assert!(verify_import_approval(&camera.bond, &altered).is_err());
+    }
     #[test]
     fn withdrawal_is_a_separate_exact_change_of_intent() {
         let (phone, choice) = fixture();

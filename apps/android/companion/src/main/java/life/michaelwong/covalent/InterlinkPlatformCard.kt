@@ -41,9 +41,11 @@ internal fun InterlinkPlatformCard(
                 stringResource(R.string.interlink_storage_space, Formatter.formatFileSize(context, it))
             } ?: stringResource(R.string.interlink_storage_space_unknown))
             val volumes = approval?.volumesAvailable ?: (snapshot?.volumesAvailable == true)
-            val cameras = snapshot?.camerasAvailable == true
+            val cameras = approval?.camerasAvailable ?: (snapshot?.camerasAvailable == true)
             val sources = if (approval == null) snapshot?.sources.orEmpty() else
-                approval.sources.map { it.source } + snapshot?.sources.orEmpty().filter { it.camera }
+                approval.sources.map { it.source } + snapshot?.sources.orEmpty().filter { source ->
+                    source.camera && approval.camerasAvailable == null && approval.sources.none { it.source.id == source.id }
+                }
             if (!volumes) Text(stringResource(R.string.interlink_volumes_unavailable))
             if (!cameras) Text(stringResource(R.string.interlink_cameras_unavailable))
             if (sources.isEmpty() && volumes && cameras) Text(stringResource(R.string.interlink_storage_empty))
@@ -70,7 +72,7 @@ internal fun InterlinkPlatformCard(
                             style = MaterialTheme.typography.bodySmall)
                         val control = approval?.sources?.singleOrNull { it.source.id == source.id }
                         if (control != null) {
-                            val pending = imports?.actions.orEmpty().filter { !it.resolved && it.choice.bond == approval?.bond }
+                            val pending = imports?.actions.orEmpty().filter { !it.resolved && it.choice.bond == approval?.bond && it.choice.camera == source.camera }
                             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                 Button(enabled = !busy && pending.isEmpty() && control.confirmation != null,
                                     onClick = { review(source.id, false) }, modifier = Modifier.testTag("interlink-import-review-${source.id}")) {
@@ -84,7 +86,7 @@ internal fun InterlinkPlatformCard(
                             if (pending.isNotEmpty()) Text(stringResource(R.string.interlink_import_pending_detail), style = MaterialTheme.typography.bodySmall)
                             else if (control.confirmation == null) Text(stringResource(R.string.interlink_import_preview_wait), style = MaterialTheme.typography.bodySmall)
                         }
-                        if (source.camera) Text(stringResource(R.string.interlink_camera_approval_unavailable), style = MaterialTheme.typography.bodySmall)
+                        if (source.camera && control == null) Text(stringResource(R.string.interlink_camera_approval_unavailable), style = MaterialTheme.typography.bodySmall)
                     }
                 }
             }

@@ -34,8 +34,36 @@ def admit(proof, serial, avd, apk_sha, boot):
     require(set(proof.get("identitySha256After", {})) == set(IDENTITIES), "Incomplete startup identity proof")
 
 
+def expected_tests():
+    expected = set()
+    for name in CLASSES:
+        path = ROOT / "apps/android/companion/src/androidTest/java/life/michaelwong/covalent" / (name.replace(".", "/") + ".kt")
+        source = path.read_text()
+        methods = re.findall(r"@Test\s+fun\s+(\w+)\s*\(", source)
+        require(methods and len(methods) == len(set(methods)) == len(re.findall(r"@Test\b", source)) and "@Ignore" not in source,
+                "Incomplete native alert test expectation")
+        expected.update("life.michaelwong.covalent." + name + "#" + method for method in methods)
+    return expected
+
+
 def instrument_passed(output):
-    return re.findall(r"^OK \((\d+) tests\)$", output, re.M) == ["20"] and \
+    expected = expected_tests()
+    passed = set(); active = {}
+    for line in output.splitlines():
+        match = re.fullmatch(r"INSTRUMENTATION_STATUS: (class|test)=(.+)", line)
+        if match:
+            active[match[1]] = match[2]
+        elif line.startswith("INSTRUMENTATION_STATUS_CODE: "):
+            code = line.removeprefix("INSTRUMENTATION_STATUS_CODE: ")
+            if code not in ("0", "1") or set(active) != {"class", "test"}:
+                return False
+            if code == "0":
+                key = active["class"] + "#" + active["test"]
+                if key in passed:
+                    return False
+                passed.add(key)
+            active = {}
+    return not active and passed == expected and re.findall(r"^OK \((\d+) tests\)$", output, re.M) == [str(len(expected))] and \
         re.findall(r"^INSTRUMENTATION_CODE: (-?\d+)$", output, re.M) == ["-1"] and \
         not re.search(r"^INSTRUMENTATION_STATUS_CODE: -|INSTRUMENTATION_FAILED|FAILURES!!!|shortMsg=|Process crashed", output, re.M)
 
@@ -131,12 +159,12 @@ def main():
         if not granted:
             run("shell", "am", "start", "-W", "-n", PACKAGE + "/life.michaelwong.covalent.InterlinkPreviewActivity",
                 "--es", "previewMode", "alert-settings")
-            value = wait_ui(lambda v: has_text(v, "Allow drive alerts"))
-            tap(value, lambda n: n.get("text") == "Allow drive alerts")
+            value = wait_ui(lambda v: has_text(v, "Allow import alerts"))
+            tap(value, lambda n: n.get("text") == "Allow import alerts")
             ids = {p + ":id/permission_allow_button" for p in ("com.android.permissioncontroller", "com.google.android.permissioncontroller")}
             value = wait_ui(lambda v: any(n.get("resource-id") in ids for n in v.iter("node")))
             tap(value, lambda n: n.get("resource-id") in ids)
-            wait_ui(lambda v: has_text(v, "Drive alerts are allowed"))
+            wait_ui(lambda v: has_text(v, "Import alerts are allowed"))
             mark("actual notification consent updates the production control")
         run("shell", "input", "keyevent", "KEYCODE_HOME")
         run("install", "-r", str(test), timeout=120)
@@ -147,7 +175,7 @@ def main():
                      PACKAGE + ".test/androidx.test.runner.AndroidJUnitRunner", timeout=300)
         (args.evidence_dir / "instrumentation.log").write_text(output + "\n")
         require(instrument_passed(output), "Native alert/component instrumentation failed; original log retained")
-        mark("all20 native owner, background, notification and component checks passed")
+        mark(f"all{len(expected_tests())} native owner, background, notification and component checks passed by name")
         require(framework() == before and identities() == proof["identitySha256After"], "Guest framework or identities changed")
         report["frameworkAfter"] = before
         report["identitySha256After"] = proof["identitySha256After"]

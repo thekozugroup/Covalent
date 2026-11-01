@@ -19,6 +19,19 @@ native cards and adaptive endpoints remain shared with Covalent.
 
 ## Captured implementation
 
+- `interlink-camera-confirmation.png`: actual normal Interlink debug package,
+  Expressive theme and stable-camera confirmation. Source/destination, counts,
+  space and explicit remember are visible. Data is labelled as an example.
+- `interlink-camera-connection-only.png`: a camera that cannot be remembered
+  shows a plain explanation and Import once, without an inactive checkbox.
+- `interlink-camera-confirmation-large-dark.png`: the same once-only camera
+  review at 200% system text in dark mode. Content scrolls; actions stay visible.
+  Fourteen native component checks pass, including reaching the complete camera
+  explanation and original-retention note. These captures retain the normal
+  Application, package and full native producers. Font/night restore, 1.0x motion
+  and unchanged framework identities are checked. No real camera, import or
+  Google Photos backup is represented.
+
 - `interlink-drive-alert-settings.png`: actual notification permission control
   after granting through Android's real consent dialog. The normal Application,
   manifest and native producers are retained; the selected-Pi data is explicitly

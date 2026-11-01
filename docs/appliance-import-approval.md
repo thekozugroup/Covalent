@@ -1,22 +1,26 @@
 # Signed appliance import choices
 
 `covalent-core::appliance_import` shares one canonical signing contract between
-the phone's identity owner and the Pi's independent privileged verifier. It adds
-no HTTP/QUIC operation or advertised import capability yet. The companion still
-cannot approve imports until the owner-approved root mirror, transport, exact
-preview admission/readback and durable phone outbox are integrated.
+the phone's identity owner and the Pi's independent privileged verifier. The
+transport, durable phone outbox and companion review use this contract; a host
+still needs its independent owner-approved root mirror and current preview.
 
 `ImportApproval` signs full phone/Pi identities, root/native approval generations,
 action UUID, service session and positive signed-64-bit sequence, opaque source
-hash, volume kind, once/remember/off choice, attachment/preview UUIDs and retain
-originals. Once/remember require both UUIDs. Off requires explicit nulls. Camera
-choices, source paths and deletion modes are absent and rejected. Full raw keys
+hash, source kind, once/remember/off choice, attachment/preview UUIDs and retain
+originals. Once/remember require both UUIDs. Off requires explicit nulls. Source
+paths and deletion modes are absent and rejected. Full raw keys
 are authoritative; the short fingerprint alone never is.
 
 `sign_import_approval` uses the actual phone `DeviceIdentity` and existing
 `covalent/signature/v1` framing with the separate
 `covalent/appliance-import/request/v1` domain. Payloads are capped at2048 bytes.
-Version1 signs compact UTF-8 JSON in the struct declaration order; the receiver
+Version1 volume choices retain their exact original canonical bytes and domains.
+Camera choices require version2 and the separate
+`covalent/appliance-import/approval/v2` domain; their withdrawal uses
+`covalent/appliance-import/withdraw/v2`. Version1 camera and version2 volume
+combinations refuse. A signature for another version, kind or intent cannot
+authorize the choice. The receiver
 requires an exact round trip, rejecting alternate order/whitespace/UUID spelling,
 missing nullable fields, duplicate/unknown fields and unsupported versions/types.
 Unpadded base64url signatures are canonical64-byte Ed25519 values. Verification

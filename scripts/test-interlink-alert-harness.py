@@ -26,11 +26,13 @@ class AlertHarnessTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):qa.admit(self.proof(), serial, avd, "a" * 64, "owned-boot")
 
     def test_instrumentation_requires_all_tests_no_crash_skip_or_failure_and_exact_terminal_code(self):
-        passing = "OK (20 tests)\nINSTRUMENTATION_CODE: -1\n"
+        records = [f"INSTRUMENTATION_STATUS: class={key.split('#')[0]}\nINSTRUMENTATION_STATUS: test={key.split('#')[1]}\nINSTRUMENTATION_STATUS_CODE: 0\n" for key in sorted(qa.expected_tests())]
+        passing = "".join(records) + f"OK ({len(records)} tests)\nINSTRUMENTATION_CODE: -1\n"
         self.assertTrue(qa.instrument_passed(passing))
-        for output in [passing.replace("20", "19"), passing.replace("-1", "0"), passing + "INSTRUMENTATION_STATUS_CODE: -3\n",
+        for output in [passing.replace(f"OK ({len(records)} tests)", "OK (0 tests)"), passing.replace("INSTRUMENTATION_CODE: -1", "INSTRUMENTATION_CODE: 0"), passing + "INSTRUMENTATION_STATUS_CODE: -3\n",
                        passing + "INSTRUMENTATION_STATUS_CODE: -2\n", passing + "shortMsg=Process crashed.\n", passing + passing,
-                       "INSTRUMENTATION_CODE: -1\n", passing + "FAILURES!!!\n"]:
+                       "INSTRUMENTATION_CODE: -1\n", passing + "FAILURES!!!\n", passing.replace(records[0], ""),
+                       passing.replace(records[0], records[0].replace("test=", "test=unexpected")), passing.replace("CODE: 0", "CODE: -3", 1)]:
             with self.subTest(output=output):self.assertFalse(qa.instrument_passed(output))
 
 

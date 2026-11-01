@@ -1,7 +1,7 @@
-# Drive review reminders while the screen is closed
+# Import review reminders while the screen is closed
 
 Interlink checks the selected Pi while its existing opted-in native sync host
-runs. An attached SD/USB drive with a complete, usable preview can produce one
+runs. An attached SD/USB drive or compatible camera with a complete, usable preview can produce one
 private Android notification. It shows the eligible file count, total size,
 selected Pi, source labels, destination and available space. Tapping opens the
 real Interlink launcher. It never approves an import: the user still reviews a
@@ -14,10 +14,11 @@ capability or executable import action. The selected Pi and protected generation
 are rechecked before publication. Generic public lock-screen content hides names,
 counts and destinations; private details follow Android's notification settings.
 
-Only manual, connected volume sources with a ready preview, nonzero eligible
-count and sufficient protected space qualify. Unavailable, scanning, incomplete,
-automatic and camera sources do not. Current-bond unresolved requests suppress
-new prompts. An accepted import, withdrawn request or accepted pause suppresses
+Only manual, connected sources with a ready preview, nonzero eligible
+count, available service and sufficient protected space qualify. Cameras require
+an explicit version2 protected context. Unavailable, scanning, incomplete and
+automatic sources do not qualify. Current-bond unresolved requests suppress
+new prompts for that same service kind. An accepted import, withdrawn request or accepted pause suppresses
 its old preview; a new preview or attachment can request review again. This is
 reminder policy, not import authorization or a Google Photos backup receipt.
 
@@ -30,8 +31,9 @@ completed poll; bounded API reads use 5-second connection/read timeouts. An
 in-flight read may finish after cancellation, but its result is discarded.
 No extra Android service, dependency or permission is introduced.
 
-The per-Pi Drive alerts control reflects actual app/channel permission and
-provides Allow drive alerts and Notification settings. Permission is requested
+The per-Pi import alerts control reflects actual app/channel permission and
+provides Allow import alerts and Notification settings. Existing channel IDs and
+owner permission choices are preserved. Permission is requested
 only after the user's tap. Returning from Android settings refreshes that
 state. Denied/blocked permission prevents background API reads. Notification
 failures cannot terminate the sync owner or polling schedule. An active notice
@@ -47,7 +49,7 @@ No battery exemption, wake lock or global power-policy change is added.
 [Android notification permission](https://developer.android.com/develop/ui/compose/notifications/notification-permission)
 and [Doze guidance](https://developer.android.com/training/monitoring-device-state/doze-standby).
 
-Camera approval, background notices for uncertain outcomes, remaining remote
+Background notices for uncertain outcomes, remaining remote
 settings and actual Pi/Solstice LAN/cellular acceptance remain separate work.
 Originals stay on their source; exact Google Photos confirmation is still
 required before cleanup. No source deletion, physical media import, cloud

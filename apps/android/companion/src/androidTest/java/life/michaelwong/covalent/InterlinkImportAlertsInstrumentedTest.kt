@@ -94,7 +94,7 @@ class InterlinkImportAlertsInstrumentedTest {
             assertTrue("A reminder must not launch a screen", resumed().isEmpty())
             val active = context.getSystemService(NotificationManager::class.java).activeNotifications
                 .single { it.id == InterlinkImportNotifications.ID && it.tag == InterlinkImportNotifications.TAG }
-            assertEquals("Drive ready to review", active.notification.extras.getString(Notification.EXTRA_TITLE))
+            assertEquals("Source ready to review", active.notification.extras.getString(Notification.EXTRA_TITLE))
             loop.stop(owner);await { !sink.showing() }
         } finally { loop.close();sink.cancel() }
     }

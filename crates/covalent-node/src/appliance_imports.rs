@@ -4,7 +4,11 @@ use covalent_core::appliance_import::{
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
-use std::{collections::BTreeSet, future::Future, pin::Pin};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    future::Future,
+    pin::Pin,
+};
 use uuid::Uuid;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -36,6 +40,9 @@ fn nullable<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(
 ) -> Result<Option<T>, D::Error> {
     Option::<T>::deserialize(d)
 }
+fn present_boolean<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<bool>, D::Error> {
+    bool::deserialize(d).map(Some)
+}
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -43,6 +50,12 @@ pub struct ImportContext {
     pub schema_version: u16,
     pub bond: ImportApprovalBond,
     pub volume_service_available: bool,
+    #[serde(
+        default,
+        deserialize_with = "present_boolean",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub camera_service_available: Option<bool>,
     pub sources_truncated: bool,
     pub sources: Vec<ImportSource>,
     #[serde(deserialize_with = "nullable")]
@@ -66,6 +79,12 @@ pub struct ImportSource {
     pub name: String,
     pub connected: bool,
     pub automatic: bool,
+    #[serde(
+        default,
+        deserialize_with = "present_boolean",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub can_remember: Option<bool>,
     pub destination: String,
     pub preview: ImportPreview,
     pub action_session: Uuid,
@@ -123,7 +142,8 @@ impl ImportContext {
     }
     pub fn validate(&self) -> Result<(), ImportHostError> {
         self.bond.validate().map_err(|_| ImportHostError)?;
-        if self.schema_version != 1
+        if !matches!(self.schema_version, 1 | 2)
+            || (self.schema_version == 2) != self.camera_service_available.is_some()
             || self.sources.len() > 24
             || !self.withdrawal_available
             || self.source_cleanup_available
@@ -136,20 +156,25 @@ impl ImportContext {
             return Err(ImportHostError);
         }
         let mut ids = BTreeSet::new();
-        let mut action = None;
+        let mut actions = BTreeMap::new();
         for s in &self.sources {
             let current = (s.action_session, s.action_sequence);
+            let camera = s.kind == covalent_core::appliance_import::ImportSourceKind::Camera;
             if !hex(&s.source_id,64) || !ids.insert(&s.source_id) || s.action_session.is_nil()
                 || s.action_sequence == 0 || s.action_sequence > i64::MAX as u64
-                || action.is_some_and(|a| a != current) || s.name.trim().is_empty() || s.name.chars().count() > 64
+                || actions.insert(s.kind,current).is_some_and(|a| a != current)
+                || (self.schema_version == 1 && (camera || s.can_remember.is_some()))
+                || (self.schema_version == 2 && s.can_remember.is_none())
+                || (!camera && s.can_remember == Some(false))
+                || (camera && s.can_remember == Some(false) && s.automatic)
+                || s.name.trim().is_empty() || s.name.chars().count() > 64
                 || s.name.chars().any(|c| c.is_control() || matches!(c,'\u{200b}'..='\u{200f}'|'\u{202a}'..='\u{202e}'|'\u{2060}'..='\u{206f}'|'\u{feff}'))
                 || !s.destination.strip_prefix("DCIM/GPhoto/Imports/").is_some_and(|v| hex(v,16))
-                || (s.connected && !self.volume_service_available)
+                || (s.connected && if camera {!self.camera_service_available.unwrap_or(false)} else {!self.volume_service_available})
                 || (!s.connected && s.preview.state != PreviewState::Unavailable)
                 || matches!(s.preview.state,PreviewState::Ready|PreviewState::Incomplete) != s.preview.counts.is_some() {
                 return Err(ImportHostError);
             }
-            action = Some(current);
             if let Some(c) = &s.preview.counts
                 && (c.eligible_files > 100_000
                     || c.eligible_bytes < c.eligible_files
@@ -182,6 +207,11 @@ impl ImportContext {
             && self.sources.iter().any(|s| {
                 s.source_id == choice.source_id
                     && s.kind == choice.kind
+                    && (choice.mode != ImportApprovalMode::Remember
+                        || s.can_remember.unwrap_or(!matches!(
+                            s.kind,
+                            covalent_core::appliance_import::ImportSourceKind::Camera
+                        )))
                     && s.action_session == choice.action_session
                     && s.action_sequence == choice.action_sequence
                     && (choice.mode == ImportApprovalMode::Off
@@ -248,6 +278,71 @@ impl ImportReceipt {
 pub(crate) mod tests {
     use super::*;
     use covalent_core::{DeviceIdentity, appliance_import::*};
+    #[test]
+    fn camera_context_has_independent_journal_and_explicit_remember_capability() {
+        let (_, mut c) = fixture();
+        c.schema_version = 2;
+        c.camera_service_available = Some(true);
+        c.sources[0].can_remember = Some(true);
+        let mut camera = c.sources[0].clone();
+        camera.source_id = "c".repeat(64);
+        camera.kind = ImportSourceKind::Camera;
+        camera.action_session = Uuid::new_v4();
+        camera.action_sequence = 99;
+        camera.can_remember = Some(false);
+        c.sources.push(camera);
+        assert!(c.validate().is_ok());
+        let mut once = choice(&c, ImportApprovalMode::Once);
+        once.schema_version = 2;
+        once.kind = ImportSourceKind::Camera;
+        once.source_id = c.sources[1].source_id.clone();
+        once.action_session = c.sources[1].action_session;
+        once.action_sequence = 99;
+        assert!(c.admits(&once));
+        once.mode = ImportApprovalMode::Remember;
+        assert!(!c.admits(&once));
+        c.sources[1].can_remember = Some(true);
+        assert!(c.admits(&once));
+        let mut other = c.sources[1].clone();
+        other.source_id = "d".repeat(64);
+        other.action_session = Uuid::new_v4();
+        c.sources.push(other);
+        assert!(c.validate().is_err());
+        c.sources.pop();
+        c.volume_service_available = false;
+        c.sources.remove(0);
+        assert!(c.validate().is_ok() && c.admits(&once));
+        c.camera_service_available = Some(false);
+        assert!(c.validate().is_err());
+    }
+    #[test]
+    fn camera_context_requires_exact_modern_fields_and_legacy_cannot_admit_camera() {
+        let (_, old) = fixture();
+        let value = serde_json::to_value(&old).unwrap();
+        assert!(
+            value.get("cameraServiceAvailable").is_none()
+                && value["sources"][0].get("canRemember").is_none()
+        );
+        for field in ["cameraServiceAvailable", "canRemember"] {
+            let mut bad = value.clone();
+            if field == "canRemember" {
+                bad["sources"][0][field] = serde_json::Value::Null;
+            } else {
+                bad[field] = serde_json::Value::Null;
+            }
+            assert!(ImportContext::decode(&serde_json::to_vec(&bad).unwrap()).is_err());
+        }
+        let mut modern = old.clone();
+        modern.schema_version = 2;
+        assert!(modern.validate().is_err());
+        modern.camera_service_available = Some(true);
+        assert!(modern.validate().is_err());
+        modern.sources[0].can_remember = Some(true);
+        assert!(modern.validate().is_ok());
+        modern.sources[0].kind = ImportSourceKind::Camera;
+        modern.schema_version = 1;
+        assert!(modern.validate().is_err());
+    }
     pub(crate) fn fixture() -> (DeviceIdentity, ImportContext) {
         let phone = DeviceIdentity::generate();
         let context = ImportContext {
@@ -259,6 +354,7 @@ pub(crate) mod tests {
                 native_generation: Uuid::new_v4(),
             },
             volume_service_available: true,
+            camera_service_available: None,
             sources_truncated: false,
             sources: vec![ImportSource {
                 source_id: "a".repeat(64),
@@ -266,6 +362,7 @@ pub(crate) mod tests {
                 name: "Example SD card".into(),
                 connected: true,
                 automatic: false,
+                can_remember: None,
                 destination: format!("DCIM/GPhoto/Imports/{}", "b".repeat(16)),
                 preview: ImportPreview {
                     state: PreviewState::Ready,
@@ -294,7 +391,11 @@ pub(crate) mod tests {
         let source = &context.sources[0];
         let preview = source.confirmation.as_ref();
         ImportApproval {
-            schema_version: 1,
+            schema_version: if source.kind == ImportSourceKind::Camera {
+                2
+            } else {
+                1
+            },
             bond: context.bond.clone(),
             action_id: Uuid::new_v4(),
             action_session: source.action_session,

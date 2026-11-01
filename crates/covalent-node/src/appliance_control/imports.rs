@@ -5,8 +5,7 @@ use crate::sync_control::{
     FolderControlError, FolderControlOperation, FolderControlPayload, send_folder_control,
 };
 use covalent_core::appliance_import::{
-    IMPORT_APPROVAL_DOMAIN, IMPORT_WITHDRAWAL_DOMAIN, ImportApproval, SignedImportApproval,
-    verify_import_approval, verify_import_withdrawal,
+    ImportApproval, SignedImportApproval, verify_import_approval, verify_import_withdrawal,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -257,7 +256,7 @@ pub(crate) async fn confirm_import(
         payload: String::from_utf8(bytes.clone()).map_err(|_| error(BondError::Rejected))?,
         signature: state
             .engine
-            .sign_transport_transcript_with_domain(IMPORT_APPROVAL_DOMAIN, &bytes),
+            .sign_transport_transcript_with_domain(choice.approval_domain(), &bytes),
     };
     if let Some(old) = outbox(&state)?
         .list()
@@ -317,8 +316,9 @@ pub(crate) async fn withdraw_import(
     let saved = outbox(&state)?
         .get(request.action_id)
         .map_err(|_| error(BondError::Unavailable))?;
+    let choice = saved.choice().map_err(|_| error(BondError::Unavailable))?;
     let signature = state.engine.sign_transport_transcript_with_domain(
-        IMPORT_WITHDRAWAL_DOMAIN,
+        choice.withdrawal_domain(),
         saved.proof.payload.as_bytes(),
     );
     let first = outbox(&state)?

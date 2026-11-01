@@ -1,0 +1,86 @@
+{
+  "context": {
+    "schemaVersion": 2,
+    "bond": {
+      "appliance": {
+        "deviceId": "60c39db6-1c12-4222-9e91-8c4ed4f91c81",
+        "fingerprint": "dac5972d994318c02512",
+        "publicKey": "tjINAFL1TVrzG4Kml20diwyp25JWxyMcIIHbGpV6Sl4"
+      },
+      "controller": {
+        "deviceId": "65c2be80-7950-4a05-aeef-83e8a9babb7c",
+        "fingerprint": "ad11f27cafc1f9be1ac4",
+        "publicKey": "EaaqBoA7ekR9mF1N7LwsgBdIvaei-XSmM2DVxgyRAVU"
+      },
+      "rootGeneration": "b0ed1b17-e234-4678-b972-f4227bc4e290",
+      "nativeGeneration": "4b07ebb1-0655-4ec8-ad60-75f362c0bc72"
+    },
+    "volumeServiceAvailable": false,
+    "cameraServiceAvailable": true,
+    "sourcesTruncated": false,
+    "sources": [
+      {
+        "sourceId": "f47475e30b1899c06b6c29028de62635f27987bd0127c0786d96b826493ffbd4",
+        "kind": "camera",
+        "name": "Example mirrorless camera",
+        "connected": true,
+        "automatic": false,
+        "canRemember": false,
+        "destination": "DCIM/GPhoto/Imports/1742e6e3f2019f2c",
+        "preview": {
+          "state": "ready",
+          "counts": {
+            "eligibleFiles": 320,
+            "eligibleBytes": 1400000000
+          }
+        },
+        "actionSession": "bf3df40d-e7de-4b96-82ab-9bb0f4990b02",
+        "actionSequence": 1,
+        "confirmation": {
+          "attachmentId": "e40ed615-c13f-43c3-8ed2-278fe49aa507",
+          "previewId": "cfc71417-7a35-4a08-a7af-733a6b047cb9"
+        }
+      }
+    ],
+    "storage": {
+      "availableAfterReserveBytes": 8500000000,
+      "reserveBytes": 2147483648
+    },
+    "withdrawalAvailable": true,
+    "sourceCleanupAvailable": false
+  },
+  "action": {
+    "order": 1,
+    "proof": {
+      "payload": "{\"schemaVersion\":2,\"bond\":{\"appliance\":{\"deviceId\":\"60c39db6-1c12-4222-9e91-8c4ed4f91c81\",\"publicKey\":\"tjINAFL1TVrzG4Kml20diwyp25JWxyMcIIHbGpV6Sl4\",\"fingerprint\":\"dac5972d994318c02512\"},\"controller\":{\"deviceId\":\"65c2be80-7950-4a05-aeef-83e8a9babb7c\",\"publicKey\":\"EaaqBoA7ekR9mF1N7LwsgBdIvaei-XSmM2DVxgyRAVU\",\"fingerprint\":\"ad11f27cafc1f9be1ac4\"},\"rootGeneration\":\"b0ed1b17-e234-4678-b972-f4227bc4e290\",\"nativeGeneration\":\"4b07ebb1-0655-4ec8-ad60-75f362c0bc72\"},\"actionId\":\"9b6e5712-a686-44d8-9a8a-abc99b0e7a28\",\"actionSession\":\"bf3df40d-e7de-4b96-82ab-9bb0f4990b02\",\"actionSequence\":1,\"sourceId\":\"f47475e30b1899c06b6c29028de62635f27987bd0127c0786d96b826493ffbd4\",\"kind\":\"camera\",\"mode\":\"once\",\"attachmentId\":\"e40ed615-c13f-43c3-8ed2-278fe49aa507\",\"previewId\":\"cfc71417-7a35-4a08-a7af-733a6b047cb9\",\"retention\":\"retain\"}",
+      "signature": "yYC241F4jQGiX6n3Y1RlgHOIx1AGgEpqCUEIccjGby4B7vEwI8YDBP9Q91rCCy6wei1v5Y_OY_eH1eEEN-uBAA"
+    },
+    "source": {
+      "sourceId": "f47475e30b1899c06b6c29028de62635f27987bd0127c0786d96b826493ffbd4",
+      "kind": "camera",
+      "name": "Example mirrorless camera",
+      "connected": true,
+      "automatic": false,
+      "canRemember": false,
+      "destination": "DCIM/GPhoto/Imports/1742e6e3f2019f2c",
+      "preview": {
+        "state": "ready",
+        "counts": {
+          "eligibleFiles": 320,
+          "eligibleBytes": 1400000000
+        }
+      },
+      "actionSession": "bf3df40d-e7de-4b96-82ab-9bb0f4990b02",
+      "actionSequence": 1,
+      "confirmation": {
+        "attachmentId": "e40ed615-c13f-43c3-8ed2-278fe49aa507",
+        "previewId": "cfc71417-7a35-4a08-a7af-733a6b047cb9"
+      }
+    },
+    "withdrawalRequested": false,
+    "withdrawalSignature": null,
+    "supersededBy": null,
+    "receipt": null
+  },
+  "withdrawalSignature": "CbcAzJXL0Plsf7dOU98fe2fXSLZ616YLouQFkln_iLbZD7hAlXc3EMfCjj0OSBAAhh9gids2bMo1cyXrJIDzCQ"
+}

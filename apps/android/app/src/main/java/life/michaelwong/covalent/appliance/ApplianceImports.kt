@@ -20,10 +20,12 @@ internal data class PiImportConfirmation(val attachmentId: String, val previewId
 }
 internal data class PiImportControlSource(
     val source: PiImportSource, val session: String, val sequence: Long, val confirmation: PiImportConfirmation?,
+    val canRemember: Boolean = true,
 )
 internal data class PiImportContext(
     val bond: PiImportBond, val volumesAvailable: Boolean, val truncated: Boolean,
     val sources: List<PiImportControlSource>, val spaceAfterReserve: Long?,
+    val camerasAvailable: Boolean? = null,
 )
 internal data class PiImportsObservation(val generation: String, val supported: Boolean, val context: PiImportContext?)
 internal enum class PiImportMode(val wire: String) { ONCE("once"), REMEMBER("remember"), OFF("off") }
@@ -33,6 +35,7 @@ internal enum class PiImportOutcome(val wire: String) {
 internal data class PiImportChoice(
     val bond: PiImportBond, val id: String, val session: String, val sequence: Long,
     val sourceId: String, val mode: PiImportMode, val confirmation: PiImportConfirmation?,
+    val camera: Boolean = false,
 ) {
     init {
         requireCanonicalId(id); requireCanonicalId(session)
@@ -45,7 +48,7 @@ internal data class PiImportChoice(
         val bondJson = "{\"appliance\":${identity(bond.appliance)},\"controller\":${identity(bond.controller)},\"rootGeneration\":\"${bond.rootGeneration}\",\"nativeGeneration\":\"${bond.nativeGeneration}\"}"
         val attachment = confirmation?.let { "\"${it.attachmentId}\"" } ?: "null"
         val preview = confirmation?.let { "\"${it.previewId}\"" } ?: "null"
-        return "{\"schemaVersion\":1,\"bond\":$bondJson,\"actionId\":\"$id\",\"actionSession\":\"$session\",\"actionSequence\":$sequence,\"sourceId\":\"$sourceId\",\"kind\":\"volume\",\"mode\":\"${mode.wire}\",\"attachmentId\":$attachment,\"previewId\":$preview,\"retention\":\"retain\"}"
+        return "{\"schemaVersion\":${if (camera) 2 else 1},\"bond\":$bondJson,\"actionId\":\"$id\",\"actionSession\":\"$session\",\"actionSequence\":$sequence,\"sourceId\":\"$sourceId\",\"kind\":\"${if (camera) "camera" else "volume"}\",\"mode\":\"${mode.wire}\",\"attachmentId\":$attachment,\"previewId\":$preview,\"retention\":\"retain\"}"
     }
     override fun toString() = "PiImportChoice(<redacted>)"
 }
@@ -68,22 +71,25 @@ internal fun parsePiImports(json: JSONObject, selected: SelectedAppliance): PiIm
     require((supported || !available) && available != json.isNull("context"))
     if (!available) return PiImportsObservation(generation, supported, null)
     val value = json.getJSONObject("context")
-    value.exactKeys("schemaVersion", "bond", "volumeServiceAvailable", "sourcesTruncated", "sources", "storage", "withdrawalAvailable", "sourceCleanupAvailable")
-    require(value.strictLong("schemaVersion") == 1L && value.strictBoolean("withdrawalAvailable") && !value.strictBoolean("sourceCleanupAvailable"))
+    val version = value.strictLong("schemaVersion"); require(version in 1L..2L)
+    val fields = arrayOf("schemaVersion", "bond", "volumeServiceAvailable", "sourcesTruncated", "sources", "storage", "withdrawalAvailable", "sourceCleanupAvailable")
+    value.exactKeys(*(if (version == 2L) fields + "cameraServiceAvailable" else fields))
+    require(value.strictBoolean("withdrawalAvailable") && !value.strictBoolean("sourceCleanupAvailable"))
     val bond = parseImportBond(value.getJSONObject("bond"))
     require(bond.appliance == selected.appliance && bond.controller == selected.local && bond.nativeGeneration == generation)
     val volumes = value.strictBoolean("volumeServiceAvailable")
+    val cameras = version == 2L && value.strictBoolean("cameraServiceAvailable")
     val space = if (value.isNull("storage")) null else value.getJSONObject("storage").let {
         it.exactKeys("availableAfterReserveBytes", "reserveBytes"); require(it.strictLong("reserveBytes") == 2_147_483_648L)
         it.strictLong("availableAfterReserveBytes").also { bytes -> require(bytes >= 0) }
     }
     val items = value.getJSONArray("sources"); require(items.length() <= 24)
-    val sources = List(items.length()) { parseImportSource(items.getJSONObject(it), volumes) }
-    require(sources.map { it.source.id }.toSet().size == sources.size && sources.map { it.session to it.sequence }.toSet().size <= 1)
+    val sources = List(items.length()) { parseImportSource(items.getJSONObject(it), volumes, cameras, version == 2L) }
+    require(sources.map { it.source.id }.toSet().size == sources.size && sources.groupBy { it.source.camera }.values.all { it.map { s -> s.session to s.sequence }.toSet().size <= 1 })
     sources.forEach { source -> if (source.confirmation != null) {
         require(source.source.connected && source.source.preview == PiPreviewState.READY && space != null && source.source.bytes!! <= space)
     } }
-    return PiImportsObservation(generation, supported, PiImportContext(bond, volumes, value.strictBoolean("sourcesTruncated"), sources, space))
+    return PiImportsObservation(generation, supported, PiImportContext(bond, volumes, value.strictBoolean("sourcesTruncated"), sources, space, if (version == 2L) cameras else null))
 }
 
 private fun parseImportBond(value: JSONObject): PiImportBond {
@@ -91,27 +97,31 @@ private fun parseImportBond(value: JSONObject): PiImportBond {
     return PiImportBond(value.getJSONObject("appliance").identity(), value.getJSONObject("controller").identity(),
         value.strictString("rootGeneration"), value.strictString("nativeGeneration"))
 }
-private fun parseImportSource(value: JSONObject, volumes: Boolean): PiImportControlSource {
-    value.exactKeys("sourceId", "kind", "name", "connected", "automatic", "destination", "preview", "actionSession", "actionSequence", "confirmation")
-    require(value.strictString("kind") == "volume")
-    val source = parsePiImportSource(value, volumes, false)
+private fun parseImportSource(value: JSONObject, volumes: Boolean, cameras: Boolean = false, modern: Boolean = false): PiImportControlSource {
+    val fields = arrayOf("sourceId", "kind", "name", "connected", "automatic", "destination", "preview", "actionSession", "actionSequence", "confirmation")
+    value.exactKeys(*(if (modern) fields + "canRemember" else fields))
+    require(modern || value.strictString("kind") == "volume")
+    val source = parsePiImportSource(value, volumes, cameras)
+    val canRemember = !modern || value.strictBoolean("canRemember")
+    require((source.camera || canRemember) && (canRemember || !source.automatic))
     val session = value.strictString("actionSession").also(::requireCanonicalId)
     val sequence = value.strictLong("actionSequence").also { require(it > 0) }
     val confirmation = if (value.isNull("confirmation")) null else value.getJSONObject("confirmation").let {
         it.exactKeys("attachmentId", "previewId"); PiImportConfirmation(it.strictString("attachmentId"), it.strictString("previewId"))
     }
     require(confirmation == null || (source.connected && source.preview == PiPreviewState.READY))
-    return PiImportControlSource(source, session, sequence, confirmation)
+    return PiImportControlSource(source, session, sequence, confirmation, canRemember)
 }
 private fun parseImportChoice(value: JSONObject): PiImportChoice {
     value.exactKeys("schemaVersion", "bond", "actionId", "actionSession", "actionSequence", "sourceId", "kind", "mode", "attachmentId", "previewId", "retention")
-    require(value.strictLong("schemaVersion") == 1L && value.strictString("kind") == "volume" && value.strictString("retention") == "retain")
+    val camera = value.strictString("kind") == "camera"
+    require((camera && value.strictLong("schemaVersion") == 2L || !camera && value.strictString("kind") == "volume" && value.strictLong("schemaVersion") == 1L) && value.strictString("retention") == "retain")
     val mode = PiImportMode.entries.single { it.wire == value.strictString("mode") }
     val confirmation = if (mode == PiImportMode.OFF) {
         require(value.isNull("attachmentId") && value.isNull("previewId")); null
     } else PiImportConfirmation(value.strictString("attachmentId"), value.strictString("previewId"))
     return PiImportChoice(parseImportBond(value.getJSONObject("bond")), value.strictString("actionId"), value.strictString("actionSession"),
-        value.strictLong("actionSequence"), value.strictString("sourceId"), mode, confirmation)
+        value.strictLong("actionSequence"), value.strictString("sourceId"), mode, confirmation, camera)
 }
 private fun requireSignature(value: String) {
     val bytes = Base64.getUrlDecoder().decode(value)
@@ -124,8 +134,10 @@ internal fun parsePiSavedImport(value: JSONObject, local: ApplianceIdentity): Pi
     val payload = proof.strictString("payload").also { require(it.toByteArray(Charsets.UTF_8).size <= 2048) }
     val signature = proof.strictString("signature").also(::requireSignature)
     val choice = parseImportChoice(JSONObject(payload)); require(choice.bond.controller == local && payload == choice.canonicalPayload())
-    val source = parseImportSource(value.getJSONObject("source"), true)
-    require(source.source.id == choice.sourceId && source.session == choice.session && source.sequence == choice.sequence)
+    val rawSource = value.getJSONObject("source")
+    val source = parseImportSource(rawSource, true, true, rawSource.has("canRemember"))
+    require(source.source.camera == choice.camera && source.source.id == choice.sourceId && source.session == choice.session && source.sequence == choice.sequence)
+    require(choice.mode != PiImportMode.REMEMBER || source.canRemember)
     require(choice.mode == PiImportMode.OFF || source.confirmation == choice.confirmation)
     val withdrawn = value.strictBoolean("withdrawalRequested"); require(withdrawn != value.isNull("withdrawalSignature"))
     if (withdrawn) requireSignature(value.strictString("withdrawalSignature"))
@@ -150,7 +162,7 @@ internal fun parsePiImportActions(value: JSONObject, local: ApplianceIdentity): 
     actions.forEach { action -> action.supersededBy?.let { id ->
         val later = actions.single { it.choice.id == id }
         require(later.order > action.order && later.choice.mode == PiImportMode.OFF && later.outcome == PiImportOutcome.ACCEPTED &&
-            later.choice.bond.appliance == action.choice.bond.appliance && later.choice.sourceId == action.choice.sourceId)
+            later.choice.bond == action.choice.bond && later.choice.camera == action.choice.camera && later.choice.sourceId == action.choice.sourceId)
     } }
     return actions.sortedByDescending { it.order }
 }
@@ -158,8 +170,9 @@ internal fun parsePiImportActions(value: JSONObject, local: ApplianceIdentity): 
 internal data class PiImportReview(val selected: SelectedAppliance, val context: PiImportContext, val source: PiImportControlSource, val pause: Boolean, val id: String = UUID.randomUUID().toString()) {
     fun choice(mode: PiImportMode): PiImportChoice {
         check(pause == (mode == PiImportMode.OFF))
+        check(mode != PiImportMode.REMEMBER || source.canRemember)
         return PiImportChoice(context.bond, id, source.session, source.sequence, source.source.id, mode,
-            if (mode == PiImportMode.OFF) null else checkNotNull(source.confirmation))
+            if (mode == PiImportMode.OFF) null else checkNotNull(source.confirmation), source.source.camera)
     }
 }
 internal data class PiImportsState(
@@ -195,7 +208,7 @@ internal class ApplianceImportsController(private val store: ApplianceSelectionS
         current(selected)
         val context = checkNotNull(api.context(selected).context)
         val source = context.sources.single { it.source.id == sourceId }
-        check(pause || (source.confirmation != null && api.actions(selected.local).none { it.choice.bond == context.bond && !it.resolved }))
+        check(pause || (source.confirmation != null && api.actions(selected.local).none { it.choice.bond == context.bond && it.choice.camera == source.source.camera && !it.resolved }))
         current(selected)
         return PiImportReview(selected, context, source, pause)
     }

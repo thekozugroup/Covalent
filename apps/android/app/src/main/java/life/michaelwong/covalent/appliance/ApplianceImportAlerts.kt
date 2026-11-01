@@ -18,10 +18,11 @@ internal fun importAlert(state: PiImportsState): ApplianceImportAlert? {
     val context = observation.context ?: return null
     if (!state.actionsAvailable || !observation.supported || observation.generation != selected.confirmedGeneration ||
         context.bond.controller != selected.local || context.bond.appliance != selected.appliance ||
-        context.bond.nativeGeneration != selected.confirmedGeneration || !context.volumesAvailable ||
-        context.spaceAfterReserve == null || state.actions.any { it.choice.bond == context.bond && !it.resolved }) return null
+        context.bond.nativeGeneration != selected.confirmedGeneration || context.spaceAfterReserve == null) return null
     val sources = context.sources.filter { source ->
-        !source.source.camera && !source.source.automatic && source.source.connected &&
+        (if (source.source.camera) context.camerasAvailable == true else context.volumesAvailable) &&
+            !source.source.automatic && source.source.connected &&
+            state.actions.none { it.choice.bond == context.bond && it.choice.camera == source.source.camera && !it.resolved } &&
             source.source.preview == PiPreviewState.READY && source.confirmation != null &&
             (source.source.count ?: 0) > 0 && source.source.bytes != null && source.source.bytes <= context.spaceAfterReserve &&
             state.actions.none { it.choice.bond == context.bond && it.outcome in setOf(PiImportOutcome.ACCEPTED, PiImportOutcome.WITHDRAWN) &&

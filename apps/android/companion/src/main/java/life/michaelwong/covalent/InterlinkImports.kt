@@ -23,7 +23,7 @@ import life.michaelwong.covalent.appliance.*
 
 @Composable
 internal fun InterlinkImportConfirmation(review: PiImportReview, busy: Boolean, dismiss: () -> Unit, confirm: (PiImportMode) -> Unit) {
-    var rememberSource by remember(review.id) { mutableStateOf(review.source.source.automatic) }
+    var rememberSource by remember(review.id) { mutableStateOf(review.source.canRemember && review.source.source.automatic) }
     var submitted by remember(review.id) { mutableStateOf(false) }
     var folderDetails by remember(review.id) { mutableStateOf(false) }
     val context = LocalContext.current
@@ -48,14 +48,19 @@ internal fun InterlinkImportConfirmation(review: PiImportReview, busy: Boolean, 
                     }
                     if (folderDetails) Text(review.source.source.destination, style = MaterialTheme.typography.bodySmall,
                         modifier = Modifier.testTag("interlink-import-review-destination"))
-                    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("interlink-import-remember")
-                        .toggleable(value = rememberSource, enabled = !busy && !submitted, role = Role.Checkbox, onValueChange = { rememberSource = it }),
+                    if (review.source.canRemember) Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("interlink-import-remember")
+                        .toggleable(value = rememberSource, enabled = !busy && !submitted && review.source.canRemember, role = Role.Checkbox, onValueChange = { rememberSource = it }),
                         verticalAlignment = Alignment.CenterVertically) {
-                        Checkbox(checked = rememberSource, onCheckedChange = null)
+                        Checkbox(checked = rememberSource, onCheckedChange = null, enabled = !busy && !submitted && review.source.canRemember)
                         Column(Modifier.weight(1f).padding(start = 8.dp)) {
                             Text(stringResource(R.string.interlink_import_remember))
-                            Text(stringResource(R.string.interlink_import_remember_detail), style = MaterialTheme.typography.bodySmall)
+                            Text(stringResource(if (review.source.source.camera)
+                                R.string.interlink_import_remember_camera else R.string.interlink_import_remember_detail), style = MaterialTheme.typography.bodySmall)
                         }
+                    }
+                    else Column(Modifier.testTag("interlink-import-connection-only"), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(stringResource(R.string.interlink_import_connection_only), style = MaterialTheme.typography.titleSmall)
+                        Text(stringResource(R.string.interlink_import_unstable_camera), style = MaterialTheme.typography.bodySmall)
                     }
                     Text(stringResource(R.string.interlink_import_originals), style = MaterialTheme.typography.bodySmall)
                 }
@@ -66,7 +71,7 @@ internal fun InterlinkImportConfirmation(review: PiImportReview, busy: Boolean, 
                 modifier = Modifier.testTag("interlink-import-confirm"), onClick = {
                     if (!submitted) {
                         submitted = true
-                        confirm(if (review.pause) PiImportMode.OFF else if (rememberSource) PiImportMode.REMEMBER else PiImportMode.ONCE)
+                        confirm(if (review.pause) PiImportMode.OFF else if (rememberSource && review.source.canRemember) PiImportMode.REMEMBER else PiImportMode.ONCE)
                     }
                 }) { Text(stringResource(if (review.pause) R.string.interlink_import_pause else if (rememberSource)
                     R.string.interlink_import_remember_action else R.string.interlink_import_once)) }

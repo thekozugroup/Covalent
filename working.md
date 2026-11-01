@@ -1,3 +1,44 @@
+# Signed camera review in Interlink — 2026-11-01
+
+Adds canonical schema2 camera approvals/withdrawals with separate signing domains;
+legacy volume schema1 bytes, domains and durable outbox records remain unchanged.
+Strict modern context reports independent camera/volume journals and availability,
+plus explicit remember capability. Camera-only hosts work without volumes. An
+unstable camera can import once per connection; an inert checkbox is replaced
+with a clear explanation. Stable sources require explicit remember consent;
+drive review discloses the identification file. Pending work blocks its own
+service kind. Saved pauses must match the complete bond and kind.
+
+The existing separate Interlink link mark, serif name, adaptive/monochrome icon,
+MaterialExpressiveTheme, dynamic colours and expressive motion remain canonical.
+Normal debug/native-producer package verification passes (52,464,088B). All265
+Android JVM tests and14 native API36 component tests pass, zero failures/skips;
+large camera text keeps the reason, original-retention note and actions reachable.
+Core179/node349 tests pass with denied-warning workspace/all-target/all-feature
+clippy, format and foundation. Real authenticated QUIC tests cover both kinds,
+lost replies/readback and no replay. The public camera proof fixture has real
+Ed25519 signatures from a pinned synthetic signer; its private keys were never
+saved. The alert harness derives all23 current test names and refuses missing,
+unexpected, duplicate, skipped or failed results; three parser/ownership tests pass.
+The complete API37 alert journey has not been rerun for this camera stage.
+
+Actual example-data PNGs live once in docs/brand/interlink-camera-*.png. Normal
+Application, app ID and native producers are retained; no visual-only manifest
+or production signing substitution. The same guest boot/framework identities
+and1.0x animations remain, and font/night restore is verified. Two initial UI
+preflight attempts reject an unset animator setting; that owned guest's default
+is made explicit at1.0x for the final run, then restored during cleanup. A shared
+ADB discovery stall is preserved in diagnostics; a separate owned server avoids
+mDNS auto-connect without restarting shared services. The original Android root
+fixture compile-name collision and corrected37-check pass remain distinct in the
+private audit.
+
+The private Pi bridge still needs its matching native pin/build qualification.
+Mixed old readers refuse context2; coordinated upgrade acceptance is required.
+No phone/Pi install, real USB/camera import, cloud confirmation/deletion, production
+signed release, merge, ROM/flash or gold-image acceptance is claimed. Full cards
+larger than free Pi space still require a future batching/confirmed-cleanup design.
+
 # Native Interlink drive confirmations — 2026-11-01
 
 Previous turn was progress: public6d7bd47 and privatef286162 were signed/pushed/

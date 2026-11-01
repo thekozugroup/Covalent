@@ -1,6 +1,6 @@
-# Interlink attached-drive confirmation
+# Interlink drive and camera confirmation
 
-The companion now connects its native drive cards to the owner-bound import API.
+The companion connects native drive and camera cards to the owner-bound import API.
 Review reads a fresh protected context without writing. Confirmation shows the
 source, file count/size, named Pi destination and usable space. Folder details
 reveals the fixed relative destination; no caller path is accepted. New sources
@@ -29,13 +29,26 @@ no receipt is fabricated and current-bond uncertainty remains protected.
 
 Dashboard polling runs while the screen is started, shares its operation gate
 with import commands, and reads pending requests again after a command or lost
-reply. Credentials/keys/addresses are never supplied by the screen. Camera
-observations remain read-only and explicitly say phone approval is unavailable.
-Background drive reminders now have separate local qualification in
-`interlink-background-alerts.md`. Camera parity, remaining remote settings and
+reply. Credentials/keys/addresses are never supplied by the screen. A compatible
+protected camera context enables the same review flow. Legacy observations keep
+the explicit unavailable state. Cameras without stable serials show why they
+cannot be remembered; their only import choice is once per connection. A drive's
+remember choice discloses its small identification file. Cameras are not written
+to. Pending work blocks its own service journal, not another source kind.
+Background reminders are described in `interlink-background-alerts.md`.
+Remaining remote settings and
 actual device acceptance are still required for the full headless product.
 
-Verification for this stage: full250 JVM and345 node unit tests, zero failures/
+Current camera-stage software checks pass: 265 JVM tests, 179 core/349 node tests,
+14 actual API36 native component tests and normal debug package provenance,
+alignment/budget checks. Camera schema2 and legacy volume fixtures both verify
+cryptographically in shared core. The 14 component tests use the normal debug
+Application and complete native producers with synthetic source data. Camera
+screens and 200% dark text are captured in `brand/`. No complete signed Pi
+component bundle, physical import, account or cloud acceptance follows from
+these checks. Older context readers require coordinated upgrade qualification.
+
+Earlier volume-stage verification: full250 JVM and345 node unit tests, zero failures/
 ignored; denied-warning workspace/all-target/all-feature clippy; native API36
 component instrumentation and example-data captures. Later normal-package
 build, permission/reboot and 15 component checks are recorded separately in

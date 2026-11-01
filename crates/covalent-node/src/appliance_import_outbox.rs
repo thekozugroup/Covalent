@@ -154,6 +154,10 @@ impl ImportOutbox {
                 || !orders.insert(a.order)
                 || a.source.source_id != c.source_id
                 || a.source.kind != c.kind
+                || (a.source.kind == covalent_core::appliance_import::ImportSourceKind::Camera
+                    && a.source.can_remember.is_none())
+                || (c.mode == covalent_core::appliance_import::ImportApprovalMode::Remember
+                    && a.source.can_remember == Some(false))
                 || a.source.action_session != c.action_session
                 || a.source.action_sequence != c.action_sequence
                 || a.withdrawal_requested != a.withdrawal_signature.is_some()
@@ -177,6 +181,7 @@ impl ImportOutbox {
                     || p.mode != covalent_core::appliance_import::ImportApprovalMode::Off
                     || p.bond.appliance != c.bond.appliance
                     || p.source_id != c.source_id
+                    || p.kind != c.kind
                     || !later
                         .receipt
                         .as_ref()
@@ -297,16 +302,22 @@ impl ImportOutbox {
         }
         if choice.bond.controller != current.controller
             || source.source_id != choice.source_id
+            || source.kind != choice.kind
+            || (source.kind == covalent_core::appliance_import::ImportSourceKind::Camera
+                && source.can_remember.is_none())
+            || (choice.mode == covalent_core::appliance_import::ImportApprovalMode::Remember
+                && source.can_remember == Some(false))
             || source.action_session != choice.action_session
             || source.action_sequence != choice.action_sequence
         {
             return Err(());
         }
         if choice.mode != covalent_core::appliance_import::ImportApprovalMode::Off
-            && current
-                .actions
-                .iter()
-                .any(|a| !a.resolved() && a.choice().is_ok_and(|c| c.bond == choice.bond))
+            && current.actions.iter().any(|a| {
+                !a.resolved()
+                    && a.choice()
+                        .is_ok_and(|c| c.bond == choice.bond && c.kind == choice.kind)
+            })
         {
             return Err(());
         }
@@ -400,7 +411,9 @@ impl ImportOutbox {
                 if !earlier.resolved()
                     && earlier.order < result.order
                     && earlier.choice().is_ok_and(|c| {
-                        c.bond.appliance == choice.bond.appliance && c.source_id == choice.source_id
+                        c.bond.appliance == choice.bond.appliance
+                            && c.source_id == choice.source_id
+                            && c.kind == choice.kind
                     })
                 {
                     earlier.superseded_by = Some(id);
@@ -420,6 +433,56 @@ mod tests {
         IMPORT_WITHDRAWAL_DOMAIN, ImportApprovalMode, sign_import_approval,
     };
     use std::os::unix::fs::PermissionsExt as _;
+    #[test]
+    fn legacy_volume_and_camera_requests_reopen_with_independent_pending_journals() {
+        use covalent_core::appliance_import::ImportSourceKind;
+        let d = directory();
+        let path = d.path().join("outbox.json");
+        let (phone, context) = fixture();
+        let volume = choice(&context, ImportApprovalMode::Once);
+        let volume_proof = sign_import_approval(&phone, &volume).unwrap();
+        {
+            let outbox = ImportOutbox::open(path.clone(), phone.public_identity()).unwrap();
+            assert!(
+                outbox
+                    .reserve(volume_proof.clone(), context.sources[0].clone())
+                    .unwrap()
+            );
+        }
+        let old = std::fs::read(&path).unwrap();
+        assert!(!String::from_utf8(old).unwrap().contains("canRemember"));
+        let mut camera = volume.clone();
+        camera.schema_version = 2;
+        camera.kind = ImportSourceKind::Camera;
+        camera.action_id = Uuid::new_v4();
+        camera.action_session = Uuid::new_v4();
+        camera.source_id = "c".repeat(64);
+        let mut source = context.sources[0].clone();
+        source.source_id = camera.source_id.clone();
+        source.kind = camera.kind;
+        source.action_session = camera.action_session;
+        source.can_remember = Some(false);
+        let proof = sign_import_approval(&phone, &camera).unwrap();
+        {
+            let outbox = ImportOutbox::open(path.clone(), phone.public_identity()).unwrap();
+            assert!(outbox.reserve(proof.clone(), source.clone()).unwrap());
+            assert_eq!(outbox.get(volume.action_id).unwrap().proof, volume_proof);
+            let mut wrong = source.clone();
+            wrong.kind = ImportSourceKind::Volume;
+            let mut next = camera.clone();
+            next.action_id = Uuid::new_v4();
+            assert!(
+                outbox
+                    .reserve(sign_import_approval(&phone, &next).unwrap(), wrong)
+                    .is_err()
+            );
+        }
+        let outbox = ImportOutbox::open(path, phone.public_identity()).unwrap();
+        assert_eq!(outbox.get(camera.action_id).unwrap().proof, proof);
+        let withdrawal = phone.sign(camera.withdrawal_domain(), proof.payload.as_bytes());
+        assert!(outbox.withdraw(camera.action_id, withdrawal).unwrap());
+        assert!(!outbox.get(volume.action_id).unwrap().withdrawal_requested);
+    }
     fn directory() -> tempfile::TempDir {
         tempfile::Builder::new()
             .permissions(std::fs::Permissions::from_mode(0o700))

@@ -201,10 +201,25 @@ async fn independently_reapproved_bond_can_import_without_replaying_or_resolving
 
 #[tokio::test]
 async fn actual_quic_import_confirmation_persists_before_send_and_only_reads_after_lost_reply() {
+    run_import_confirmation(false).await;
+}
+#[tokio::test]
+async fn actual_quic_import_camera_uses_new_domain_and_readback_without_repeating_work() {
+    run_import_confirmation(true).await;
+}
+async fn run_import_confirmation(camera: bool) {
     let pi = Device::new();
     let phone = Device::new();
     let other = Device::new();
     let host = Arc::new(Host::new());
+    if camera {
+        let mut c = host.context.lock().unwrap();
+        c.schema_version = 2;
+        c.camera_service_available = Some(true);
+        c.volume_service_available = false;
+        c.sources[0].kind = ImportSourceKind::Camera;
+        c.sources[0].can_remember = Some(false);
+    }
     let state = pi.state().with_appliance_imports(host.clone());
     let node = QuicNode::bind(([127, 0, 0, 1], 0).into(), Arc::clone(&pi.engine), &pi.tls).unwrap();
     let address = node.local_addr().unwrap();
@@ -270,6 +285,24 @@ async fn actual_quic_import_confirmation_persists_before_send_and_only_reads_aft
     assert_eq!(value["importsAvailable"], true);
     let context: ImportContext = serde_json::from_value(value["context"].clone()).unwrap();
     let body = approve_body(&context, ImportApprovalMode::Once);
+    if camera {
+        let mut remember = body.clone();
+        remember["mode"] = "remember".into();
+        remember["actionId"] = Uuid::new_v4().to_string().into();
+        assert_eq!(
+            api(
+                phone_state.clone(),
+                "POST",
+                "/api/v1/appliance/imports/confirm",
+                remember,
+                true
+            )
+            .await
+            .0,
+            StatusCode::CONFLICT
+        );
+        assert_eq!(host.effects.load(Ordering::SeqCst), 0);
+    }
     let id = body["actionId"].clone();
     host.lose_after.store(true, Ordering::SeqCst);
     let (code, record) = api(

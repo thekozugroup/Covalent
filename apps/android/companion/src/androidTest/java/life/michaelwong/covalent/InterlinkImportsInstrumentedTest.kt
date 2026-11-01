@@ -24,6 +24,46 @@ class InterlinkImportsInstrumentedTest {
     private val resources = InstrumentationRegistry.getInstrumentation().targetContext.resources
     private val example = interlinkImportExample(SELECTED)
 
+    @Test fun cameraWithoutSerialCanOnlyImportOnceAndShowsWhy() {
+        val camera = interlinkImportExample(SELECTED, camera = true, canRemember = false)
+        val choices = mutableListOf<PiImportMode>()
+        compose.setContent { InterlinkTheme { InterlinkImportConfirmation(camera, false, {}, { choices.add(it) }) } }
+        compose.onNodeWithTag("interlink-import-remember").assertDoesNotExist()
+        compose.onNodeWithText(resources.getString(R.string.interlink_import_unstable_camera)).assertIsDisplayed()
+        compose.onNodeWithTag("interlink-import-confirm").assertTextEquals(resources.getString(R.string.interlink_import_once)).performClick()
+        compose.runOnIdle { assertEquals(listOf(PiImportMode.ONCE), choices) }
+    }
+
+    @Test fun largeTextCameraExplanationAndOriginalsStayReachableWithoutAnInactiveToggle() {
+        val camera = interlinkImportExample(SELECTED, camera = true, canRemember = false)
+        val choices = mutableListOf<PiImportMode>()
+        compose.setContent {
+            val density = LocalDensity.current
+            CompositionLocalProvider(LocalDensity provides Density(density.density, 2f)) {
+                InterlinkTheme { Column(Modifier.width(280.dp)) { InterlinkImportConfirmation(camera, false, {}, { choices += it }) } }
+            }
+        }
+        compose.onNodeWithTag("interlink-import-remember").assertDoesNotExist()
+        compose.onNodeWithText(resources.getString(R.string.interlink_import_unstable_camera)).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(resources.getString(R.string.interlink_import_originals)).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithTag("interlink-import-confirm").assertIsDisplayed().assertIsEnabled().performClick()
+        compose.runOnIdle { assertEquals(listOf(PiImportMode.ONCE), choices) }
+    }
+
+    @Test fun cameraControlsAppearOnceAndVolumePendingDoesNotBlockThem() {
+        val camera = interlinkImportExample(SELECTED, camera = true)
+        val volume = saved().copy(choice = saved().choice.copy(sourceId = "b".repeat(64)))
+        val state = PiImportsState(SELECTED, PiImportsObservation(GENERATION, true, camera.context), listOf(volume), true)
+        val dashboard = dashboard().copy(platform = AppliancePlatformObservation(GENERATION, true,
+            PiPlatformSnapshot(true, true, false, listOf(camera.source.source), 8_500_000_000, null)))
+        var reviews = 0
+        compose.setContent { InterlinkTheme { Column(Modifier.verticalScroll(rememberScrollState())) { InterlinkPlatformCard(dashboard, state) { _, _ -> reviews++ } } } }
+        compose.onAllNodesWithTag("interlink-source-${camera.source.source.id}").assertCountEquals(1)
+        compose.onNodeWithTag("interlink-import-review-${camera.source.source.id}").performScrollTo().assertIsEnabled().performClick()
+        compose.runOnIdle { assertEquals(1, reviews) }
+        compose.onNodeWithText(resources.getString(R.string.interlink_camera_approval_unavailable)).assertDoesNotExist()
+    }
+
     @Test fun newSourceDefaultsToOnceAndCannotSubmitTwice() {
         val choices = mutableListOf<PiImportMode>()
         compose.setContent { InterlinkTheme { InterlinkImportConfirmation(example, false, {}, { choices.add(it) }) } }

@@ -39,8 +39,8 @@ class InterlinkPreviewActivity : ComponentActivity() {
         val pi = ApplianceIdentity("22222222-2222-4222-8222-222222222222", "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI", "a".repeat(20))
         val selected = SelectedAppliance(phone, pi, "Living room Pi", "44444444-4444-4444-8444-444444444444")
         val previewMode = intent.getStringExtra("previewMode")
-        val importExample = interlinkImportExample(selected)
-        val importPreview = previewMode?.startsWith("import-") == true
+        val importExample = interlinkImportExample(selected, previewMode?.startsWith("camera-") == true, previewMode != "camera-connection-only")
+        val importPreview = previewMode?.startsWith("import-") == true || previewMode?.startsWith("camera-") == true
         if (previewMode == "notification" && android.os.Build.VERSION.SDK_INT >= 33 &&
             checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) == android.content.pm.PackageManager.PERMISSION_GRANTED) {
             life.michaelwong.covalent.node.NodeProviderNotification.createChannel(this)
@@ -70,7 +70,7 @@ class InterlinkPreviewActivity : ComponentActivity() {
                     PiUpdateState(true, true, false))),
         )
         setContent {
-            var review by remember { mutableStateOf(if (previewMode == "import-confirmation") importExample else null) }
+            var review by remember { mutableStateOf(if (previewMode in setOf("import-confirmation", "camera-confirmation", "camera-connection-only")) importExample else null) }
             val exampleAction = PiSavedImport(1, importExample.choice(PiImportMode.ONCE), importExample.choice(PiImportMode.ONCE).canonicalPayload(), "example-only",
                 importExample.source, false, null, null)
             val imports = PiImportsState(selected, PiImportsObservation(selected.confirmedGeneration!!, true, importExample.context),

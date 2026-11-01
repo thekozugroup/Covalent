@@ -14,6 +14,39 @@ import org.junit.Test
 
 /** Structural Android contract; the fixture's real signatures were verified by shared core/Android native tests. */
 class ApplianceImportsTest {
+    @Test fun cameraContextAndSavedRequestKeepKindCapabilityAndCanonicalVersion() {
+        val f = JSONObject(javaClass.getResourceAsStream("/appliance-camera-imports.json")!!.bufferedReader().use { it.readText() })
+        val bond = f.getJSONObject("context").getJSONObject("bond")
+        val phone = bond.getJSONObject("controller").identity(); val pi = bond.getJSONObject("appliance").identity()
+        val selected = SelectedAppliance(phone, pi, "Pi", bond.getString("nativeGeneration"))
+        fun value() = JSONObject().put("schemaVersion", 1).put("applianceId", pi.deviceId).put("controllerId", phone.deviceId)
+            .put("bondGeneration", selected.confirmedGeneration).put("importsSupported", true).put("importsAvailable", true).put("context", JSONObject(f.getJSONObject("context").toString()))
+        val context = parsePiImports(value(), selected).context!!; val source = context.sources.single()
+        assertTrue(source.source.camera);assertFalse(source.canRemember);assertFalse(context.volumesAvailable);assertEquals(true, context.camerasAvailable)
+        val saved = parsePiSavedImport(f.getJSONObject("action"), phone)
+        assertTrue(saved.choice.camera);assertEquals(saved.payload, saved.choice.canonicalPayload());assertTrue(saved.payload.startsWith("{\"schemaVersion\":2,"))
+        val review = PiImportReview(selected, context, source, false)
+        assertTrue(review.choice(PiImportMode.ONCE).camera)
+        assertThrows(IllegalStateException::class.java) { review.choice(PiImportMode.REMEMBER) }
+        for (mutation in listOf<(JSONObject)->Unit>(
+            { it.getJSONObject("context").put("cameraServiceAvailable", false) },
+            { it.getJSONObject("context").put("schemaVersion", 1) },
+            { it.getJSONObject("context").getJSONArray("sources").getJSONObject(0).remove("canRemember") },
+            { it.getJSONObject("context").getJSONArray("sources").getJSONObject(0).put("canRemember", JSONObject.NULL) },
+            { it.getJSONObject("context").getJSONArray("sources").getJSONObject(0).put("automatic", true) })) {
+            assertThrows(Exception::class.java) { parsePiImports(value().also(mutation), selected) }
+        }
+    }
+    @Test fun volumeAndCameraJournalSessionsAreIndependentButEachKindMustBeConsistent() {
+        val value = envelope();val context = value.getJSONObject("context").put("schemaVersion", 2).put("cameraServiceAvailable", true)
+        val volume = source(value).put("canRemember", true)
+        val camera = JSONObject(volume.toString()).put("sourceId", "c".repeat(64)).put("kind", "camera").put("canRemember", false)
+            .put("actionSession", UUID.randomUUID().toString()).put("actionSequence", 99)
+        context.getJSONArray("sources").put(camera)
+        assertEquals(2, parsePiImports(value, SELECTED).context!!.sources.size)
+        context.getJSONArray("sources").put(JSONObject(camera.toString()).put("sourceId", "d".repeat(64)).put("actionSequence", 100))
+        assertThrows(Exception::class.java) { parsePiImports(value, SELECTED) }
+    }
     @Test fun sharedCoreCanonicalPayloadAndAllReceiptStatesDecodeExactly() {
         val saved = saved(); assertEquals(action().getJSONObject("proof").getString("payload"), saved.choice.canonicalPayload())
         assertNull(saved.outcome);assertFalse(saved.resolved)
@@ -80,6 +113,12 @@ class ApplianceImportsTest {
         earlier.put("supersededBy", pause.id)
         val list = JSONObject().put("schemaVersion", 1).put("actions", JSONArray().put(earlier).put(later))
         assertTrue(parsePiImportActions(list, PHONE).all { it.resolved })
+        later.getJSONObject("proof").put("payload", pause.copy(camera = true).canonicalPayload())
+        later.getJSONObject("source").put("kind", "camera").put("canRemember", true)
+        withReceipt(later, PiImportOutcome.ACCEPTED)
+        assertThrows(Exception::class.java) { parsePiImportActions(list, PHONE) }
+        later.getJSONObject("proof").put("payload", pause.canonicalPayload())
+        later.getJSONObject("source").put("kind", "volume").remove("canRemember")
         later.put("receipt", JSONObject.NULL)
         assertThrows(Exception::class.java) { parsePiImportActions(list, PHONE) }
         assertThrows(Exception::class.java) { parsePiImportActions(JSONObject().put("schemaVersion", 1).put("actions", JSONArray().put(action()).put(action())), PHONE) }

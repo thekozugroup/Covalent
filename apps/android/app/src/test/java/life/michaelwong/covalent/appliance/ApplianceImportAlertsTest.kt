@@ -16,6 +16,15 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class ApplianceImportAlertsTest {
+    @Test fun cameraCanAlertWithVolumeServiceUnavailableAndIndependentVolumePending() {
+        val state = state();val observation = state.observation!!;val context = observation.context!!
+        val camera = context.sources.single().copy(source = context.sources.single().source.copy(camera = true), canRemember = false)
+        val modern = state.copy(observation = observation.copy(context = context.copy(volumesAvailable = false, camerasAvailable = true, sources = listOf(camera))))
+        assertNotNull(importAlert(modern));assertNotNull(importAlert(modern.copy(actions = listOf(saved()))))
+        val pendingCamera = saved().copy(choice = saved().choice.copy(camera = true), source = camera)
+        assertNull(importAlert(modern.copy(actions = listOf(pendingCamera))))
+        assertNull(importAlert(modern.copy(observation = observation.copy(context = modern.observation!!.context!!.copy(camerasAvailable = false)))))
+    }
     @Test fun alertContainsBoundedCountsButNoCommandAndIgnoresNonceChurn() {
         val state = state();val alert = checkNotNull(importAlert(state))
         assertEquals(5L, alert.bytes);assertEquals(state.observation!!.context!!.sources.single().source.count, alert.files)
