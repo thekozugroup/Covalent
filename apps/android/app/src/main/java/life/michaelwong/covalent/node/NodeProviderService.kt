@@ -157,6 +157,7 @@ class NodeProviderService : Service() {
         // process, but ordinary destruction/cancellation cannot drop ownership and launch another
         // helper in this process while the previous one is still reaping.
         destroyRequested = true
+        observeHostStopped()
         actor.post {
             waitingForOwnership = null
             pendingAfterReap = null
@@ -277,6 +278,7 @@ class NodeProviderService : Service() {
             )
         ) {
             scheduleAccessCheck()
+            observeHostStarted()
             updateNotification(runningStatus())
         } else if (handle > 0L) {
             beginRestartForAccessChange()
@@ -287,6 +289,7 @@ class NodeProviderService : Service() {
 
     private fun stopProvider() {
         check(reapState.reaping)
+        observeHostStopped()
         actor.removeCallbacks(accessCheck)
         conditionFeed.stop()
         val response = manager.serviceStop(handle)
@@ -341,6 +344,7 @@ class NodeProviderService : Service() {
         }
         if (response.ok && handle > 0L) {
             conditionFeed.start()
+            observeHostStarted()
             scheduleAccessCheck()
             updateNotification(runningStatus())
         } else {
@@ -406,6 +410,14 @@ class NodeProviderService : Service() {
     private fun runningStatus(): String = NodeProviderNotification.runningStatus(
         this, launchedDemand.backupEnabled, launchedAccessUnavailable,
     )
+
+    private fun observeHostStarted() {
+        runCatching { (application as? NodeHostLifecycle)?.nodeHostStarted(ownershipToken) }
+    }
+
+    private fun observeHostStopped() {
+        runCatching { (application as? NodeHostLifecycle)?.nodeHostStopped(ownershipToken) }
+    }
 
     private fun startAsConnectedDeviceForeground(status: String) {
         if (Build.VERSION.SDK_INT >= 29) {

@@ -83,6 +83,17 @@ class InterlinkDashboardInstrumentedTest {
     private fun connected() = ApplianceDashboardState(SELECTED, ApplianceConnectionState.CONNECTED,
         ApplianceContext(PHONE, listOf(PI)), listOf(ApplianceCandidate(PI, SELECTED.name)), OBSERVATION)
 
+    @Test fun driveAlertPermissionSettingsRemainReachableWithLargeText() {
+        compose.setContent {
+            val density = LocalDensity.current
+            CompositionLocalProvider(LocalDensity provides Density(density.density, 2f)) {
+                InterlinkTheme { Column(Modifier.width(280.dp).verticalScroll(rememberScrollState())) { InterlinkDriveAlertsSetting() } }
+            }
+        }
+        compose.onNodeWithText(resources.getString(R.string.interlink_alert_detail)).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(resources.getString(R.string.interlink_alert_settings)).performScrollTo().assertIsDisplayed()
+    }
+
     @Test fun platformCountsDisappearWhenSystemDetailsOrControllerApprovalAreLost() {
         val platform = AppliancePlatformObservation(SELECTED.confirmedGeneration!!, true,
             PiPlatformSnapshot(true, true, false, listOf(PiImportSource("a".repeat(64), false, "Camera card", true, false,

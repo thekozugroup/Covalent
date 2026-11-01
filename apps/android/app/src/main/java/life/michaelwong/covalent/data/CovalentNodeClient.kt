@@ -96,6 +96,13 @@ data class EnrolledTrust(
 class CovalentNodeClient(
     private val trustProvider: () -> EnrolledTrust? = { null },
 ) {
+    private var boundedReadTimeoutMillis = 30_000
+
+    /** Read-only background observations must yield promptly when the local host stops. */
+    internal constructor(boundedReadTimeoutMillis: Int) : this() {
+        require(boundedReadTimeoutMillis in 1..30_000)
+        this.boundedReadTimeoutMillis = boundedReadTimeoutMillis
+    }
     /** Bounded local polling must not stall the service actor during recovery. */
     internal fun discoveryEnabled(baseUrl: String): Boolean {
         val connection = openConnection(baseUrl, "/api/v1/status", "GET", null, "application/json", 1_500)
@@ -746,23 +753,23 @@ class CovalentNodeClient(
         payload: String?,
         maximumResponseBytes: Int,
     ): JSONObject {
-        val connection = openConnection(baseUrl, path, method, token, "application/json").apply {
-            useCaches = false
-            instanceFollowRedirects = false
-            setRequestProperty("Cache-Control", "no-store")
+        val connection = openConnection(baseUrl, path, method, token, "application/json", boundedReadTimeoutMillis)
+        connection.connectTimeout = minOf(connection.connectTimeout, boundedReadTimeoutMillis)
+        return try {
+            connection.useCaches = false
+            connection.instanceFollowRedirects = false
+            connection.setRequestProperty("Cache-Control", "no-store")
             if (payload != null) {
-                doOutput = true
-                setRequestProperty("Content-Type", "application/json")
+                connection.doOutput = true
+                connection.setRequestProperty("Content-Type", "application/json")
                 val bytes = payload.encodeToByteArray()
                 try {
-                    setFixedLengthStreamingMode(bytes.size)
-                    outputStream.use { it.write(bytes) }
+                    connection.setFixedLengthStreamingMode(bytes.size)
+                    connection.outputStream.use { it.write(bytes) }
                 } finally {
                     bytes.fill(0)
                 }
             }
-        }
-        return try {
             if (connection.responseCode !in 200..299) readResponse(connection)
             val body = connection.inputStream.use {
                 it.readBoundedText(maximumResponseBytes, "The node response")

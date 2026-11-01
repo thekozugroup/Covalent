@@ -31,7 +31,9 @@ class InterlinkActivity : ComponentActivity() {
                             FolderSyncScreen(
                                 manager = ready,
                                 photoAppliance = true,
-                                deviceHeader = { InterlinkApplianceDashboard(ready) },
+                                deviceHeader = {
+                                    Column(verticalArrangement = Arrangement.spacedBy(14.dp)) { InterlinkApplianceDashboard(ready) }
+                                },
                                 modifier = Modifier.widthIn(max = 840.dp).fillMaxHeight()
                                     .align(androidx.compose.ui.Alignment.TopCenter),
                             )

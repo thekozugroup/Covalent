@@ -23,7 +23,6 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import life.michaelwong.covalent.appliance.*
-import life.michaelwong.covalent.data.CovalentNodeClient
 import life.michaelwong.covalent.node.EmbeddedNodeManager
 
 @Composable
@@ -31,33 +30,9 @@ internal fun InterlinkApplianceDashboard(manager: EmbeddedNodeManager) {
     val context = LocalContext.current
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     val store = remember(context) { ApplianceSelectionStore(context.applicationContext) }
-    val controller = remember(manager, store) {
-        val client = CovalentNodeClient()
-        fun connection() = checkNotNull(manager.localConnectionForFolderSync())
-        ApplianceDashboardController(store, object : ApplianceDashboardApi {
-            override fun context() = connection().let { client.applianceContext(it.baseUrl, it.token) }
-            override fun names() = connection().let { client.peerGrants(it.baseUrl, it.token) }
-                .filterNot { it.revoked }.associate { it.peerDeviceId to it.displayName }
-            override fun status(peerId: String, localId: String) = connection().let {
-                client.applianceStatus(it.baseUrl, it.token, peerId, localId)
-            }
-            override fun platform(peerId: String, localId: String) = connection().let {
-                client.appliancePlatform(it.baseUrl, it.token, peerId, localId)
-            }
-        })
-    }
-    val importsController = remember(manager, store) {
-        val client = CovalentNodeClient()
-        fun connection() = checkNotNull(manager.localConnectionForFolderSync())
-        ApplianceImportsController(store, object : ApplianceImportsApi {
-            override fun pairing() = connection().let { client.applianceContext(it.baseUrl, it.token) }
-            override fun context(selected: SelectedAppliance) = connection().let { client.applianceImports(it.baseUrl, it.token, selected) }
-            override fun actions(local: ApplianceIdentity) = connection().let { client.applianceImportActions(it.baseUrl, it.token, local) }
-            override fun confirm(choice: PiImportChoice) = connection().let { client.confirmApplianceImport(it.baseUrl, it.token, choice) }
-            override fun check(action: PiSavedImport) = connection().let { client.checkApplianceImport(it.baseUrl, it.token, action) }
-            override fun withdraw(action: PiSavedImport) = connection().let { client.withdrawApplianceImport(it.baseUrl, it.token, action) }
-        })
-    }
+    val api = remember(manager) { NodeApplianceApi(manager::localConnectionForFolderSync) }
+    val controller = remember(manager, store, api) { ApplianceDashboardController(store, api) }
+    val importsController = remember(manager, store, api) { ApplianceImportsController(store, api) }
     val scope = rememberCoroutineScope()
     val gate = remember { Mutex() }
     var state by remember { mutableStateOf(ApplianceDashboardState()) }
@@ -109,6 +84,7 @@ internal fun InterlinkApplianceDashboard(manager: EmbeddedNodeManager) {
     }
 
     InterlinkApplianceCard(state, busy, { refresh++ }, { choosing = true })
+    if (state.selection != null) InterlinkDriveAlertsSetting()
     importMessage?.let { Text(stringResource(it), color = MaterialTheme.colorScheme.error,
         modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }) }
     InterlinkPlatformCard(state, imports, busy) { id, pause ->

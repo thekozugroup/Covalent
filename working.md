@@ -1393,3 +1393,51 @@ exact scope and cleanup: docs/interlink-startup-recovery.md; bounded private aud
 artifacts/validation/2026-11-01-native-companion-startup. Continue with background
 alerts/camera/remote settings and actual Pi/Solstice/import/update/cloud/image
 gates; preserve the legacy Pictures journal and originals. No DCIM authorization.
+
+
+# Background drive review reminders — 2026-11-01
+
+Interlink now uses its existing native-host lifetime to check the selected Pi
+and post private read-only drive reminders while the screen is closed. No new
+service, dependency or permission. One serial I/O worker uses bounded API reads;
+owner epochs/selection checks reject late results. Automatic/unready/oversized
+sources and unresolved current-bond work suppress prompts. Accepted/withdrawn/
+paused previews do not prompt again; new previews can. Notifications contain no
+approval action or credential and open fresh review in the real launcher.
+Actual app/channel permission is visible and updates after consent/settings.
+
+All 262 JVM tests pass; the full normal native package/lint/SBOM/alignment/budget
+checks pass, with 11,484-byte release growth. Frozen full-package pass 158.080s;
+actual permission/reboot 63.166s/57.118s (20.919s stable); background native/notice
+checks 4/0 in 13.884s; component checks 16/0 in 29.654s. Runtime APK:
+dd9520b70afc9fbdd4f3796e0f2189b38bde22f7079fd6c01c03ad0acdd4312a.
+The original premature fixture-stop crash remains separate; corrected admission
+waits for real native readiness. The final combined automated journey passes
+all20 checks plus real notification consent in54.485s; exact APK/identity/boot
+readbacks match. Its first19/20 fixture race is retained; waiting for the real
+resumed launcher fixes cleanup without changing the runtime APK or deadlines.
+Three harness regressions and workflow parsing pass; CI runs this journey after
+the original permission gate. No gate is waived. Source/evidence/canonical
+images and limits: docs/interlink-background-alerts.md and the private audit
+artifacts/validation/2026-11-01-background-drive-alerts. Phone power saving can
+delay checks; no push deadline or actual protected Pi transfer is claimed.
+
+Actual Pi rediscovery verifies its known identity, bcm2712 and API 36. Read-only health confirms unchanged boot and four identity
+digests, 0.2.3, four native services running, no new import/camera service, and
+incomplete/running incoming runs with disconnected peers. No physical account,
+media, service, peer or updater change. Preserve the legacy Pictures journal
+and idle admission; do not force migration. Camera approval, uncertain-outcome
+alerts, other headless settings, actual phone/Pi/roaming/import/update/cloud and
+gold-image gates remain. No DCIM authorization or production companion signing.
+
+Hosted1811e18 run41292423124 passes Android foundation, all86 baseline device
+checks and SAF, then fails on the companion permission harness's Settings tap
+(ADB exit20). Both container image scans fail too. Private ef8bff1 run41292634020
+passes both platform jobs. New-head hosted CI remains independent.
+
+Cleanup verified: both disposable packages, owned AVD/data/registrations/ports,
+three marked module builds, task scratch and all3567 recorded process identities
+are gone. Scoped Pi forwarding/ADB is disconnected; physical data untouched.
+Shared ADB76421/93998, other active task, pinned Go SDK and recovery candidate
+remain. Observed free-space increase4,409,475,072B includes concurrent APFS
+activity; exact evidence and retention paths are in the private audit.

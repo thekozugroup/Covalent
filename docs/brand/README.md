@@ -19,6 +19,16 @@ native cards and adaptive endpoints remain shared with Covalent.
 
 ## Captured implementation
 
+- `interlink-drive-alert-settings.png`: actual notification permission control
+  after granting through Android's real consent dialog. The normal Application,
+  manifest and native producers are retained; the selected-Pi data is explicitly
+  labelled as an example. The off/allowed control updates without a shell grant.
+- `interlink-drive-alert.png`: actual Android notification using the production
+  builder and explicit example drive/count/size/destination/space. It has no
+  approval action; tapping opens the real launcher for fresh review. Separate
+  actual background and native-owner tests pass, but the shown source is
+  synthetic. See `../interlink-background-alerts.md` for exact acceptance.
+
 - `interlink-first-launch.png`: current normal companion package on a fresh
   API37 ARM64 emulator, using the real Interlink Application and launcher.
   Get started is visible and the foreground host remains off until explicit
@@ -94,5 +104,6 @@ unavailable folder access takes priority over readiness on repeated starts.
 This is an implemented design direction, not a blanket accessibility or Material
 compliance certification. Bonded owner control/import confirmations are wired in
 source. Normal-package local startup now passes its separate qualification.
-Actual phone/Pi control, background alerts,
-real-device roaming and the remaining screens still need end-to-end acceptance.
+Background alerts now pass normal-package local qualification. Actual phone/Pi
+control and alerts, real-device roaming and the remaining screens still need
+end-to-end acceptance.

@@ -246,6 +246,7 @@ jobs:
           python3 -B scripts/test-android-inventory.py
           python3 -B scripts/test-interlink-release.py
           python3 -B scripts/test-interlink-permission-harness.py
+          python3 -B scripts/test-interlink-alert-harness.py
           python3 -B scripts/test-interlink-native-reports.py
           python3 -B scripts/test-interlink-reboot-harness.py
       - run: ./scripts/check-android.sh
@@ -757,6 +758,7 @@ jobs:
             $ANDROID_HOME/platform-tools/adb -s emulator-5570 shell wm dismiss-keyguard || true
             COVALENT_ANDROID_PREBUILT=true COVALENT_ANDROID_EVIDENCE_DIR="${{ runner.temp }}/covalent-android-api37" COVALENT_ANDROID_HEADLESS_CI=true ANDROID_SERIAL=emulator-5570 ./scripts/android-api37-device-test.sh
             python3 -B scripts/interlink-api37-permission-test.py --serial emulator-5570 --avd Covalent_API_37 --evidence-dir "${{ runner.temp }}/covalent-android-api37/interlink"
+            python3 -B scripts/interlink-api37-alert-test.py --serial emulator-5570 --avd Covalent_API_37 --startup-receipt "${{ runner.temp }}/covalent-android-api37/interlink/permission-recovery.json" --evidence-dir "${{ runner.temp }}/covalent-android-api37/interlink-alerts"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:

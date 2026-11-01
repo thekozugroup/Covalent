@@ -31,8 +31,9 @@ Dashboard polling runs while the screen is started, shares its operation gate
 with import commands, and reads pending requests again after a command or lost
 reply. Credentials/keys/addresses are never supplied by the screen. Camera
 observations remain read-only and explicitly say phone approval is unavailable.
-Background drive notifications, camera parity and the remaining remote settings
-are still required for the full headless product.
+Background drive reminders now have separate local qualification in
+`interlink-background-alerts.md`. Camera parity, remaining remote settings and
+actual device acceptance are still required for the full headless product.
 
 Verification for this stage: full250 JVM and345 node unit tests, zero failures/
 ignored; denied-warning workspace/all-target/all-feature clippy; native API36

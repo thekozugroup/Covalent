@@ -48,6 +48,12 @@ class InterlinkPreviewActivity : ComponentActivity() {
                 life.michaelwong.covalent.node.NodeProviderNotification.create(this,
                     "Example data · Ready to sync shared folders"))
         }
+        if (previewMode == "import-alert" && android.os.Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            val notification = importAlert(PiImportsState(selected.copy(name = "Example data · Living room Pi"),
+                PiImportsObservation(selected.confirmedGeneration!!, true, importExample.context), emptyList(), true))
+            notification?.let { InterlinkImportNotifications(this).post(it, false) }
+        }
         val dashboard = ApplianceDashboardState(
             selection = selected,
             connection = when (previewMode) {
@@ -77,6 +83,7 @@ class InterlinkPreviewActivity : ComponentActivity() {
                         Text("Example data · visual preview", style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant)
                         InterlinkApplianceCard(dashboard, false, {}, {})
+                        if (previewMode == "alert-settings") InterlinkDriveAlertsSetting()
                         if (previewMode == "storage" || importPreview) InterlinkPlatformCard(dashboard, if (importPreview) imports else null) { _, pause ->
                             review = importExample.copy(pause = pause)
                         }
