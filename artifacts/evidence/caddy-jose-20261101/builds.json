@@ -1,0 +1,17 @@
+[
+  {
+    "target": "linux-amd64",
+    "bytes": 53219490,
+    "sha256": "1449b3d1b0aafc65327906fdcaee0267aa83d5dddde53f421c42b93bedd87d9a"
+  },
+  {
+    "target": "linux-arm64",
+    "bytes": 49676450,
+    "sha256": "79e23a1bc9e7ac7650418b7fa0c5963618948cb841e8c0ba019fcad6e505cf27"
+  },
+  {
+    "target": "darwin-arm64",
+    "bytes": 51444850,
+    "sha256": "7fed90bac57194337f1ff90b9cdfb3969928783ee20ae052a3c63e59672197ce"
+  }
+]

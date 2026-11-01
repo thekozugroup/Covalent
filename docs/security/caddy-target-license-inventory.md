@@ -4,7 +4,26 @@ This is an engineering inventory, not legal advice or release approval. It
 records the exact texts observed in the pinned Caddy consumer's compiled Linux
 graphs and identifies separately retained source material.
 
-## Current October 20 collection
+## November 1 source reference
+
+Go1.26.10 now selects the official JOSE v3 security backport0e502b87c7aa,
+JOSEv4.1.7 and x/netv0.62.0 with its required transitive updates. Both actual
+Linux target graphs still contain148 modules and zero unclassified license
+texts:951 packages on amd64 and949 on arm64. License-family counts and the MPL
+source member manifest remain unchanged. The new readable notice SHA-256 is
+`e0d4c4038811b7a94a803cb8d527f0ebf5b4477de8f36395eabffdc6d509a960`.
+The strict collector/verifier bind the new consumer checksums, inventories and
+actual ELF hashes. The unchanged main.go hash remains independently enforced.
+
+This local collection is source/reference qualification. CA provenance uses the
+unchanged reviewed source record, not a newly installed APK database. The exact
+checksum-pinned official CA package and bundle bytes were downloaded separately;
+no fresh package-signature installation is claimed. Native CI must collect and
+verify actual installed metadata on each target before release. Full image
+scans remain required. See the [security record](container-image-vulnerabilities.md)
+and `artifacts/evidence/caddy-jose-20261101/` for input/scan hashes and limits.
+
+## October 20 collection (historical)
 
 The security refresh uses exact Go 1.26.10 and the same Caddy source snapshot,
 with x/net v0.60.0 and OpenTelemetry v1.45.0/log modules v0.21.0. An isolated

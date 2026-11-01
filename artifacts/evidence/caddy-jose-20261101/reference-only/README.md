@@ -1,0 +1,1 @@
+Source/reference qualification only. The ELF binaries, target Go graphs and license bytes are real. CA provenance is the unchanged reviewed source record; it is not a fresh installed APK database or native container receipt. CI must regenerate against actual installed metadata. No production collector/verifier bypass is added.

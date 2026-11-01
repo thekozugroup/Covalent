@@ -1,0 +1,21 @@
+{
+  "cwd": "/Users/michaelwong/Developer/Covalent",
+  "argv": [
+    "sh",
+    "-c",
+    "python3 -B scripts/verify-caddy-distribution-evidence.py --root /private/tmp/ai-development/caddy-security-refresh-1793551697040573000-67364-0/reference/linux-amd64 --binary /private/tmp/ai-development/caddy-security-refresh-1793551697040573000-67364-0/bin/caddy-linux-amd64 --ca-bundle /private/tmp/ai-development/caddy-security-refresh-1793551697040573000-67364-0/ca-input/ca-certificates.crt --target linux-amd64 && python3 -B scripts/verify-caddy-distribution-evidence.py --root /private/tmp/ai-development/caddy-security-refresh-1793551697040573000-67364-0/reference/linux-arm64 --binary /private/tmp/ai-development/caddy-security-refresh-1793551697040573000-67364-0/bin/caddy-linux-arm64 --ca-bundle /private/tmp/ai-development/caddy-security-refresh-1793551697040573000-67364-0/ca-input/ca-certificates.crt --target linux-arm64"
+  ],
+  "plannedOutput": "/private/tmp/ai-development/caddy-security-refresh-1793551697040573000-67364-0/logs/final-real-reference-checks.log",
+  "processes": [
+    {
+      "pid": 85451,
+      "ppid": 85362,
+      "start": "Sun Nov 1 12:07:51 2026",
+      "command": "<defunct>"
+    }
+  ],
+  "state": "exited",
+  "exit": 0,
+  "seconds": 0.202,
+  "logSha256": "9797cd0c895c17288d942252311e7373ac38a7971801a02a0ba41ab875ee8987"
+}

@@ -1,0 +1,93 @@
+{
+  "cwd": "/Users/michaelwong/Developer/Covalent",
+  "argv": [
+    "python3",
+    "-B",
+    "/private/tmp/ai-development/caddy-security-refresh-1793551697040573000-67364-0/harnesses/build.py"
+  ],
+  "plannedOutput": "/private/tmp/ai-development/caddy-security-refresh-1793551697040573000-67364-0/logs/frozen-build-security-pins.log",
+  "processes": [
+    {
+      "pid": 83728,
+      "ppid": 83614,
+      "start": "Sun Nov 1 12:03:37 2026",
+      "command": "<defunct>"
+    },
+    {
+      "pid": 83730,
+      "ppid": 83728,
+      "start": "Sun Nov 1 12:03:37 2026",
+      "command": "/Users/michaelwong/Library/Caches/AI-Development/toolchains/go1.26.10/bin/go"
+    },
+    {
+      "pid": 83751,
+      "ppid": 83728,
+      "start": "Sun Nov 1 12:03:40 2026",
+      "command": "/Users/michaelwong/Library/Caches/AI-Development/toolchains/go1.26.10/bin/go"
+    },
+    {
+      "pid": 83761,
+      "ppid": 83751,
+      "start": "Sun Nov 1 12:03:40 2026",
+      "command": "/Users/michaelwong/Library/Caches/AI-Development/toolchains/go1.26.10/pkg/tool/darwin_arm64/link"
+    },
+    {
+      "pid": 83777,
+      "ppid": 83761,
+      "start": "Sun Nov 1 12:03:41 2026",
+      "command": "(clang)"
+    },
+    {
+      "pid": 83778,
+      "ppid": 83777,
+      "start": "Sun Nov 1 12:03:41 2026",
+      "command": "(ld)"
+    },
+    {
+      "pid": 83783,
+      "ppid": 83751,
+      "start": "Sun Nov 1 12:03:42 2026",
+      "command": "(caddy.test)"
+    },
+    {
+      "pid": 83789,
+      "ppid": 83728,
+      "start": "Sun Nov 1 12:03:42 2026",
+      "command": "/Users/michaelwong/Library/Caches/AI-Development/toolchains/go1.26.10/bin/go"
+    },
+    {
+      "pid": 83796,
+      "ppid": 83728,
+      "start": "Sun Nov 1 12:03:43 2026",
+      "command": "(go)"
+    },
+    {
+      "pid": 83803,
+      "ppid": 83728,
+      "start": "Sun Nov 1 12:03:43 2026",
+      "command": "/Users/michaelwong/Library/Caches/AI-Development/toolchains/go1.26.10/bin/go"
+    },
+    {
+      "pid": 83810,
+      "ppid": 83728,
+      "start": "Sun Nov 1 12:03:43 2026",
+      "command": "/Users/michaelwong/Library/Caches/AI-Development/toolchains/go1.26.10/bin/go"
+    },
+    {
+      "pid": 83816,
+      "ppid": 83728,
+      "start": "Sun Nov 1 12:03:44 2026",
+      "command": "(go)"
+    },
+    {
+      "pid": 83821,
+      "ppid": 83816,
+      "start": "Sun Nov 1 12:03:44 2026",
+      "command": "(link)"
+    }
+  ],
+  "state": "exited",
+  "exit": 0,
+  "seconds": 6.967,
+  "logSha256": "b46f72e9346e3e872a7ae3c9e69de4891c869fe5a415dedb1cbd19a02a658317"
+}

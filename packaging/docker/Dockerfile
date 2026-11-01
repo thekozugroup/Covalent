@@ -52,11 +52,10 @@ COPY --from=sync-engine-worker /engine-notices /engine-notices
 RUN build-linux-sync-engine package \
       /engine-worker /tmp/engine-guardian.c /engine-notices /sync-engine "$TARGETARCH"
 
-# Caddy is compiled here rather than lifted out of caddy:2.11.4-alpine, whose
-# published binary is linked against go1.26.3. That toolchain accounted for ten
-# of the twelve high/critical findings the Grype gate reported, and no Caddy tag
-# fixes it: 2.11.4 is the newest x.y.z-alpine upstream publishes, so the only
-# lever left is to control the toolchain ourselves.
+# Caddy is compiled here with the reviewed toolchain and dependency overrides.
+# The original caddy:2.11.4-alpine binary used go1.26.3, which accounted for ten
+# of twelve high/critical findings in the original scan. Newer Caddy tags alone
+# still leave the JOSE v3 branch affected; pin the official security backport.
 #
 # This is not a fork. packaging/docker/caddy imports the upstream modules used
 # by the shipped Caddyfile and runtime checks, without unrelated standard
@@ -94,6 +93,8 @@ WORKDIR /build
 COPY packaging/docker/caddy/go.mod packaging/docker/caddy/go.sum ./
 RUN go mod download
 COPY packaging/docker/caddy/main.go ./
+COPY packaging/docker/caddy/security_test.go ./
+RUN go test -count=1 -timeout=30s -run '^TestJWKSecurityBoundaries$' .
 # -trimpath keeps absolute build paths out of the binary so the two release
 # runners produce the same bytes; -s -w drops the symbol and DWARF tables, which
 # keeps the combined runtime within its reviewed image budget.
@@ -108,18 +109,22 @@ RUN set -eu; \
       || { echo 'caddy toolchain drifted from reviewed go1.26.10' >&2; exit 1; }; \
     grep -q 'github.com/caddyserver/caddy/v2[[:space:]]\+v2\.11\.5-0\.20260711231708-b2693fb63a30' /tmp/buildinfo \
       || { echo 'caddy source snapshot drifted from v2.11.5-0.20260711231708-b2693fb63a30' >&2; exit 1; }; \
+    awk '$1 == "dep" && $2 == "github.com/go-jose/go-jose/v3" && $3 == "v3.0.6-0.20261030183946-0e502b87c7aa" { found = 1 } END { exit !found }' /tmp/buildinfo \
+      || { echo 'JOSE v3 drifted from upstream RSA/JWK security backport 0e502b87c7aa' >&2; exit 1; }; \
+    awk '$1 == "dep" && $2 == "github.com/go-jose/go-jose/v4" && $3 == "v4.1.7" { found = 1 } END { exit !found }' /tmp/buildinfo \
+      || { echo 'JOSE v4 drifted from reviewed v4.1.7' >&2; exit 1; }; \
     awk '$1 == "dep" && $2 == "google.golang.org/grpc" && $3 == "v1.83.2" { found = 1 } END { exit !found }' /tmp/buildinfo \
       || { echo 'grpc drifted from reviewed v1.83.2 (GHSA-hrxh-6v49-42gf, GHSA-vp52-pcj8-j9qc, GHSA-2v4p-qf9q-27wj)' >&2; exit 1; }; \
-    grep -q 'golang.org/x/text[[:space:]]\+v0\.42\.0' /tmp/buildinfo \
-      || { echo 'x/text drifted from reviewed v0.42.0 (GO-2026-5970)' >&2; exit 1; }; \
+    grep -q 'golang.org/x/text[[:space:]]\+v0\.43\.0' /tmp/buildinfo \
+      || { echo 'x/text drifted from reviewed v0.43.0 (GO-2026-5970)' >&2; exit 1; }; \
     grep -q 'go.opentelemetry.io/otel[[:space:]]\+v1\.45\.0' /tmp/buildinfo \
       || { echo 'OpenTelemetry drifted from reviewed v1.45.0 (GO-2026-5158)' >&2; exit 1; }; \
     grep -q 'github.com/google/cel-go[[:space:]]\+v0\.30\.0' /tmp/buildinfo \
       || { echo 'cel-go drifted from reviewed v0.30.0 (GO-2026-6094)' >&2; exit 1; }; \
-    grep -q 'golang.org/x/crypto[[:space:]]\+v0\.57\.0' /tmp/buildinfo \
-      || { echo 'x/crypto drifted from reviewed v0.57.0 (GO-2026-6354/6355)' >&2; exit 1; }; \
-    awk '$1 == "dep" && $2 == "golang.org/x/net" && $3 == "v0.60.0" { found = 1 } END { exit !found }' /tmp/buildinfo \
-      || { echo 'x/net drifted from reviewed v0.60.0 (GO-2026-6612)' >&2; exit 1; }; \
+    grep -q 'golang.org/x/crypto[[:space:]]\+v0\.58\.0' /tmp/buildinfo \
+      || { echo 'x/crypto drifted from reviewed v0.58.0 (GO-2026-6354/6355)' >&2; exit 1; }; \
+    awk '$1 == "dep" && $2 == "golang.org/x/net" && $3 == "v0.62.0" { found = 1 } END { exit !found }' /tmp/buildinfo \
+      || { echo 'x/net drifted from reviewed v0.62.0 (GO-2026-6612/6860/6866)' >&2; exit 1; }; \
     awk '$1 == "dep" && $2 == "go.opentelemetry.io/otel/sdk/log" && $3 == "v0.21.0" { found = 1 } END { exit !found }' /tmp/buildinfo \
       || { echo 'OTel log SDK drifted from reviewed v0.21.0 (GHSA-hjf4-fphr-2h65)' >&2; exit 1; }; \
     awk '$1 == "dep" && $2 == "go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc" && $3 == "v0.21.0" { found = 1 } END { exit !found }' /tmp/buildinfo \

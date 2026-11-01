@@ -1,0 +1,7 @@
+{
+  "freeBytes": 460052160512,
+  "taskPath": "/private/tmp/ai-development/caddy-security-refresh-1793551697040573000-67364-0",
+  "taskId": "caddy-security-refresh-1793551697040573000-67364-0",
+  "nativeVmContainerAvdCreated": false,
+  "remainingOwnedResources": "Task-only build/module/scanner caches, generated test CA and binaries; no background Caddy/backend remains."
+}

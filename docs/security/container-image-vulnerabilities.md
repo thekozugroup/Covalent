@@ -6,6 +6,50 @@ sees in `packaging/docker/Dockerfile`, and what is left to decide.
 Current CI scans the immutable local image ID separately on native amd64 and
 arm64 runners. Historical measurements below retain their original scope.
 
+## 2026-11-01 JOSE and HTML remediation
+
+The Caddy consumer now pins JOSE v3 to the official upstream security backport
+`v3.0.6-0.20261030183946-0e502b87c7aa`, and v4 to `v4.1.7`. The internal CA
+imports v3 through Smallstep, so updating only v4 or Caddy is insufficient.
+The [upstream v3 change](https://github.com/go-jose/go-jose/commit/0e502b87c7aa651155b11ae8e195ec33ce10230a)
+bounds RSA parameters and rejects private keys embedded in untrusted headers.
+It is an exact official commit, not a released v3 tag or local fork.
+The [v4.1.7 release](https://github.com/go-jose/go-jose/releases/tag/v4.1.7)
+includes the later v4 fixes. Docker runs eight rejection cases across both major
+versions and independently checks both versions in the actual binary metadata.
+
+The current database also exposed [GO-2026-6860](https://pkg.go.dev/vuln/GO-2026-6860)
+and [GO-2026-6866](https://pkg.go.dev/vuln/GO-2026-6866), both fixed in
+`golang.org/x/net v0.62.0`. Their affected HTML package is actually compiled in,
+so these were fixed despite having Unknown scanner severity. The required
+transitive versions move to x/crypto0.58.0, x/text0.43.0, x/sys0.49.0,
+x/sync0.24.0, x/term0.47.0 and x/tools0.51.0. The Caddy compatibility snapshot,
+Go1.26.10, CEL, gRPC, compression and OpenTelemetry selections remain pinned.
+
+Exact stripped Linux amd64 and arm64 binaries were built locally with CGO off,
+trimpath and no VCS stamping. Syft1.51.1 identifies149 packages per ELF, including
+the exact two JOSE versions. Grype0.117.0 with schema6.1.10, database built
+2026-11-01T06:20:12Z, reports zero High/Critical findings on each binary.
+One Unknown module-level match remains: GO-2026-5932 in x/crypto. The advisory
+names OpenPGP packages absent from both actual compiled package graphs. The match
+is retained in the raw reports, with no exclusion, VEX, only-fixed filter or
+severity-gate change. This is not a claim of zero scanner findings.
+
+The normal eight JOSE cases, upstream HTML tests, eighteen evidence tests and
+source container contract pass. Eight host runtime checks cover generated-CA
+HTTPS, security headers, static assets, event-stream response, owner-only Unix
+ingress and unchanged CA key/certificate bytes after restarting Caddy. Host
+runtime testing relocates only paths/ports and disables trust-store installation;
+it does not establish native Linux/container execution. Source/license reference
+pins were regenerated from both real target graphs and ELF files, with unchanged
+reviewed CA metadata modeled separately. No synthetic installed APK receipt is
+presented as runtime proof. Native image builds must regenerate against their
+actual installed package databases and pass the unchanged complete-image scan.
+
+Bounded raw scan/SBOM, input hashes and scope are retained in
+`artifacts/evidence/caddy-jose-20261101/`. No Pi/phone update, service restart,
+account change, import consent or sync-journal reset is part of this change.
+
 ## 2026-10-20 remediation in progress
 
 The October database refresh rejects the previous Go 1.26.7 workers and

@@ -1,3 +1,40 @@
+# Interlink identity and Caddy security qualification — 2026-11-01
+
+Interlink already has its own minimal vector mark, adaptive/themed Android icon,
+serif app title and native MaterialExpressiveTheme/MotionScheme. The current
+actual dashboard/import captures were reviewed and shown with explicit example
+labels. This iteration does not change the UI or claim full device acceptance.
+
+Caddy now selects the official JOSE v3 security backport0e502b87c7aa and v4.1.7.
+Eight rejection cases are part of the native Docker build; compiled metadata
+checks prevent either branch drifting. The fresh module scan exposed compiled
+HTML findingsGO-2026-6860/6866 despite Unknown severity, so x/net moves to0.62.0
+with its required x/crypto/text/sys/sync/term/tools updates. Other reviewed
+Caddy/Go/CEL/gRPC/compression/OpenTelemetry selections remain pinned. The complete
+image security gate stays unchanged; no advisory or severity is suppressed.
+
+Both exact Linux ELF builds pass the current Grype High/Critical cutoff, with
+149 SBOM packages each. One retained Unknown match is GO-2026-5932; its OpenPGP
+packages are absent from both actual compiled graphs. Eighteen evidence tests,
+upstream HTML tests, source container contract and eight host TLS/proxy/CA-restart
+checks pass. Target source/license pins and checksums are regenerated; CA
+provenance is explicitly reference-only, not newly installed runtime proof.
+Bounded exact evidence: artifacts/evidence/caddy-jose-20261101/ (under1MB).
+
+Native full-image CI must rebuild/verify installed CA metadata and run complete
+image scans. Existing hosted API37 and private Android owner-approval acceptance
+remain separate unresolved gates. Production companion signing, real roaming,
+physical removable-media/cloud/deletion/migration and empty-userdata gold-image
+acceptance remain open. No release, physical update or updater barrier bypass is
+performed. Pi/phone/accounts/media/identities/pairings/journals are untouched.
+
+Cleanup independently verified: task scratch, scanner/module/build caches,
+ELFs and generated test CA keys are absent. Owned Caddy/backend PIDs and ports
+are gone; shared ADB5037/5038 and Go SDK remain. No VM/AVD/container/Docker engine
+was created. Whole-volume free space increases 8,774,017,024B across
+cleanup; concurrent APFS activity limits attribution. Under1MB of exact evidence
+is retained for source/CI review, with no temporary binary or test environment.
+
 # Receiving-run uncertainty and actual Pi admission — 2026-11-01
 
 The previous complete platform component build was progress. Actual Pi inspection
