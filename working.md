@@ -1,3 +1,33 @@
+# Stable Android worker build identities — 2026-11-01
+
+Progress: a full current-pin Pi bundle rebuild reproduces the Rust daemon's prior
+98a5c19 hash, but its rclone worker differs from the earlier same-tree normal APK.
+The Go external linker flag contained an absolute random private wrapper path.
+Builder now passes the same ABI-specific guarded wrapper basename through its
+private PATH. All actual NDK/final-link/ELF/licence/budget checks remain; no build
+ID stripping or binary patching. Two independent full producer runs (one path
+with spaces) reproduce all four ARM64/x86_64 rclone/guardian binaries. The checker
+refuses the prior different bytes despite matching source/toolchain metadata.
+ARM64 worker566193eec8a22c7528167f71fd252857e5424ad8b196e609de10272f62462b58;
+x86_64 worker769bdf620de8ac81c80e79f1bf69fba4d239dd70d9711c8ab8b4703b4aaedfbc.
+Guardian bytes unchanged. These development recipe checks do not claim a normal
+new APK, hosted gate or physical/image execution. Source/input/output hashes:
+artifacts/evidence/android-worker-reproducibility/checks.json. Actual new native
+bundle from the committed pin and final cleanup remain next. Android foundation
+CI now rebuilds fresh workers independently and compares its normal producer,
+using the explicit pinned NDK; comparison JSON is retained with reports.
+
+No device, account, pairing, sync state, source media, signing identity, candidate,
+release, image or existing draft PR head/base changes. Active shared task
+pi-native-bundle-1793571444024161000-10902-0 holds disposable work under its exact
+/private/tmp/ai-development root. Preserve its manifest and finalise cleanup after
+the private current-pin native build. SDK/toolchain caches/source/signers and
+unrelated Oatmeal task remain. Private CI e4bd run41356139119 passes all592 full
+Linux/root tests and media checks; Android refuses a real system_server restart,
+without kernel/SF restart, after all50 primitive policy/IO cases. That acceptance
+remains failed; no renderer/health/animation waiver or rerun has been made.
+Goal active; actual source-owned Pictures and remaining production gates persist.
+
 # Single-tap Interlink settings qualified on Android36 — 2026-11-01
 
 Implementation progress. The switch applies an explicit choice in one tap,

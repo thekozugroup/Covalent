@@ -250,6 +250,15 @@ jobs:
           python3 -B scripts/test-interlink-native-reports.py
           python3 -B scripts/test-interlink-reboot-harness.py
       - run: ./scripts/check-android.sh
+      - name: Require byte-identical Android workers from independent build paths
+        env:
+          GOMAXPROCS: "2"
+        run: |
+          set -euo pipefail
+          worker_repro_dir=$(mktemp -d "${RUNNER_TEMP}/covalent-worker-repro.XXXXXX")
+          trap 'rm -rf -- "$worker_repro_dir"' EXIT
+          COVALENT_ANDROID_NDK_HOME="$ANDROID_HOME/ndk/27.1.12297006" ./scripts/build-android-sync-engine.sh "$PWD/packaging/rclone" "$worker_repro_dir/second build"
+          python3 -B scripts/check-android-worker-reproducibility.py "$PWD/apps/android/app/build/generated/syncEngine" "$worker_repro_dir/second build" > apps/android/app/build/reports/covalent/android-worker-reproducibility.json
       - name: Verify dedicated release signing with disposable test keys
         run: |
           version=$(sed -n 's/^[[:space:]]*versionName = "\([^"]*\)"$/\1/p' apps/android/companion/build.gradle.kts)
@@ -267,6 +276,7 @@ jobs:
             apps/android/app/build/reports/lint-results-*
             apps/android/app/build/test-results
             apps/android/app/build/generated/syncEngine/reports
+            apps/android/app/build/reports/covalent/android-worker-reproducibility.json
             apps/android/app/build/generated/jniLibs/provenance
             apps/android/app/build/generated/jniLibs/covalent-android-native-provenance.sha256
             apps/android/companion/build/reports

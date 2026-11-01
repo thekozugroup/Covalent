@@ -1,0 +1,73 @@
+{
+  "cleanup": "Active tracked task pi-native-bundle-1793571444024161000-10902-0; final cleanup and canonical bundle qualification follow in private platform audit",
+  "comparison": {
+    "byteIdentical": true,
+    "files": {
+      "jniLibs/arm64-v8a/libcovalentrclone.so": {
+        "bytes": 21648992,
+        "sha256": "566193eec8a22c7528167f71fd252857e5424ad8b196e609de10272f62462b58"
+      },
+      "jniLibs/arm64-v8a/libengineguardian.so": {
+        "bytes": 14912,
+        "sha256": "2fcc818aa81d0c470ceb632022c924481cee63feef86521d16404856a73f7253"
+      },
+      "jniLibs/x86_64/libcovalentrclone.so": {
+        "bytes": 23228960,
+        "sha256": "769bdf620de8ac81c80e79f1bf69fba4d239dd70d9711c8ab8b4703b4aaedfbc"
+      },
+      "jniLibs/x86_64/libengineguardian.so": {
+        "bytes": 14616,
+        "sha256": "b12ecb82d6c7b695a74ef4f9ad131a6d50fa9cd8597c8d8111ce5ec480ce1d28"
+      }
+    },
+    "schema": 1,
+    "sourceBuild": {
+      "engine": {
+        "name": "rclone",
+        "upstreamCommit": "687d264b689b8c49a67e2e52a8a5e0caa01c04ce",
+        "upstreamSourceState": "unmodified",
+        "version": "v1.75.1",
+        "wrapperSourceTree": "9eec016c4843e1d82167cbb932e356ab030adb12"
+      },
+      "schema": 1,
+      "target": {
+        "api": 26,
+        "buildMode": "pie",
+        "buildTags": [],
+        "cgoEnabled": true,
+        "goos": "android",
+        "maximumPageSize": 16384
+      },
+      "toolchain": {
+        "goVersion": "go1.26.10",
+        "ndkVersion": "27.1.12297006"
+      }
+    }
+  },
+  "hostedGate": "New mandatory Android foundation step still needs current-head hosted execution",
+  "independentFullProducerRuns": 2,
+  "logs": {
+    "workers-negative-compare.log": "494bec37ef5998ed7029b1df70099ac745f40db7c4e6e5032ebfaff5516592a7",
+    "workers-positive-compare.log": "ab010893008d63ce942a50a717ea77734829c4756dd8824c46732c99d90ecfc7",
+    "workers-repro-a.log": "5c5ef4bbb28d3d96f7af77e4140664d521b8b38aefe576266969dcefec9c84cf",
+    "workers-repro-b.log": "3689c813510f154ee5429bf21c0b44456599bb1f25a39a92370e9236c25474d7"
+  },
+  "nativeGuardsUnchanged": true,
+  "negativeComparison": {
+    "priorArm64Sha256": "31228ff19158269d735df4c84e23a4c25c3eb0679bd5cf4252c37f8a6d4a496a",
+    "sameTreePreviousWorkerRefused": true
+  },
+  "oneOutputPathContainsSpaces": true,
+  "recipeWasDevelopmentSourceDuringTheseRuns": true,
+  "runtimeOrApkImageExecutionClaimed": false,
+  "schema": 1,
+  "sourceHashes": {
+    ".github/workflows/ci.yml": "d54ee371eb7e3bc653f5bce0de157ca0be4e48d6bbc1af0b3094bfd8df84a0fb",
+    "scripts/android-go-link-wrapper.sh": "1b4c78c738a027a924e7807be75cf49b3792833a958d98af2773c799bab5be37",
+    "scripts/android-native-budgets.sh": "77113f7fd98b4687f7967e06893eb84b5df99ba614ed0ad596867970f20653ba",
+    "scripts/build-android-sync-engine.sh": "3f66e93df1d143141e616070992c04265d0f4d99908fac6a2bae61874a7f7544",
+    "scripts/check-android-worker-reproducibility.py": "f50b708c0b866ba5970a80e60adcf2d6f225030e31ed372651f23e9c5da7cffd",
+    "scripts/collect-android-native-link-provenance.py": "8f3b0462a2d490638581987702c0b1b0db3e85829bf81ff652fe3637399de153"
+  },
+  "sourceParent": "32ed3889a36bdc8676f5913c349ae689ac8412a1"
+}

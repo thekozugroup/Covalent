@@ -132,7 +132,8 @@ build_worker() {
   output="$jni_root/$abi/libcovalentrclone.so"
   cc="$toolchain/bin/$compiler"
   readelf="$toolchain/bin/llvm-readelf"
-  link_wrapper="$private_work/android-go-link-$abi.sh"
+  link_wrapper_name="android-go-link-$abi.sh"
+  link_wrapper="$private_work/$link_wrapper_name"
   link_map="$reports_root/rclone-link-$abi.map"
   driver_trace="$reports_root/rclone-driver-$abi.txt"
   link_marker="$private_work/rclone-link-marker-$abi"
@@ -142,12 +143,13 @@ build_worker() {
   test -x "$cc" || fail "Missing NDK compiler: $cc"
   (
     cd "$build_source"
-    env GOOS=android GOARCH="$goarch" CGO_ENABLED=1 CC="$cc" SOURCE_DATE_EPOCH="$source_date_epoch" \
+    # Go hashes linker flags into its build ID. Keep temporary paths out of them.
+    env PATH="$private_work:$PATH" GOOS=android GOARCH="$goarch" CGO_ENABLED=1 CC="$cc" SOURCE_DATE_EPOCH="$source_date_epoch" \
       COVALENT_REAL_CLANG="$cc" COVALENT_LINK_CLASSIFIER="$link_provenance_tool" \
       COVALENT_LINK_PRIVATE_ROOT="$private_work" COVALENT_LINK_MAP="$link_map" \
       COVALENT_DRIVER_TRACE="$driver_trace" COVALENT_LINK_MARKER="$link_marker" \
       go build -buildmode=pie \
-        -ldflags "-s -w -linkmode=external -extld=$link_wrapper -extldflags=-Wl,-z,max-page-size=16384 -X github.com/rclone/rclone/fs.Version=$engine_version" \
+        -ldflags "-s -w -linkmode=external -extld=$link_wrapper_name -extldflags=-Wl,-z,max-page-size=16384 -X github.com/rclone/rclone/fs.Version=$engine_version" \
         -o "$output" .
   )
   test -s "$link_map" && test "$(size_of "$link_map")" -le 134217728 || fail "$abi rclone final link map is invalid"
