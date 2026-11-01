@@ -1,3 +1,26 @@
+# Update API contract completed — 2026-11-01
+
+Progress: full public fb37 CI41358147479 correctly refuses the Shared Rust
+foundation because four update routes were absent from OpenAPI. The unchanged
+local route-handoff check reproduces the failure. Added exact context/actions/
+confirm/check request and response definitions, strict nullable recovery fields,
+configured/unavailable distinctions, canonical-proof bounds, CAS/replay semantics
+and no credential/install/deletion interface. Runtime Rust/Android code is unchanged.
+The real shared Rust fixture plus negative shape/cross-field cases13 pass with
+existing JSON Schema validators. All69 runtime operations match;509 refs resolve;
+62 distinct client operations from132 verb-checked call sites across7 trees route.
+The complete unchanged validate-foundation.sh passes, including its refusal/mutation
+fixtures. No checker exemption or reduced test selection. Bounded evidence:
+artifacts/evidence/interlink-update-contract/checks.json. Current-head hosted
+Rust/workspace/API37/package gates still require new source-bound execution.
+
+The private native build from committed fb37 and all producer/provenance/licence
+checks completes; worker bytes match both independent earlier builds, and the Rust
+ELF reproduces98a5c19. That is not a signed update/image or installed-Pi acceptance.
+Private exact-source qualification/canonical native output and final cleanup of
+owned pi-native-bundle-1793571444024161000-10902-0 remain in progress. No actual
+Pi/phone/account/identity/media/sync/signing change is requested. Goal active.
+
 # Stable Android worker build identities — 2026-11-01
 
 Progress: a full current-pin Pi bundle rebuild reproduces the Rust daemon's prior

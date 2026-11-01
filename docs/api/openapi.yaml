@@ -339,6 +339,112 @@ paths:
           $ref: "#/components/responses/ClientError"
         "503":
           $ref: "#/components/responses/Conflict"
+  /api/v1/appliance/updates/context:
+    post:
+      summary: Read fresh owner-authorized automatic-update settings
+      operationId: applianceUpdateContext
+      description: >-
+        Unix hosts only. Reads the pinned Pi over authenticated covalent-appliance/1. Requires separate owner approval. A fresh context can retire an older local request without claiming whether it previously ran. No policy is applied. Request limit is 4096 bytes.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ApplianceImportPeer"
+      responses:
+        "200":
+          description: Validated settings or the retained exact request; inspect availability and receipt fields.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApplianceUpdatesStatus"
+        "400":
+          $ref: "#/components/responses/ClientError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/ClientError"
+        "413":
+          $ref: "#/components/responses/ClientError"
+        "503":
+          $ref: "#/components/responses/Conflict"
+  /api/v1/appliance/updates/actions:
+    get:
+      summary: Read retained automatic-update requests
+      operationId: applianceUpdateActions
+      description: >-
+        Unix hosts only. Reads only the authenticated local node journal, with at most32 records. Does not contact the Pi or resend a command. Missing or damaged state is refused without resetting it.
+      responses:
+        "200":
+          description: Validated settings or the retained exact request; inspect availability and receipt fields.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApplianceUpdateActions"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "503":
+          $ref: "#/components/responses/Conflict"
+  /api/v1/appliance/updates/confirm:
+    post:
+      summary: Persist and send one explicit automatic-update choice
+      operationId: applianceUpdateConfirm
+      description: >-
+        Unix hosts only. The local node signs canonical intent and persists/readbacks the exact request before its only apply attempt. Exact repeated confirmation reads saved state; a changed choice under the same action ID conflicts. Fresh full bond/revision and configured nonbusy policy are required. Missing acknowledgement remains unconfirmed. No credential, URL, path or install command is accepted. Request limit is 4096 bytes.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ApplianceUpdateChoice"
+      responses:
+        "200":
+          description: Validated settings or the retained exact request; inspect availability and receipt fields.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApplianceUpdateAction"
+        "400":
+          $ref: "#/components/responses/ClientError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/ClientError"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "413":
+          $ref: "#/components/responses/ClientError"
+        "503":
+          $ref: "#/components/responses/Conflict"
+  /api/v1/appliance/updates/check:
+    post:
+      summary: Read a saved update receipt without applying again
+      operationId: applianceUpdateCheck
+      description: >-
+        Unix hosts only. Looks up the exact retained proof through the approved pinned Pi, or returns an already resolved record. It never sends apply. A notObserved receipt is not cancellation or permission to resend. A successful response can still contain an unconfirmed request. Request limit is 4096 bytes.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ApplianceImportActionId"
+      responses:
+        "200":
+          description: Validated settings or the retained exact request; inspect availability and receipt fields.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApplianceUpdateAction"
+        "400":
+          $ref: "#/components/responses/ClientError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/ClientError"
+        "413":
+          $ref: "#/components/responses/ClientError"
+        "503":
+          $ref: "#/components/responses/Conflict"
   /healthz:
     get:
       summary: Check node process readiness
@@ -4151,3 +4257,109 @@ components:
           type: array
           maxItems: 32
           items: { $ref: "#/components/schemas/ApplianceImportAction" }
+    ApplianceUpdateUuid:
+      type: string
+      format: uuid
+      not: { const: "00000000-0000-0000-0000-000000000000" }
+    ApplianceUpdateChoice:
+      type: object
+      additionalProperties: false
+      required: [schemaVersion, bond, actionId, expectedRevision, enabled]
+      properties:
+        schemaVersion: { type: integer, const: 1 }
+        bond: { $ref: "#/components/schemas/ApplianceImportBond" }
+        actionId: { $ref: "#/components/schemas/ApplianceUpdateUuid" }
+        expectedRevision: { $ref: "#/components/schemas/ApplianceUpdateUuid" }
+        enabled: { type: boolean }
+      description: Full independently approved root/native bond and a Pi-issued revision. Canonical ASCII JSON is bounded to1280 bytes and signed in covalent/appliance-updates/automatic/v1. A new explicit choice, including keeping the current boolean, consumes a revision. An import proof cannot authorize this setting.
+    ApplianceUpdatesStatus:
+      type: object
+      additionalProperties: false
+      required: [schemaVersion, applianceId, controllerId, bondGeneration, updatesSupported, updatesAvailable, context]
+      properties:
+        schemaVersion: { type: integer, const: 1 }
+        applianceId: { $ref: "#/components/schemas/DeviceId" }
+        controllerId: { $ref: "#/components/schemas/DeviceId" }
+        bondGeneration: { $ref: "#/components/schemas/ApplianceUpdateUuid" }
+        updatesSupported: { type: boolean }
+        updatesAvailable: { type: boolean }
+        context:
+          oneOf:
+            - { $ref: "#/components/schemas/ApplianceUpdateContext" }
+            - { type: "null" }
+      allOf:
+        - if: { properties: { updatesSupported: { const: false } } }
+          then: { properties: { updatesAvailable: { const: false } } }
+        - if: { properties: { updatesAvailable: { const: true } } }
+          then: { properties: { context: { $ref: "#/components/schemas/ApplianceUpdateContext" } } }
+          else: { properties: { context: { type: "null" } } }
+      description: Unsupported and temporarily unavailable are distinct. Context binds the full selected Pi/controller identities and native generation; no stale observation can authorize a choice.
+    ApplianceUpdateContext:
+      type: object
+      additionalProperties: false
+      required: [schemaVersion, bond, configured, enabled, revision, busy]
+      properties:
+        schemaVersion: { type: integer, const: 1 }
+        bond: { $ref: "#/components/schemas/ApplianceImportBond" }
+        configured: { type: boolean }
+        enabled: { type: boolean }
+        revision:
+          oneOf:
+            - { $ref: "#/components/schemas/ApplianceUpdateUuid" }
+            - { type: "null" }
+        busy: { type: boolean }
+      oneOf:
+        - properties:
+            configured: { const: false }
+            enabled: { const: false }
+            revision: { type: "null" }
+        - properties:
+            configured: { const: true }
+            revision: { $ref: "#/components/schemas/ApplianceUpdateUuid" }
+      description: Unconfigured requires disabled and null revision. Credentials remain local. The privileged host independently verifies its protected bond and revision under the publication lock.
+    ApplianceUpdateProof:
+      type: object
+      additionalProperties: false
+      required: [payload, signature]
+      properties:
+        payload: { type: string, maxLength: 1280 }
+        signature: { type: string, minLength: 86, maxLength: 86, pattern: "^[A-Za-z0-9_-]+$" }
+      description: Exact canonical ASCII choice payload and canonical unpadded base64url Ed25519 signature. Runtime signature/domain checks remain required.
+    ApplianceUpdateReceipt:
+      type: object
+      additionalProperties: false
+      required: [schemaVersion, state, actionId, payloadDigest, revision, enabled]
+      properties:
+        schemaVersion: { type: integer, const: 1 }
+        state: { type: string, enum: [applied, notObserved] }
+        actionId: { $ref: "#/components/schemas/ApplianceUpdateUuid" }
+        payloadDigest: { $ref: "#/components/schemas/HexDigest" }
+        revision: { $ref: "#/components/schemas/ApplianceUpdateUuid" }
+        enabled: { type: boolean }
+      description: Binds the exact saved action/payload. Applied confirms the chosen boolean with a new revision. NotObserved at the expected revision never cancels a queued request or permits replay.
+    ApplianceUpdateAction:
+      type: object
+      additionalProperties: false
+      required: [order, proof, receipt, observedContext]
+      properties:
+        order: { type: integer, minimum: 1 }
+        proof: { $ref: "#/components/schemas/ApplianceUpdateProof" }
+        receipt:
+          oneOf:
+            - { $ref: "#/components/schemas/ApplianceUpdateReceipt" }
+            - { type: "null" }
+        observedContext:
+          oneOf:
+            - { $ref: "#/components/schemas/ApplianceUpdateContext" }
+            - { type: "null" }
+      description: Persisted before any apply packet. Receipt and observedContext are required nullable fields. A fresh changed bond/revision can prove an older choice cannot change current policy, without proving whether it ran previously. Unknown records remain retained; only resolved history can be pruned.
+    ApplianceUpdateActions:
+      type: object
+      additionalProperties: false
+      required: [schemaVersion, actions]
+      properties:
+        schemaVersion: { type: integer, const: 1 }
+        actions:
+          type: array
+          maxItems: 32
+          items: { $ref: "#/components/schemas/ApplianceUpdateAction" }

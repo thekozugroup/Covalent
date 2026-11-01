@@ -1,0 +1,43 @@
+{
+  "fullFoundationPassed": true,
+  "logSha256": {
+    "direct-openapi-contract.log": "bf81d2e871be1f94d171aad2ea944e188b7868129ca3c046276bf9108775e668",
+    "full-foundation.log": "eee717c8016566172b0174cf55cadb9b7a38cfda3e405435c35df2c0ceee94b1",
+    "updated-openapi-routes.log": "b47bed805bd1ca6f4915eddbb4ed67ecf12e3d18fb05522deb9a62217feefc6a"
+  },
+  "openapiSha256": "b3b0829647bdd654db2909f022c578967c950c3885821dc69a148005b1bfb2ed",
+  "originalFailure": "Four new update operations absent from OpenAPI; hosted fb37 Shared Rust foundation and unchanged local route fixtures refused them. No gate was removed or weakened.",
+  "routeCoverage": {
+    "clientTrees": 7,
+    "distinctClientOperations": 62,
+    "resolvedReferences": 509,
+    "runtimeOperations": 69,
+    "verbCheckedCallSites": 132
+  },
+  "routeHandoffMutationFixturesPassed": true,
+  "runtimeCodeChanged": false,
+  "schema": 1,
+  "schemaValidation": {
+    "count": 13,
+    "initialInspectionCorrection": "Fixture schemaVersion metadata is not an API payload; validate the four named payloads explicitly.",
+    "passedCases": [
+      "applied",
+      "applied-signed-choice",
+      "current",
+      "initial",
+      "pending",
+      "pending-signed-choice",
+      "refuses-extra-choice-field",
+      "refuses-string-enabled",
+      "refuses-nil-revision",
+      "refuses-enabled-unconfigured",
+      "refuses-configured-null-revision",
+      "refuses-unsupported-available",
+      "refuses-missing-required-null"
+    ],
+    "scope": "Schema shapes and representative cross-field rules, not crypto verification",
+    "sharedRustFixture": true
+  },
+  "sharedRustFixtureSha256": "fe2049296d548a89116bfed2cd64cb69b320dc553d137c3d3ecdf689942b9963",
+  "sourceParent": "fb37b2cd76ae8c74a642e0d54760f4e5f2eb99b2"
+}
