@@ -36,9 +36,11 @@ are still required for the full headless product.
 
 Verification for this stage: full250 JVM and345 node unit tests, zero failures/
 ignored; denied-warning workspace/all-target/all-feature clippy; native API36
-component instrumentation and example-data captures. Current native package,
-physical Pi/phone, actual media copy, roaming, installed update/recovery, cloud
-confirmation and gold-image gates remain independent. The visual APK has a
+component instrumentation and example-data captures. Later normal-package
+build, permission/reboot and 15 component checks are recorded separately in
+`interlink-startup-recovery.md`. Physical Pi/phone, actual media copy, roaming,
+installed update/recovery, cloud confirmation and gold-image gates remain
+independent. The original visual APK has a
 separate preview identity, generic Application and omitted native producers.
 It proves actual Compose rendering/callbacks, not complete companion startup.
 

@@ -18,6 +18,8 @@ import tempfile
 import zipfile
 
 APPLICATION_ID = "life.michaelwong.interlink"
+APPLICATION_CLASS = "life.michaelwong.covalent.InterlinkApplication"
+LAUNCHER_CLASS = "life.michaelwong.covalent.InterlinkActivity"
 ROOT = Path(__file__).resolve().parent.parent
 KEY_VARIABLES = ("INTERLINK_ANDROID_KEYSTORE_PATH", "INTERLINK_ANDROID_STORE_PASSWORD",
                  "INTERLINK_ANDROID_KEY_ALIAS", "INTERLINK_ANDROID_KEY_PASSWORD")
@@ -70,6 +72,23 @@ def inspect_apk(apk, tools, version, version_code, *, certificate=None):
     require(package is not None and package.groups() == (APPLICATION_ID, str(version_code), version),
             "APK package or version differs from the requested Interlink release")
     require("application-debuggable" not in badging, "Production APK must not be debuggable")
+    launchers = re.findall(r"^launchable-activity: name='([^']+)'", badging, re.M)
+    require(launchers == [LAUNCHER_CLASS], "APK must have the real Interlink launcher")
+    manifest = run([str(tools / "aapt2"), "dump", "xmltree", "--file", "AndroidManifest.xml", str(apk)]).stdout
+    require(len(manifest) <= 256 * 1024, "APK manifest exceeds its inspection bound")
+    lines = manifest.decode("utf-8").splitlines()
+    applications = [i for i, line in enumerate(lines) if re.fullmatch(r"\s*E: application \(line=\d+\)", line)]
+    require(len(applications) == 1, "APK must declare exactly one Interlink Application")
+    names = []
+    # AAPT emits attributes before children. A child's name cannot supply the Application class.
+    for line in lines[applications[0] + 1:]:
+        if line.lstrip().startswith("E:"):
+            break
+        name = re.match(r'\s*A: (?:android|http://schemas\.android\.com/apk/res/android):name\(0x01010003\)="([^"]*)"', line)
+        if name:
+            names.append(name[1])
+    require(names == [APPLICATION_CLASS], "APK must use the real Interlink Application")
+    require(not any("InterlinkPreviewActivity" in line for line in lines), "Release APK must not contain the preview activity")
     run([str(tools / "zipalign"), "-c", "-P", "16", "4", str(apk)])
     run([str(ROOT / "scripts/check-android-native-package.sh"), str(apk)],
         extra_env={"COVALENT_ANDROID_ZIPALIGN": str(tools / "zipalign")})
@@ -95,6 +114,7 @@ def inspect_apk(apk, tools, version, version_code, *, certificate=None):
             require(re.search(rf"^Verified using v{scheme} scheme .*: true$", evidence, re.M) is not None,
                     f"APK must verify with signature scheme v{scheme}")
     return {"applicationId": APPLICATION_ID, "versionName": version, "versionCode": version_code,
+            "applicationClass": APPLICATION_CLASS, "launcherClass": LAUNCHER_CLASS,
             "apkSha256": sha256(apk), "bytes": apk.stat().st_size,
             "certificateSha256": certificate}
 

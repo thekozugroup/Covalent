@@ -19,6 +19,15 @@ native cards and adaptive endpoints remain shared with Covalent.
 
 ## Captured implementation
 
+- `interlink-first-launch.png`: current normal companion package on a fresh
+  API37 ARM64 emulator, using the real Interlink Application and launcher.
+  Get started is visible and the foreground host remains off until explicit
+  opt-in. No example-data override, native-producer exclusion, account or
+  pairing is used. The same installed APK subsequently passes both permission
+  recovery routes and automatic host startup after one real reboot; see
+  `../interlink-startup-recovery.md`. This capture does not prove real pairing
+  or cloud backup.
+
 - `interlink-import-confirmation.png`: current actual native confirmation with
   synthetic source, count/size, named destination and usable space. A new source
   defaults to once; remembering is an explicit checkbox. Folder details reveals
@@ -84,5 +93,6 @@ unavailable folder access takes priority over readiness on repeated starts.
 
 This is an implemented design direction, not a blanket accessibility or Material
 compliance certification. Bonded owner control/import confirmations are wired in
-source. Complete native startup, actual phone/Pi control, background alerts,
+source. Normal-package local startup now passes its separate qualification.
+Actual phone/Pi control, background alerts,
 real-device roaming and the remaining screens still need end-to-end acceptance.

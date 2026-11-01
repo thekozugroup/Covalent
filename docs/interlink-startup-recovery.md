@@ -83,3 +83,55 @@ Source snapshots, original/final receipts and build/test hashes are bound by
 `artifacts/evidence/android-unlock-startup.json`. Hosted x86 API37 permission
 recovery remains unaccepted because of its separately recorded framework abort.
 Physical devices, real first unlock, roaming and production signing remain open.
+
+
+## Complete companion qualification — 2026-11-01
+
+The normal companion now has fresh full-package evidence beyond the separate
+visual preview. Its compiled application inputs are exactly c3f1ba0cf982b7bb7cf148f449206d98fc41b98e;
+this iteration changes the release checker, not those APK inputs. The build ran
+both real JNI and maintained worker/guardian producers, without manifest,
+Application or package overrides. Debug, minified unsigned release, release AAB,
+SBOM, both lint variants, native provenance/alignment/budgets and 250 JVM tests
+pass in 530.456s. Lint has zero errors and 11 debug/12 release warnings. The
+release APK is 29,511,238 bytes. APK/AAB native byte identity passes for both ABIs.
+
+The release checker now requires the actual Interlink Application and launcher,
+and excludes the debug preview Activity. A missing/generic/other Application,
+ambiguous name/element, child attribute masquerading as the Application, missing/
+other/multiple launchers and a leaked preview are refused. Eleven invalid
+variants fail against the old checker; all 29 final policy tests pass. Real
+SDK 36/37 signing smokes pass with disposable test keys, preserving existing
+output and rejecting an Android Debug signer. These are test signatures;
+production companion signing remains unconfigured.
+
+The exact normal debug APK is installed and read back independently:
+`231001c0df5f7a027252257f6e1553a1960f916390426dea3b1557df57c01a00`.
+On a fresh API 37 ARM64/4-KiB-page emulator, its real launcher reaches Get started
+without starting the foreground host before opt-in. The canonical
+[screen capture](brand/interlink-first-launch.png) contains no account or pairing.
+The actual Settings-return and runtime permission routes both recover native
+readiness with unchanged device/TLS/key-envelope hashes and framework processes
+in 64.380s. One real reboot then passes in 57.754s: no Activity launch, no direct
+service-start command, native status ready, stable app/framework observation
+for 20.912s, unchanged APK/UID/identity hashes, and independently removed forwards.
+Fifteen native dashboard/import/notification/layout checks pass in 29.429s against
+this normal package/Application. Their card data is synthetic; they do not
+establish an actual paired import.
+
+Private platform audit: `artifacts/validation/2026-11-01-native-companion-startup`.
+The source files, package hashes, commands, original failures and cleanup are
+bound there. Normal module outputs, owned apps/AVD/runtime and scratch are
+removed after evidence retention. One verified pinned Go1.26.10 SDK remains
+reusable outside iCloud; the default Go installation is unchanged.
+
+This is local unpaired emulator acceptance. Hosted c3f1ba0 run 41289561149 still
+fails: 85/86 general Covalent baseline tests pass; the remaining Back-navigation
+check loses window focus before the companion permission journey can run. Both
+container image scans also fail. The prior snapshot-verification failure and
+this newer focus failure remain separate. Private platform b695b75 run 41290102402
+passes both Android owner/staging and Linux recovery/media jobs. No hosted
+failure is waived by the local companion result. Actual Solstice/Pi pairing,
+roaming, background drive alerts, physical imports/updates, exact Google Photos
+confirmation and fresh-image acceptance remain open. No gold image, physical
+installation or production-signed companion release is claimed.

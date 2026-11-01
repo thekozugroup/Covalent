@@ -1370,3 +1370,26 @@ Next: safe Pictures journal recovery, full-folder completion, phone-to-Pi
 nearby discovery and cellular handoff, plus the separate GPhoto OS acceptance
 gates. Preserve originals and account/pairing state. No Pi drive was flashed
 as part of this Covalent release.
+
+
+# Normal Interlink startup and release entrypoints — 2026-11-01
+
+The full normal companion, including both native JNI/worker/guardian producers,
+passes debug/minified release/AAB/SBOM/lint/package gates and 250 JVM tests in
+530.456s. APK sources remain c3f1ba0; this iteration changes release validation.
+The release checker now admits only the real Interlink Application/launcher and
+refuses a preview component. All 29 policy tests and actual SDK 36/37 disposable
+signing smokes pass;11 invalid entrypoint variants failed against the old gate.
+The normal debug APK 231001c0df5f7a027252257f6e1553a1960f916390426dea3b1557df57c01a00
+passes fresh first-run opt-in, both API37 permission recovery routes, one actual
+reboot with automatic foreground-host/native readiness without opening its
+Activity (20.912s stable), and 15 native component tests. Device/TLS/key-envelope
+hashes and APK/UID survive reboot. Canonical first-run screenshot is in docs/brand.
+These are unpaired local ARM64/4-KiB-page checks, not physical/cloud acceptance.
+Hosted c3f1ba0 CI41289561149 remains failed: general Covalent baseline85/86,
+Back-navigation focus failure; both container image scans also fail. Private
+b695b75 CI41290102402 passes both jobs. Nothing is waived or promoted. Details,
+exact scope and cleanup: docs/interlink-startup-recovery.md; bounded private audit
+artifacts/validation/2026-11-01-native-companion-startup. Continue with background
+alerts/camera/remote settings and actual Pi/Solstice/import/update/cloud/image
+gates; preserve the legacy Pictures journal and originals. No DCIM authorization.
