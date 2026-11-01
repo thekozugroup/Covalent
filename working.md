@@ -1,3 +1,68 @@
+# Receiving-run uncertainty and actual Pi admission — 2026-11-01
+
+The previous complete platform component build was progress. Actual Pi inspection
+now works through the direct Ethernet cable and verifies the same hardware/boot,
+four Covalent identity digests and all16 originally signed installed components.
+The Pi remains0.2.3 sequence6; its source phone is offline in Tailscale. An incoming
+run retains its source-owned running record after its deadline. Idle admission
+correctly refuses it. No journal, service, account/media or updater state is
+reset/stopped/changed, and no upgrade is forced. Temporary network/debug resources
+are restored/removed; private physical audit remains separate from UI proof.
+
+That observation exposed a receiving-card presentation gap. After the recorded
+deadline, an incoming run whose source connection cannot be freshly confirmed
+shows Waiting for source and a retained-progress explanation. It no longer
+claims Transfer running or repeats generic connection uncertainty. The source-
+owned phase/generation/signed state stay unchanged. Fresh observed local copy,
+scanning/error priorities and connected-source observations retain their existing
+behavior. Outgoing/no-deadline and terminal run history retain their old rules.
+No cleanup, mutation retry or updater-idle authority derives from the display.
+
+Full269 JVM tests pass, zero failures/errors/skips, including four added boundary,
+stale/connected-source, local-copy, missing-deadline/outgoing and terminal-record
+checks. Companion debug lint has no errors. The normal full-producer debug APK
+is52,474,852B, debug certificate20a69239; native package checks pass both ABIs.
+APK SHA2566e8b80cdf761e7a3958735335c7fc9c7e520ba08f9db63a89c22713bf939c98a.
+This is QA signing, not an installable production release or physical phone update.
+
+The new actual native receiving-card transition passes in light/default and
+dark/200% text: source uncertainty appears, generic/running/completed claims do
+not, then fresh local-copy observation restores running. After real Get started
+and actual Android notification consent, all24 registered component/owner/alert/
+notification cases pass by exact name on the owned API36 ARM64 16KiB guest. The
+initial direct batch lacks those host/notification prerequisites and fails; both
+original results are retained before the admitted run. No assertion/deadline is
+relaxed. The new class is included in the existing strict API37 registry and its
+three host harness tests pass; API36 is not a replacement for that API37 journey.
+
+The native example-data previews keep the Interlink logo and serif title, clear
+source/destination and card settings. Complete explanation frames are retained
+in docs/brand/interlink-run-awaiting-source-{light,large-dark}.png. Initial clipped
+frames are superseded, not published. Capture initialization overwrote the UI
+receipt; its original overwritten value is retained and the passed record is
+recovered from the hash-verified exact test stdout, without rerunning/altering
+tests. Private audit records that derivation explicitly. No raw signed-in screen
+or personal media is captured. Framework/boot remain unchanged, font/night are
+restored, and original animation values remain unchanged.
+
+Public native source and private component package still pin e4013a1: no Rust,
+dependency, version, platform runtime or signed package bytes change here. Source
+hashes bind the tested APK; physical upgrade/recovery, full bonded settings and
+roaming, actual SD/USB/camera/cloud/cleanup and gold image remain required. Public
+e4013a1 hosted CI fails its Android/container/release gate; private fce30f0 passes
+Linux but fails owner approval instrumentation. Keep both PR bases/drafts and
+all original release gates; no merge, release, flash or real account/media change.
+
+Cleanup verified: owned AVD Interlink_Run_Confirmation_API36 (emulator-5586), its
+registration/writable data, owned ADB5041, listeners5586/5587, three task module
+build links and scratch interlink-run-confirmation-1793548677765978000-20959-0
+are absent; all recorded owned processes exited. Shared ADB76421/93998, shared
+tooling/caches, pre-existing empty .kotlin and other owners' tasks remain. Final
+scratch removal shows1,495,564,288B more whole-volume free space after the AVD
+was already deleted; concurrent/APFS activity limits attribution. No APK/build/
+AVD is retained. Two canonical PNGs (~0.31MiB) and the bounded private UI/physical
+audits (~0.8MiB total) retain the exact evidence and known failed prerequisites.
+
 # Import compatibility across companion/platform updates — 2026-11-01
 
 The previous signed camera stage was progress. This stage fixes its mixed-version

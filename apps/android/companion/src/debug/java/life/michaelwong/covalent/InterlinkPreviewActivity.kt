@@ -24,13 +24,22 @@ class InterlinkPreviewActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        val previewMode = intent.getStringExtra("previewMode")
+        val awaitingRun = previewMode == "run-awaiting-confirmation"
         val link = FolderShare(
             offerId = "preview-link", folderId = "preview-pictures", label = "Pictures",
-            peerId = "preview-pi", incoming = false, phase = FolderSharePhase.READY,
+            peerId = "preview-pi", incoming = awaitingRun, phase = FolderSharePhase.READY,
             expiresAtUnixMs = null, expired = false, linkPolicy = FolderLinkPolicy(),
+            peerConnection = PeerConnectionState.DISCONNECTED,
+            linkSettings = if (awaitingRun) FolderLinkSettingsState(0,
+                FolderLinkSettings(FolderLinkPolicy(), false, FolderLinkCadence.Manual),
+                "example-change", "preview-pi", true, null, null) else null,
+            linkRun = if (awaitingRun) FolderLinkRunSummary(1, 1, 0,
+                FolderLinkRunPhase.RUNNING, 1, 2, null, null, null, null, emptyList()) else null,
         )
         val status = FolderSyncStatus(
-            availability = FolderSyncAvailability.AVAILABLE, lifecycle = FolderSyncLifecycle.STOPPED,
+            availability = FolderSyncAvailability.AVAILABLE,
+            lifecycle = if (awaitingRun) FolderSyncLifecycle.RUNNING else FolderSyncLifecycle.STOPPED,
             issue = null, healthFreshness = FolderHealthFreshness.NEVER_OBSERVED,
             peers = listOf(FolderSyncPeer("preview-pi", "Living room Pi")),
             shares = listOf(link), folders = emptyList(),
@@ -38,7 +47,6 @@ class InterlinkPreviewActivity : ComponentActivity() {
         val phone = ApplianceIdentity("11111111-1111-4111-8111-111111111111", "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE", "b".repeat(20))
         val pi = ApplianceIdentity("22222222-2222-4222-8222-222222222222", "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI", "a".repeat(20))
         val selected = SelectedAppliance(phone, pi, "Living room Pi", "44444444-4444-4444-8444-444444444444")
-        val previewMode = intent.getStringExtra("previewMode")
         val importExample = interlinkImportExample(selected, previewMode?.startsWith("camera-") == true, previewMode != "camera-connection-only")
         val importPreview = previewMode?.startsWith("import-") == true || previewMode?.startsWith("camera-") == true
         if (previewMode == "notification" && android.os.Build.VERSION.SDK_INT >= 33 &&
@@ -57,12 +65,12 @@ class InterlinkPreviewActivity : ComponentActivity() {
         val dashboard = ApplianceDashboardState(
             selection = selected,
             connection = when (previewMode) {
-                "offline" -> ApplianceConnectionState.UNAVAILABLE
+                "offline", "run-awaiting-confirmation" -> ApplianceConnectionState.UNAVAILABLE
                 "approval" -> ApplianceConnectionState.APPROVAL_REQUIRED
                 else -> ApplianceConnectionState.CONNECTED
             },
             context = ApplianceContext(phone, listOf(pi)), candidates = listOf(ApplianceCandidate(pi, selected.name)),
-            observation = if (previewMode in setOf("offline", "approval")) null else
+            observation = if (previewMode in setOf("offline", "approval", "run-awaiting-confirmation")) null else
                 ApplianceObservation(selected.confirmedGeneration!!, ApplianceSyncState.RUNNING, 1, true),
             platform = if (previewMode != "storage" && !importPreview) null else AppliancePlatformObservation(selected.confirmedGeneration!!, true,
                 PiPlatformSnapshot(true, true, false, listOf(PiImportSource("a".repeat(64), false, "Camera SD card", true, false,
@@ -95,7 +103,7 @@ class InterlinkPreviewActivity : ComponentActivity() {
                         FolderShareCard(
                             status = status, share = link, peerName = "Living room Pi",
                             hasFolder = true, hasPendingRepair = false, busy = false,
-                            addDestination = {}, showLinkSettings = false,
+                            addDestination = {}, showLinkSettings = awaitingRun,
                             savedSettingsChange = null, savedRunRequest = null,
                             editSettings = { _, _ -> }, retrySettings = {}, reviewSettings = { _, _ -> },
                             mutate = {}, runNow = {}, reviewRun = {}, localFolderName = "Pictures",

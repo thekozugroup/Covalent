@@ -662,6 +662,8 @@
     <string name="folder_link_run_next_due">Next run: %1$s</string>
     <string name="folder_link_run_preparing">Preparing transfer</string>
     <string name="folder_link_run_running">Transfer running</string>
+    <string name="folder_link_run_awaiting_confirmation">Waiting for source</string>
+    <string name="folder_link_run_awaiting_confirmation_detail">Reconnect the source to refresh this unfinished run. Files and progress are kept.</string>
     <string name="folder_link_run_succeeded">Last run completed</string>
     <string name="folder_link_run_incomplete">Last run incomplete</string>
     <string name="folder_link_run_interrupted">Last run interrupted</string>

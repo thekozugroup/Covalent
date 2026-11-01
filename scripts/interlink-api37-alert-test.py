@@ -17,7 +17,8 @@ OWNED_AVDS = {"Covalent_API_37": "emulator-5570", "Interlink_Unlock_API37": "emu
 IDENTITIES = ("no_backup/covalent-node/identity.json", "no_backup/covalent-node/tls/identity.json",
               "no_backup/covalent-node-secrets/kek-envelope.v1")
 CLASSES = ("InterlinkImportAlertsInstrumentedTest", "InterlinkDashboardInstrumentedTest",
-           "InterlinkImportsInstrumentedTest", "InterlinkNotificationInstrumentedTest", "ui.InterlinkLayoutInstrumentedTest")
+           "InterlinkImportsInstrumentedTest", "InterlinkNotificationInstrumentedTest",
+           "InterlinkRunStatusInstrumentedTest", "ui.InterlinkLayoutInstrumentedTest")
 
 
 def require(ok, message):

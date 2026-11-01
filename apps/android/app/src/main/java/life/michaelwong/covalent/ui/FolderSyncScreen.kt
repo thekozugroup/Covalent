@@ -84,6 +84,7 @@ import life.michaelwong.covalent.model.FolderSyncLifecycle
 import life.michaelwong.covalent.model.FolderSyncIssue
 import life.michaelwong.covalent.model.FolderShareSummary
 import life.michaelwong.covalent.model.summaryFor
+import life.michaelwong.covalent.model.runNeedsConfirmation
 import life.michaelwong.covalent.model.NodeConnection
 import life.michaelwong.covalent.node.EmbeddedNodeManager
 import life.michaelwong.covalent.sync.FolderSyncActions
@@ -1266,8 +1267,11 @@ internal fun FolderShareCard(
                 FolderShareSummary.CONNECTION_UNKNOWN -> stringResource(R.string.folder_sync_connection_unknown)
                 FolderShareSummary.READY -> stringResource(R.string.folder_link_run_ready)
             }
-            if (share.linkRun?.phase == null || shareSummary !in setOf(
-                    FolderShareSummary.SYNCING, FolderShareSummary.CONNECTED, FolderShareSummary.READY)) {
+            val runWarningShown = showLinkSettings && share.linkPolicy != null && share.linkSettings?.confirmed == true &&
+                shareSummary == FolderShareSummary.CONNECTION_UNKNOWN &&
+                status.runNeedsConfirmation(share, System.currentTimeMillis())
+            if (!runWarningShown && (share.linkRun?.phase == null || shareSummary !in setOf(
+                    FolderShareSummary.SYNCING, FolderShareSummary.CONNECTED, FolderShareSummary.READY))) {
                 Text(summary)
             }
             TextButton(onClick = { showingDetails = !showingDetails }, enabled = !busy,
@@ -1364,8 +1368,11 @@ private fun FolderLinkRunSummary(
     val settings = share.linkSettings ?: return
     if (!settings.confirmed) return
     val run = share.linkRun
+    val now = System.currentTimeMillis()
+    val needsConfirmation = status.summaryFor(share, now) == FolderShareSummary.CONNECTION_UNKNOWN &&
+        status.runNeedsConfirmation(share, now)
     Text(
-        when (run?.phase) {
+        if (needsConfirmation) stringResource(R.string.folder_link_run_awaiting_confirmation) else when (run?.phase) {
             FolderLinkRunPhase.PREPARING -> stringResource(R.string.folder_link_run_preparing)
             FolderLinkRunPhase.RUNNING -> stringResource(R.string.folder_link_run_running)
             FolderLinkRunPhase.SUCCEEDED -> stringResource(R.string.folder_link_run_succeeded)
@@ -1380,6 +1387,10 @@ private fun FolderLinkRunSummary(
         },
         fontWeight = FontWeight.SemiBold,
     )
+    if (needsConfirmation) {
+        Text(stringResource(R.string.folder_link_run_awaiting_confirmation_detail),
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
     if (share.incoming && settings.settings.cadence is FolderLinkCadence.Scheduled) {
         Text(stringResource(R.string.folder_link_run_source_owns_schedule))
     } else if (!share.incoming && run?.nextDueAtUnixMs != null) {

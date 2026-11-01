@@ -19,6 +19,14 @@ native cards and adaptive endpoints remain shared with Covalent.
 
 ## Captured implementation
 
+- `interlink-run-awaiting-source-light.png` and
+  `interlink-run-awaiting-source-large-dark.png`: actual normal debug package,
+  native receiving card and explicit example data. An expired source-owned run
+  whose source cannot be confirmed shows Waiting for source and retained-progress
+  guidance. The 200% dark view scrolls to the complete explanation. Source and
+  destination are labelled; this fixture does not change the real Pictures link.
+  [Run-status behavior and acceptance](../interlink-run-status.md).
+
 - `interlink-camera-confirmation.png`: actual normal Interlink debug package,
   Expressive theme and stable-camera confirmation. Source/destination, counts,
   space and explicit remember are visible. Data is labelled as an example.

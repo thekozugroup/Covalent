@@ -125,7 +125,7 @@ enum class FolderShareSummary {
 }
 
 /** UI summary with expiry, pause, scanning and explicit errors ahead of reachability. */
-fun FolderSyncStatus.summaryFor(share: FolderShare): FolderShareSummary {
+fun FolderSyncStatus.summaryFor(share: FolderShare, nowUnixMs: Long = System.currentTimeMillis()): FolderShareSummary {
     if (share.phase == FolderSharePhase.REMOVED) {
         return if (share.remoteRemovalPending) FolderShareSummary.REMOVAL_PENDING else FolderShareSummary.REMOVED
     }
@@ -164,6 +164,7 @@ fun FolderSyncStatus.summaryFor(share: FolderShare): FolderShareSummary {
             share.linkPolicy == null && (health.remainingFiles > 0 || health.remainingBytes > 0)
         ) return FolderShareSummary.SYNCING
     }
+    if (runNeedsConfirmation(share, nowUnixMs)) return FolderShareSummary.CONNECTION_UNKNOWN
     when (if (availability == FolderSyncAvailability.AVAILABLE) share.linkRun?.phase else null) {
         FolderLinkRunPhase.PREPARING -> return FolderShareSummary.CHECKING
         FolderLinkRunPhase.RUNNING -> return FolderShareSummary.SYNCING
@@ -177,6 +178,16 @@ fun FolderSyncStatus.summaryFor(share: FolderShare): FolderShareSummary {
         PeerConnectionState.PAUSED -> FolderShareSummary.PAUSED
         PeerConnectionState.UNKNOWN -> FolderShareSummary.CONNECTION_UNKNOWN
     }
+}
+
+/** An elapsed deadline is uncertainty, never authority to finish a source-owned run. */
+fun FolderSyncStatus.runNeedsConfirmation(share: FolderShare, nowUnixMs: Long): Boolean {
+    val run = share.linkRun ?: return false
+    val deadline = run.deadlineUnixMs ?: return false
+    return share.incoming && nowUnixMs >= deadline &&
+        run.phase in setOf(FolderLinkRunPhase.PREPARING, FolderLinkRunPhase.RUNNING) &&
+        (availability != FolderSyncAvailability.AVAILABLE ||
+            connectionFreshness != PeerConnectionFreshness.FRESH || share.peerConnection != PeerConnectionState.CONNECTED)
 }
 
 data class FolderHealth(
