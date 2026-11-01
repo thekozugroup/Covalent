@@ -523,9 +523,14 @@
     <string name="transfer_channel_name">Covalent transfers</string>
     <string name="transfer_channel_description">Shows active backup and restore work.</string>
     <string name="transfer_notification_title">Covalent transfer in progress</string>
-    <string name="node_provider_channel_name">Covalent phone storage</string>
-    <string name="node_provider_channel_description">Shows when this phone is storing backups for your other devices.</string>
-    <string name="node_provider_notification_title">Covalent is storing backups</string>
+    <string name="node_provider_channel_name">Covalent sync service</string>
+    <string name="node_provider_channel_description">Shows this phone’s sync service and folder access status.</string>
+    <string name="node_provider_notification_title">Covalent sync service</string>
+    <string name="node_provider_status_starting">Starting secure sync…</string>
+    <string name="node_provider_status_recovering">Recovering this phone’s saved sync identity…</string>
+    <string name="node_provider_status_backup_available">Ready to receive device backups</string>
+    <string name="node_provider_status_folders_available">Ready to sync shared folders</string>
+    <string name="node_provider_status_access_unavailable">Shared folders need attention</string>
     <string name="node_provider_stop">Stop</string>
 
     <plurals name="backup_snapshot_count">

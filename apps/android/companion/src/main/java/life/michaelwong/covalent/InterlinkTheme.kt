@@ -11,6 +11,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
@@ -75,7 +76,7 @@ internal fun InterlinkScaffold(content: @Composable (PaddingValues) -> Unit) {
         topBar = {
             TopAppBar(
                 title = {
-                    Text("Interlink", fontFamily = FontFamily.Serif,
+                    Text(stringResource(R.string.app_name), fontFamily = FontFamily.Serif,
                         style = MaterialTheme.typography.headlineMedium,
                         maxLines = 1, overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.semantics { heading() })

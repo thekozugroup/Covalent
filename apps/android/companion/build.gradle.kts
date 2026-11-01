@@ -65,6 +65,8 @@ android {
         jniLibs.srcDir(project(":app").layout.buildDirectory.dir("generated/jniLibs").get().asFile)
         jniLibs.srcDir(project(":app").layout.buildDirectory.dir("generated/syncEngine/jniLibs").get().asFile)
     }
+    // Brand resources overlay shared defaults at build-type priority in both packages.
+    listOf("debug", "release").forEach { sourceSets.getByName(it).res.srcDir("src/brand/res") }
     packaging {
         resources.merges += setOf("/META-INF/AL2.0", "/META-INF/LGPL2.1")
         jniLibs {

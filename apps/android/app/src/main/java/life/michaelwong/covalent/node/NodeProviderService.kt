@@ -1,8 +1,5 @@
 package life.michaelwong.covalent.node
 
-import android.app.Notification
-import android.app.NotificationChannel
-import android.app.NotificationManager
 import android.app.Service
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -11,7 +8,6 @@ import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.IBinder
-import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import life.michaelwong.covalent.R
 import life.michaelwong.covalent.data.CovalentNodeClient
@@ -141,15 +137,15 @@ class NodeProviderService : Service() {
             NodeFolderSyncApi(CovalentNodeClient()),
             manager::localConnectionForFolderSync,
         )
-        createChannel()
+        NodeProviderNotification.createChannel(this)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val action = intent?.action ?: ACTION_START
         if (action != ACTION_STOP) {
             startAsConnectedDeviceForeground(
-                if (action == ACTION_RECOVER) "Recovering this phone's Covalent identity"
-                else "Covalent's on-phone node is starting",
+                getString(if (action == ACTION_RECOVER) R.string.node_provider_status_recovering
+                    else R.string.node_provider_status_starting),
             )
         }
         actor.post { handleCommand(action, startId) }
@@ -226,7 +222,7 @@ class NodeProviderService : Service() {
             ACTION_REFRESH_ACCESS -> {
                 if (handle > 0L) beginRestartForAccessChange() else startNode(command.startId)
             }
-            else -> startOrRefresh(command.startId, "Covalent's on-phone node is running")
+            else -> startOrRefresh(command.startId)
         }
     }
 
@@ -271,7 +267,7 @@ class NodeProviderService : Service() {
         )
     }
 
-    private fun startOrRefresh(startId: Int, unchangedStatus: String) {
+    private fun startOrRefresh(startId: Int) {
         if (
             handle > 0L && !nodeServiceConfigurationChanged(
                 launchedAccessUnavailable,
@@ -281,7 +277,7 @@ class NodeProviderService : Service() {
             )
         ) {
             scheduleAccessCheck()
-            updateNotification(unchangedStatus)
+            updateNotification(runningStatus())
         } else if (handle > 0L) {
             beginRestartForAccessChange()
         } else {
@@ -346,11 +342,7 @@ class NodeProviderService : Service() {
         if (response.ok && handle > 0L) {
             conditionFeed.start()
             scheduleAccessCheck()
-            updateNotification(
-                if (demandAtLaunch.backupEnabled) "Android provider is available"
-                else if (accessUnavailableAtLaunch) "Shared folders need attention"
-                else "Shared folders are available",
-            )
+            updateNotification(runningStatus())
         } else {
             stopForeground(STOP_FOREGROUND_REMOVE)
             releaseProcessOwnership()
@@ -407,53 +399,24 @@ class NodeProviderService : Service() {
             checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) ==
             PackageManager.PERMISSION_GRANTED
         ) {
-            NotificationManagerCompat.from(this).notify(NOTIFICATION_ID, notification(status))
+            NotificationManagerCompat.from(this).notify(NOTIFICATION_ID, NodeProviderNotification.create(this, status))
         }
     }
 
-    private fun createChannel() {
-        getSystemService(NotificationManager::class.java).createNotificationChannel(
-            NotificationChannel(
-                CHANNEL_ID,
-                getString(R.string.node_provider_channel_name),
-                NotificationManager.IMPORTANCE_LOW,
-            ).apply {
-                description = getString(R.string.node_provider_channel_description)
-                setShowBadge(false)
-            },
-        )
-    }
+    private fun runningStatus(): String = NodeProviderNotification.runningStatus(
+        this, launchedDemand.backupEnabled, launchedAccessUnavailable,
+    )
 
     private fun startAsConnectedDeviceForeground(status: String) {
         if (Build.VERSION.SDK_INT >= 29) {
             startForeground(
                 NOTIFICATION_ID,
-                notification(status),
+                NodeProviderNotification.create(this, status),
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE,
             )
         } else {
-            startForeground(NOTIFICATION_ID, notification(status))
+            startForeground(NOTIFICATION_ID, NodeProviderNotification.create(this, status))
         }
-    }
-
-    private fun notification(status: String): Notification {
-        // setClass binds the destination component explicitly, so the stop action can never
-        // resolve to another package; FLAG_IMMUTABLE additionally stops any holder of the
-        // PendingIntent from retargeting or populating it.
-        val stopIntent = Intent(ACTION_STOP).setClass(this, NodeProviderService::class.java)
-        val stopPendingIntent = android.app.PendingIntent.getService(
-            this,
-            0,
-            stopIntent,
-            android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE,
-        )
-        return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_launcher)
-            .setContentTitle(getString(R.string.node_provider_notification_title))
-            .setContentText(status)
-            .setOngoing(true)
-            .addAction(0, getString(R.string.node_provider_stop), stopPendingIntent)
-            .build()
     }
 
     companion object {
@@ -461,7 +424,6 @@ class NodeProviderService : Service() {
         const val ACTION_RECOVER = "life.michaelwong.covalent.node.RECOVER"
         const val ACTION_STOP = "life.michaelwong.covalent.node.STOP"
         const val ACTION_REFRESH_ACCESS = "life.michaelwong.covalent.node.REFRESH_SYNC_ACCESS"
-        private const val CHANNEL_ID = "covalent_node_provider"
         private const val NOTIFICATION_ID = 3107
         private const val ACCESS_CHECK_MILLIS = 3_000L
     }

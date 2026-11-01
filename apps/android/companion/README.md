@@ -7,8 +7,8 @@ own private state and ports (18887/18889), so it does not replace a Covalent
 installation or reuse its identity without an explicit future migration.
 
 The UI uses Compose Material 3 Expressive (`1.5.0-alpha29`), expressive motion,
-dynamic light/dark colours, the existing logo and a serif title. The main screen
-shows paired source/destination links and per-link settings. It omits the
+dynamic light/dark colours, its own minimal link logo and a serif title. The main
+screen shows paired source/destination links and per-link settings. It omits the
 general backup-server and archive-recovery flows. Deletion/restore policy
 switches are unavailable in the appliance companion. Original files stay on
 the phone; Google Photos controls cleanup on the Pi.
@@ -34,6 +34,9 @@ the trust anchor. Discovery never automatically trusts a device.
 Boot/update receivers reconnect only explicitly enabled nodes after unlock.
 Android can still block background starts after force-stop or with restrictive
 battery settings. The foreground notification remains necessary on the phone.
+It uses Interlink's own monochrome link mark and opens the installed Interlink
+launcher when tapped. Service readiness is distinct from an active transfer or
+Google Photos backup; lost folder access remains visible on repeated starts.
 Physical phone/Pi restart and cellular handoff remain acceptance gates.
 
 Development validation (2026-10-20): 205 shared unit tests, debug/release lint,

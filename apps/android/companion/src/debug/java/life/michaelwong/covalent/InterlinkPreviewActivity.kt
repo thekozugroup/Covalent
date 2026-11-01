@@ -38,6 +38,13 @@ class InterlinkPreviewActivity : ComponentActivity() {
         val pi = ApplianceIdentity("22222222-2222-4222-8222-222222222222", "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI", "a".repeat(20))
         val selected = SelectedAppliance(phone, pi, "Living room Pi", "44444444-4444-4444-8444-444444444444")
         val previewMode = intent.getStringExtra("previewMode")
+        if (previewMode == "notification" && android.os.Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            life.michaelwong.covalent.node.NodeProviderNotification.createChannel(this)
+            getSystemService(android.app.NotificationManager::class.java).notify(9901,
+                life.michaelwong.covalent.node.NodeProviderNotification.create(this,
+                    "Example data · Ready to sync shared folders"))
+        }
         val dashboard = ApplianceDashboardState(
             selection = selected,
             connection = when (previewMode) {

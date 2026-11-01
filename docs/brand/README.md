@@ -19,6 +19,11 @@ native cards and adaptive endpoints remain shared with Covalent.
 
 ## Captured implementation
 
+- `interlink-notification-preview.png`: actual Android notification using the
+  production builder and merged Interlink icon/title resources. Its visible
+  example-data label is synthetic; no sync engine or cloud backup is running.
+  Tapping it from HOME opens this fixture's own launcher.
+
 - `interlink-storage-preview.png`: actual native storage card with synthetic
   source counts, destination and protected space. It is read-only; the shown
   counts are cached and do not approve imports or establish transfer/backup.
@@ -39,7 +44,7 @@ native cards and adaptive endpoints remain shared with Covalent.
 - `interlink-ui-preview-large.png`: native dark-mode screen at 200% font size,
   scrolled to show the stacked source/destination and link actions.
 
-The UI images were captured on one isolated API 36 ARM64 emulator, using the
+The dashboard/link images were captured on an isolated API 36 ARM64 emulator, using the
 actual production theme/scaffold and folder components with synthetic saved,
 offline Pictures data. The visible example-data label belongs only to the debug
 `InterlinkPreviewActivity`. It has no counterpart in release sources.
@@ -53,9 +58,19 @@ explicitly. The committed normal companion build still requires its JNI,
 maintained worker and guardian producers and package checks. These images prove
 rendering only, not pairing, transfer, cloud backup or a signed release package.
 The emulator boot/framework identities stayed unchanged during capture. Its
-preview package, AVD, data and temporary APK were removed afterwards.
+preview package, AVD, data and temporary APK were removed afterwards. The later
+notification capture uses a separate owned API36 ARM64 emulator with the same
+visual-fixture limits; its boot/system-server/surface-flinger identities remain
+unchanged and animations stay at1.0x.
+
+The shared foreground and transfer builders use a monochrome notification icon.
+Interlink's `src/brand/res` overlays the shared app-name, channel/title and icon
+resources in both debug and release build types. Covalent retains its own mark
+and app name. The service keeps its existing channel ID and stop action, opens
+the installed app's own launcher on tap, and uses immutable explicit intents.
+Readiness never means an active transfer or completed Google Photos backup;
+unavailable folder access takes priority over readiness on repeated starts.
 
 This is an implemented design direction, not a blanket accessibility or Material
 compliance certification. Bonded owner control, import confirmations, real-device
-roaming and the remaining screens still need end-to-end acceptance. Shared
-background notification branding is not changed by this launcher/header pass.
+roaming and the remaining screens still need end-to-end acceptance.
