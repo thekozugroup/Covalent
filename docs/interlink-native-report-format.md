@@ -69,3 +69,29 @@ allowlist is expanded; that collector still accepts only its approved framework
 faults on named test emulators. Existing failed hosted runs stay failed. The
 new reader's actual hosted framework-report capture and full permission journey
 remain required before any merge/release acceptance.
+
+## Identified graphics assertion in run41330099455
+
+The later permission-recovery failure now has a correlated, in-window native
+system_server report. Its62-byte abort message has SHA256
+`21459e59cfa55a94251c82e5d7e559328fced4bbbff93a4f139eb68d27d56bee`.
+That exactly matches the known fixed message
+`Assertion failed: !rcEnc->featureInfo()->hasReadColorBufferDma`.
+The frames include `__android_log_assert`, `mapper.ranchu.so`, `libui.so` and
+`libandroid_runtime.so`. Package/input services were subsequently missing.
+This identifies the previously documented platform graphics assertion again;
+it does not establish a repaired guest or successful permission recovery.
+
+The shared live/report decoder now labels only this exact fixed message as
+`goldfish-read-color-buffer-dma`. Unknown assertions and altered/suffixed messages
+remain unclassified; arbitrary text is still represented only by digest and byte
+count. No raw report, private symbol/path or arbitrary message is retained.
+Both affected Python suites pass69 tests, including exact classification in both
+paths and near-match privacy checks, with ResourceWarning treated as an error.
+No APK, test image, host, renderer, permission journey or release gate changes.
+
+The original failed artifact13094565441 remains failed and unchanged. Its verified
+size is3,598,504B and ZIP SHA256
+`36b22ae561891127031d65491fac783076d625f70aa78dfc3460dd233a4d51ef`.
+The bounded assertion correlation and new source/test evidence are retained at
+`artifacts/evidence/goldfish-assertion-family`.

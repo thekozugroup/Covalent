@@ -1,0 +1,252 @@
+{
+  "run": "https://github.com/thekozugroup/Covalent/actions/runs/41330099455",
+  "jobId": 124918241279,
+  "sourceHead": "1bd55257b68d1bfb043d078b06199f3e74d1626f",
+  "originalArtifactId": 13094565441,
+  "originalZipBytes": 3598504,
+  "originalZipSha256": "36b22ae561891127031d65491fac783076d625f70aa78dfc3460dd233a4d51ef",
+  "originalReceiptMember": "_temp/covalent-android-api37/interlink/permission-recovery.json",
+  "originalResult": "failed",
+  "knownMessage": "Assertion failed: !rcEnc->featureInfo()->hasReadColorBufferDma",
+  "knownMessageBytes": 62,
+  "knownMessageSha256": "21459e59cfa55a94251c82e5d7e559328fced4bbbff93a4f139eb68d27d56bee",
+  "matches": [
+    {
+      "tag": "system_server_native_crash",
+      "correlatedAssertions": 1,
+      "frames": [
+        {
+          "frame": 0,
+          "library": "libc.so",
+          "knownSymbol": "abort"
+        },
+        {
+          "frame": 1,
+          "library": "libart.so",
+          "knownSymbol": "art::Runtime::Abort(char const*)"
+        },
+        {
+          "frame": 2,
+          "library": "libbase.so"
+        },
+        {
+          "frame": 3,
+          "library": "liblog.so",
+          "knownSymbol": "__android_log_assert"
+        },
+        {
+          "frame": 4,
+          "library": "mapper.ranchu.so"
+        },
+        {
+          "frame": 5,
+          "library": "mapper.ranchu.so"
+        },
+        {
+          "frame": 6,
+          "library": "libui.so"
+        },
+        {
+          "frame": 7,
+          "library": "libui.so"
+        },
+        {
+          "frame": 8,
+          "library": "libui.so"
+        },
+        {
+          "frame": 9,
+          "library": "libui.so"
+        },
+        {
+          "frame": 10,
+          "library": "libandroid_runtime.so"
+        },
+        {
+          "frame": 11,
+          "library": "libandroid_runtime.so"
+        },
+        {
+          "frame": 12,
+          "library": "libandroid_runtime.so"
+        },
+        {
+          "frame": 14,
+          "library": "libart.so"
+        },
+        {
+          "frame": 16,
+          "library": "libart.so"
+        },
+        {
+          "frame": 18,
+          "library": "libart.so"
+        },
+        {
+          "frame": 19,
+          "library": "libart.so"
+        },
+        {
+          "frame": 20,
+          "library": "libart.so"
+        },
+        {
+          "frame": 21,
+          "library": "libart.so"
+        },
+        {
+          "frame": 22,
+          "library": "libart.so"
+        },
+        {
+          "frame": 24,
+          "library": "libart.so"
+        },
+        {
+          "frame": 25,
+          "library": "libart.so"
+        },
+        {
+          "frame": 26,
+          "library": "libart.so"
+        },
+        {
+          "frame": 27,
+          "library": "libart.so"
+        },
+        {
+          "frame": 29,
+          "library": "libart.so"
+        },
+        {
+          "frame": 31,
+          "library": "libart.so"
+        }
+      ]
+    },
+    {
+      "tag": "SYSTEM_TOMBSTONE",
+      "correlatedAssertions": 1,
+      "frames": [
+        {
+          "frame": 0,
+          "library": "libc.so",
+          "knownSymbol": "abort"
+        },
+        {
+          "frame": 1,
+          "library": "libart.so",
+          "knownSymbol": "art::Runtime::Abort(char const*)"
+        },
+        {
+          "frame": 2,
+          "library": "libbase.so"
+        },
+        {
+          "frame": 3,
+          "library": "liblog.so",
+          "knownSymbol": "__android_log_assert"
+        },
+        {
+          "frame": 4,
+          "library": "mapper.ranchu.so"
+        },
+        {
+          "frame": 5,
+          "library": "mapper.ranchu.so"
+        },
+        {
+          "frame": 6,
+          "library": "libui.so"
+        },
+        {
+          "frame": 7,
+          "library": "libui.so"
+        },
+        {
+          "frame": 8,
+          "library": "libui.so"
+        },
+        {
+          "frame": 9,
+          "library": "libui.so"
+        },
+        {
+          "frame": 10,
+          "library": "libandroid_runtime.so"
+        },
+        {
+          "frame": 11,
+          "library": "libandroid_runtime.so"
+        },
+        {
+          "frame": 12,
+          "library": "libandroid_runtime.so"
+        },
+        {
+          "frame": 14,
+          "library": "libart.so"
+        },
+        {
+          "frame": 16,
+          "library": "libart.so"
+        },
+        {
+          "frame": 18,
+          "library": "libart.so"
+        },
+        {
+          "frame": 19,
+          "library": "libart.so"
+        },
+        {
+          "frame": 20,
+          "library": "libart.so"
+        },
+        {
+          "frame": 21,
+          "library": "libart.so"
+        },
+        {
+          "frame": 22,
+          "library": "libart.so"
+        },
+        {
+          "frame": 24,
+          "library": "libart.so"
+        },
+        {
+          "frame": 25,
+          "library": "libart.so"
+        },
+        {
+          "frame": 26,
+          "library": "libart.so"
+        },
+        {
+          "frame": 27,
+          "library": "libart.so"
+        },
+        {
+          "frame": 29,
+          "library": "libart.so"
+        },
+        {
+          "frame": 31,
+          "library": "libart.so"
+        }
+      ]
+    }
+  ],
+  "sourceHashes": {
+    "scripts/interlink_framework_trace.py": "8da348633d0e0f3d28d0aa3c82ba6b79f7c1a847a249f441b658c78541fb16b8",
+    "scripts/test-interlink-native-reports.py": "1fcb2b4b1a11864306e4298a61115aa37172923727f9190fc7801067a2200fd7",
+    "scripts/test-interlink-permission-harness.py": "bc159f4bb7f9b32306f8fe2fa5a636b31421046a05a6395dd56f58bec92d98fe"
+  },
+  "scope": "Read-only assertion fingerprint correlation and redacted decoder tests; original failure remains; no guest or APK rebuilt",
+  "tests": {
+    "permissionHarness": 33,
+    "nativeReports": 36,
+    "resourceWarnings": "error"
+  }
+}

@@ -44,6 +44,15 @@ class ParserTests(unittest.TestCase):
         self.assertNotIn("knownSymbol", parser.events[-1])
         self.assertNotIn("/vendor/", json.dumps(parser.events))
 
+    def test_exact_goldfish_assertion_uses_shared_fixed_family(self):
+        message="Assertion failed: !rcEnc->featureInfo()->hasReadColorBufferDma"
+        lines=["Abort message: '"+message+"'" if line.startswith("Abort message:") else line for line in GOOD]
+        event=next(e for e in self.parse(lines).events if e["kind"]=="native-abort-summary")
+        self.assertEqual(event["messageFamily"],"goldfish-read-color-buffer-dma")
+        self.assertEqual(event["messageSha256"],"21459e59cfa55a94251c82e5d7e559328fced4bbbff93a4f139eb68d27d56bee")
+        self.assertEqual(event["messageBytes"],62)
+        self.assertNotIn("message",event)
+
     def test_android37_parent_header_matches_without_retaining_parent_identifier(self):
         lines = [line.replace("pid: 1775, tid:", "pid: 1775, ppid: 1234567890, tid:") for line in GOOD]
         parser = self.parse(lines)

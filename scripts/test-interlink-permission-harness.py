@@ -222,6 +222,19 @@ class NativeFrameworkTraceTests(unittest.TestCase):
             self.assertEqual(event["messageSha256"],hashlib.sha256(message.encode()).hexdigest())
         self.assertNotIn(SECRET,json.dumps(trace.snapshot()))
 
+    def test_exact_goldfish_assertion_has_a_fixed_family_without_exposing_near_matches(self):
+        message="Assertion failed: !rcEnc->featureInfo()->hasReadColorBufferDma"
+        self.assertEqual(hashlib.sha256(message.encode()).hexdigest(),
+            "21459e59cfa55a94251c82e5d7e559328fced4bbbff93a4f139eb68d27d56bee")
+        trace=self.trace();self.native(trace)
+        for text,family in ((message,"goldfish-read-color-buffer-dma"),(message+SECRET,"unclassified"),
+                            ("Assertion failed: "+SECRET,"unclassified")):
+            trace.consume(self.line("DEBUG","Abort message: '"+text+"'",9001))
+            event=trace.snapshot()["events"][-1]
+            self.assertEqual(event["messageFamily"],family)
+            self.assertEqual(event["messageSha256"],hashlib.sha256(text.encode()).hexdigest())
+        self.assertNotIn(SECRET,json.dumps(trace.snapshot()))
+
     def test_frame_paths_indices_and_symbols_are_bounded_and_allowlisted(self):
         trace=self.trace();self.native(trace)
         paths=("/data/private/libc.so","/system/lib64/../libc.so","/system/lib64/./libc.so",

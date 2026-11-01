@@ -76,6 +76,8 @@ class NativeDumpDecoder:
                 ("stack corruption detected","stack-corruption"),("JNI DETECTED ERROR IN APPLICATION:","jni-contract"),
                 ("Check failed:","assertion"),("terminating due to uncaught exception of type std::bad_alloc","native-allocation"))
             family=next((family for prefix,family in families if message.startswith(prefix)),"unclassified")
+            if message=="Assertion failed: !rcEnc->featureInfo()->hasReadColorBufferDma":
+                family="goldfish-read-color-buffer-dma"
             return {**event,"kind":"native-abort-summary","messageFamily":family,
                 "messageSha256":hashlib.sha256(message.encode()).hexdigest(),"messageBytes":len(message.encode())}
         signal=re.match(r"signal ([0-9]{1,3}) \([A-Z0-9]+\), code (-?[0-9]{1,4}) \([A-Z0-9_]+\), fault addr ",payload)

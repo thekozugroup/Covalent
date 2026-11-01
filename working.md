@@ -1,3 +1,30 @@
+# Known Android37 graphics assertion identified — 2026-11-01
+
+The original1bd5525 permission-recovery failure is now identified by its retained
+62-byte message fingerprint: exact SHA256 matches the known
+!rcEnc->featureInfo()->hasReadColorBufferDma assertion, with correlated
+system_server SIGABRT/mapper.ranchu/libui/runtime frames. This is the known
+platform graphics assertion, not a new app error or a repaired release gate.
+No further renderer flag experiment, waiver or duplicate emulator is started.
+
+The shared redacting decoder labels this exact fixed message only; near matches
+and arbitrary assertions remain hashed/unclassified. Both affected suites pass69
+tests with ResourceWarning treated as error, including exact live/report parity
+and no arbitrary-text exposure. No APK/production transport/permission logic
+changes. Exact bounded proof is artifacts/evidence/goldfish-assertion-family;
+the original full archive remains canonical in the private appliance audit.
+
+Private Pi policy transaction e90828a is signed/pushed with verified GitHub
+signature and author/committer thekozugroup@gmail.com. Its local17 policy/33
+private IO cases passed before the final credential-error sanitization; fresh
+full Linux/Android safety run41337830036 is in progress on those final bytes.
+No companion toggle/unsigned route exposed before owner/native/transport/outbox
+integration. Actual Pi/phone/accounts/media/journals/signers remain unchanged.
+
+Owned Android36 AVD/data/registration/netsim/ADB5041 are removed and independently
+absent, shared ADB5037/5038 remain. Scoped compiler/test scratch will be removed
+after final proof retention; no new environment is needed for this decoder change.
+
 # Signed automatic-update choice groundwork — 2026-11-01
 
 Previous goal turn was progress: both native container jobs cleared the security
