@@ -3,6 +3,8 @@
 pub mod advertised_address;
 #[cfg(unix)]
 mod appliance_control;
+#[cfg(unix)]
+pub mod appliance_platform;
 pub mod discovery;
 mod display_names;
 pub mod first_run_claim;
@@ -552,6 +554,17 @@ pub struct AppState {
 }
 
 impl AppState {
+    /// Installs a read-only host bridge once. Damaged owner authority still denies control.
+    #[cfg(unix)]
+    pub fn with_appliance_platform(
+        self,
+        reader: Arc<dyn appliance_platform::AppliancePlatformReader>,
+    ) -> Self {
+        if let Some(bond) = &self.controller_bond {
+            let _ = bond.platform.set(reader);
+        }
+        self
+    }
     /// Creates local state. The token must come from private durable storage.
     pub fn new(
         engine: Arc<Engine>,
@@ -1458,6 +1471,10 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/api/v1/appliance/status",
             post(appliance_control::remote_status).layer(DefaultBodyLimit::max(4096)),
+        )
+        .route(
+            "/api/v1/appliance/platform",
+            post(appliance_control::remote_platform).layer(DefaultBodyLimit::max(4096)),
         );
     router
         .fallback(not_found)

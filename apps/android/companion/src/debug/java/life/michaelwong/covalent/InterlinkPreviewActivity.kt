@@ -48,6 +48,10 @@ class InterlinkPreviewActivity : ComponentActivity() {
             context = ApplianceContext(phone, listOf(pi)), candidates = listOf(ApplianceCandidate(pi, selected.name)),
             observation = if (previewMode in setOf("offline", "approval")) null else
                 ApplianceObservation(selected.confirmedGeneration!!, ApplianceSyncState.RUNNING, 1, true),
+            platform = if (previewMode != "storage") null else AppliancePlatformObservation(selected.confirmedGeneration!!, true,
+                PiPlatformSnapshot(true, true, false, listOf(PiImportSource("a".repeat(64), false, "Camera SD card", true, false,
+                    "DCIM/GPhoto/Imports/912666d028529101", PiPreviewState.READY, 320, 1_400_000_000)), 8_500_000_000,
+                    PiUpdateState(true, true, false))),
         )
         setContent {
             InterlinkTheme {
@@ -58,6 +62,7 @@ class InterlinkPreviewActivity : ComponentActivity() {
                         Text("Example data · visual preview", style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant)
                         InterlinkApplianceCard(dashboard, false, {}, {})
+                        if (previewMode == "storage") InterlinkPlatformCard(dashboard)
                         Text("Your photo links", style = MaterialTheme.typography.headlineMedium,
                             fontWeight = FontWeight.SemiBold)
                         Text(stringResource(R.string.interlink_subtitle))

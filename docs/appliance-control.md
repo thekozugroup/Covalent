@@ -9,6 +9,10 @@ upgrade. Remote settings and import confirmations remain to be implemented.
 The deployed GPhoto Pi0.2.3 does not
 speak this protocol.
 
+The same owner bond now protects a second read-only operation for redacted host
+storage previews and update readiness. See `docs/appliance-platform.md`. It is
+optional on native hosts and unavailable on the currently installed older Pi.
+
 ## Owner approval and durable authority
 
 The local owner reads the bond generation and eligible confirmed paired public
@@ -49,6 +53,7 @@ The phone uses its own local API, whose node signs the remote request.
 | `POST /api/v1/appliance/controller` | Approve `{generation, controller}` locally |
 | `DELETE /api/v1/appliance/controller` | Revoke `{generation}` locally |
 | `POST /api/v1/appliance/status` | Request the paired `{peerId}` appliance's status |
+| `POST /api/v1/appliance/platform` | Read the paired appliance's redacted host observations |
 
 Requests are limited to4096 bytes and reject unknown fields. Full schemas and
 error responses are in `docs/api/openapi.yaml`.

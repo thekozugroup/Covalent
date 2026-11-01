@@ -396,6 +396,251 @@ fn appliance_operations_bind_protocol_target_signer_and_replay_nonce() {
     }
 }
 
+struct PlatformFixture(std::sync::atomic::AtomicUsize);
+impl crate::appliance_platform::AppliancePlatformReader for PlatformFixture {
+    fn read(
+        &self,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = Result<
+                        crate::appliance_platform::PlatformSnapshot,
+                        crate::appliance_platform::PlatformReadError,
+                    >,
+                > + Send
+                + '_,
+        >,
+    > {
+        Box::pin(async {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            crate::appliance_platform::PlatformSnapshot::decode(
+                &serde_json::to_vec(&crate::appliance_platform::tests::fixture()).unwrap(),
+            )
+        })
+    }
+}
+
+#[tokio::test]
+async fn missing_failed_or_invalid_platform_data_is_explicitly_unavailable_without_losing_the_bond()
+{
+    struct Broken(bool);
+    impl crate::appliance_platform::AppliancePlatformReader for Broken {
+        fn read(
+            &self,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = Result<
+                            crate::appliance_platform::PlatformSnapshot,
+                            crate::appliance_platform::PlatformReadError,
+                        >,
+                    > + Send
+                    + '_,
+            >,
+        > {
+            Box::pin(async {
+                if self.0 {
+                    let mut value = crate::appliance_platform::tests::fixture();
+                    value["sourceCleanupAvailable"] = serde_json::json!(true);
+                    Ok(serde_json::from_value(value).unwrap())
+                } else {
+                    Err(crate::appliance_platform::PlatformReadError)
+                }
+            })
+        }
+    }
+    for mode in [None, Some(false), Some(true)] {
+        let pi = Device::new();
+        let phone = Device::new();
+        pair(&phone, &pi, ([127, 0, 0, 1], 43123).into());
+        let store = pi.store();
+        if let Some(invalid) = mode {
+            assert!(store.platform.set(Arc::new(Broken(invalid))).is_ok());
+        }
+        let bond = store
+            .grant(
+                &pi.engine,
+                store.snapshot().unwrap().generation,
+                phone.engine.public_identity(),
+            )
+            .unwrap();
+        let value = store
+            .read_platform(&pi.engine, phone.engine.device_id())
+            .await
+            .unwrap();
+        assert_eq!(value.platform_supported, mode.is_some());
+        assert!(!value.platform_available);
+        assert!(value.snapshot.is_none());
+        assert_eq!(store.snapshot().unwrap(), bond);
+    }
+}
+
+#[tokio::test]
+async fn actual_quic_platform_read_requires_bond_and_never_uses_an_unapproved_host_bridge() {
+    let pi = Device::new();
+    let phone = Device::new();
+    let other = Device::new();
+    let reader = Arc::new(PlatformFixture(std::sync::atomic::AtomicUsize::new(0)));
+    let state = pi.state().with_appliance_platform(reader.clone());
+    let node = QuicNode::bind(([127, 0, 0, 1], 0).into(), Arc::clone(&pi.engine), &pi.tls).unwrap();
+    let address = node.local_addr().unwrap();
+    pair(&phone, &pi, address);
+    pair(&other, &pi, address);
+    let node = node
+        .with_local_provider_enabled(false)
+        .with_controller_bond(state.controller_bond.clone());
+    let shutdown = node.shutdown_handle();
+    let server = tokio::spawn(node.run());
+    let phone_state = phone.state();
+    let remote = serde_json::json!({"peerId":pi.engine.device_id()});
+    assert_eq!(
+        api(
+            phone_state.clone(),
+            "POST",
+            "/api/v1/appliance/platform",
+            remote.clone(),
+            false
+        )
+        .await
+        .0,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        api(
+            phone_state.clone(),
+            "POST",
+            "/api/v1/appliance/platform",
+            remote.clone(),
+            true
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(reader.0.load(std::sync::atomic::Ordering::SeqCst), 0);
+    let store = state.controller_bond.as_ref().unwrap();
+    let bond = store
+        .grant(
+            &pi.engine,
+            store.snapshot().unwrap().generation,
+            phone.engine.public_identity(),
+        )
+        .unwrap();
+    let (code, value) = api(
+        phone_state.clone(),
+        "POST",
+        "/api/v1/appliance/platform",
+        remote.clone(),
+        true,
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK);
+    assert_eq!(value["platformAvailable"], true);
+    assert_eq!(value["bondGeneration"], serde_json::json!(bond.generation));
+    assert_eq!(
+        value["snapshot"]["sources"][0]["preview"]["counts"]["eligibleFiles"],
+        7
+    );
+    assert_eq!(reader.0.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(
+        api(
+            other.state(),
+            "POST",
+            "/api/v1/appliance/platform",
+            remote.clone(),
+            true
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+    store.revoke(bond.generation).unwrap();
+    assert_eq!(
+        api(
+            phone_state,
+            "POST",
+            "/api/v1/appliance/platform",
+            remote,
+            true
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(reader.0.load(std::sync::atomic::Ordering::SeqCst), 1);
+    shutdown.close();
+    server.await.unwrap();
+    shutdown.wait_for_release().await.unwrap();
+    assert!(
+        std::net::UdpSocket::bind(address).is_ok(),
+        "Owned platform test socket still registered"
+    );
+}
+
+#[tokio::test]
+async fn platform_read_rechecks_revocation_and_does_not_queue_overlapping_work() {
+    struct Blocked {
+        entered: tokio::sync::Notify,
+        release: tokio::sync::Notify,
+    }
+    impl crate::appliance_platform::AppliancePlatformReader for Blocked {
+        fn read(
+            &self,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = Result<
+                            crate::appliance_platform::PlatformSnapshot,
+                            crate::appliance_platform::PlatformReadError,
+                        >,
+                    > + Send
+                    + '_,
+            >,
+        > {
+            Box::pin(async {
+                self.entered.notify_one();
+                self.release.notified().await;
+                Err(crate::appliance_platform::PlatformReadError)
+            })
+        }
+    }
+    let pi = Device::new();
+    let phone = Device::new();
+    pair(&phone, &pi, ([127, 0, 0, 1], 43123).into());
+    let store = Arc::new(pi.store());
+    let reader = Arc::new(Blocked {
+        entered: tokio::sync::Notify::new(),
+        release: tokio::sync::Notify::new(),
+    });
+    assert!(store.platform.set(reader.clone()).is_ok());
+    let bond = store
+        .grant(
+            &pi.engine,
+            store.snapshot().unwrap().generation,
+            phone.engine.public_identity(),
+        )
+        .unwrap();
+    let task = {
+        let store = store.clone();
+        let engine = pi.engine.clone();
+        let id = phone.engine.device_id();
+        tokio::spawn(async move { store.read_platform(&engine, id).await })
+    };
+    reader.entered.notified().await;
+    assert_eq!(
+        store
+            .read_platform(&pi.engine, phone.engine.device_id())
+            .await,
+        Err(crate::sync_control::FolderControlError::Busy)
+    );
+    store.revoke(bond.generation).unwrap();
+    reader.release.notify_one();
+    assert_eq!(
+        task.await.unwrap(),
+        Err(crate::sync_control::FolderControlError::Rejected)
+    );
+}
+
 async fn api(
     state: AppState,
     method: &str,

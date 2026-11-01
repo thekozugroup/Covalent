@@ -3,7 +3,7 @@
 use std::fs::File;
 use std::io::Read as _;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
@@ -44,6 +44,8 @@ pub(crate) struct ControllerBondStore {
     _lock: File,
     // None is an I/O failure, never an invitation to replace a saved bond.
     bond: Mutex<Option<ControllerBond>>,
+    pub(crate) platform: OnceLock<Arc<dyn crate::appliance_platform::AppliancePlatformReader>>,
+    platform_reads: Arc<tokio::sync::Semaphore>,
 }
 
 impl ControllerBondStore {
@@ -120,6 +122,8 @@ impl ControllerBondStore {
             path,
             _lock: lock,
             bond: Mutex::new(Some(bond)),
+            platform: OnceLock::new(),
+            platform_reads: Arc::new(tokio::sync::Semaphore::new(1)),
         })
     }
 
@@ -257,6 +261,77 @@ impl ControllerBondStore {
             cloud_backup_verification_available: false,
             source_cleanup_available: false,
         })
+    }
+}
+
+impl ControllerBondStore {
+    pub(crate) async fn read_platform(
+        &self,
+        engine: &Engine,
+        requester: DeviceId,
+    ) -> Result<AppliancePlatformStatus, crate::sync_control::FolderControlError> {
+        use crate::sync_control::FolderControlError;
+        let before = self
+            .authorized(engine, requester)
+            .map_err(|_| FolderControlError::Rejected)?;
+        let _permit = self
+            .platform_reads
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| FolderControlError::Busy)?;
+        let snapshot = match self.platform.get() {
+            None => None,
+            Some(reader) => {
+                match tokio::time::timeout(std::time::Duration::from_secs(8), reader.read()).await {
+                    Ok(Ok(value)) if value.validate().is_ok() => Some(value),
+                    _ => None,
+                }
+            }
+        };
+        if self
+            .authorized(engine, requester)
+            .map_err(|_| FolderControlError::Rejected)?
+            != before
+        {
+            return Err(FolderControlError::Rejected);
+        }
+        Ok(AppliancePlatformStatus {
+            schema_version: 1,
+            appliance_id: engine.device_id(),
+            controller_id: requester,
+            bond_generation: before.generation,
+            platform_supported: self.platform.get().is_some(),
+            platform_available: snapshot.is_some(),
+            snapshot,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AppliancePlatformStatus {
+    schema_version: u16,
+    appliance_id: DeviceId,
+    controller_id: DeviceId,
+    bond_generation: Uuid,
+    platform_supported: bool,
+    platform_available: bool,
+    #[serde(deserialize_with = "required_nullable")]
+    snapshot: Option<crate::appliance_platform::PlatformSnapshot>,
+}
+
+impl AppliancePlatformStatus {
+    fn matches_request(&self, appliance: DeviceId, controller: DeviceId) -> bool {
+        self.schema_version == 1
+            && self.appliance_id == appliance
+            && self.controller_id == controller
+            && !self.bond_generation.is_nil()
+            && (self.platform_supported || !self.platform_available)
+            && self.platform_available == self.snapshot.is_some()
+            && self
+                .snapshot
+                .as_ref()
+                .is_none_or(|value| value.validate().is_ok())
     }
 }
 
@@ -435,6 +510,42 @@ pub(crate) async fn remote_status(
             if status.matches_request(request.peer_id, state.engine.device_id()) =>
         {
             Ok(axum::Json(status))
+        }
+        FolderControlPayload::Rejected => Err(error(BondError::Rejected)),
+        _ => Err(error(BondError::Unavailable)),
+    }
+}
+
+pub(crate) async fn remote_platform(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    ContractJson(request): ContractJson<RemoteStatusRequest>,
+) -> Result<axum::Json<AppliancePlatformStatus>, ApiError> {
+    use crate::sync_control::{FolderControlOperation, FolderControlPayload, send_folder_control};
+    authorize(&state, &headers)?;
+    let binding = state
+        .engine
+        .config()
+        .map_err(|_| error(BondError::Unavailable))?
+        .trusted_peer_transports
+        .get(&request.peer_id)
+        .cloned()
+        .ok_or_else(|| error(BondError::Rejected))?;
+    let result = send_folder_control(
+        Arc::clone(&state.engine),
+        binding,
+        FolderControlOperation::ReadAppliancePlatform {
+            requester_id: state.engine.device_id(),
+            target_id: request.peer_id,
+        },
+    )
+    .await
+    .map_err(|_| error(BondError::Unavailable))?;
+    match result {
+        FolderControlPayload::AppliancePlatform(value)
+            if value.matches_request(request.peer_id, state.engine.device_id()) =>
+        {
+            Ok(axum::Json(value))
         }
         FolderControlPayload::Rejected => Err(error(BondError::Rejected)),
         _ => Err(error(BondError::Unavailable)),

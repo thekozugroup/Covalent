@@ -97,12 +97,14 @@ internal data class ApplianceDashboardState(
     val context: ApplianceContext? = null,
     val candidates: List<ApplianceCandidate> = emptyList(),
     val observation: ApplianceObservation? = null,
+    val platform: AppliancePlatformObservation? = null,
 )
 
 internal interface ApplianceDashboardApi {
     fun context(): ApplianceContext
     fun names(): Map<String, String>
     fun status(peerId: String, localId: String): ApplianceObservation
+    fun platform(peerId: String, localId: String): AppliancePlatformObservation? = null
 }
 
 /** Read-only remote operations; selection never grants or revokes Pi authority. */
@@ -141,6 +143,12 @@ internal class ApplianceDashboardController(
             }
             return state.copy(connection = failure)
         }
+        val platform = try { api.platform(selected.appliance.deviceId, selected.local.deviceId) } catch (error: Exception) {
+            if (error is NodeApiException && error.hasExplicitRetryContract && error.protocolVersion == 1 &&
+                error.statusCode == 403 && error.code == "controller_rejected") return state.copy(connection = ApplianceConnectionState.APPROVAL_REQUIRED)
+            null
+        }
+        if (platform != null && platform.bondGeneration != observation.bondGeneration) return state.copy(connection = ApplianceConnectionState.UNAVAILABLE)
         val confirmed = selected.copy(confirmedGeneration = observation.bondGeneration)
         try {
             if (confirmed != selected) store.replace(selected, confirmed)
@@ -149,7 +157,7 @@ internal class ApplianceDashboardController(
         } catch (_: Exception) {
             return state.copy(connection = ApplianceConnectionState.SAVED_CHOICE_UNAVAILABLE)
         }
-        return state.copy(selection = confirmed, connection = ApplianceConnectionState.CONNECTED, observation = observation)
+        return state.copy(selection = confirmed, connection = ApplianceConnectionState.CONNECTED, observation = observation, platform = platform)
     }
 
     fun select(expected: SelectedAppliance?, shownContext: ApplianceContext, candidate: ApplianceCandidate) {
@@ -194,7 +202,7 @@ internal fun parseApplianceObservation(json: JSONObject, peerId: String, localId
     return ApplianceObservation(generation, state, count, fresh)
 }
 
-private fun requireCanonicalId(value: String) {
+internal fun requireCanonicalId(value: String) {
     val id = UUID.fromString(value)
     require(id.toString() == value && id != UUID(0, 0))
 }
@@ -203,10 +211,10 @@ private fun JSONObject.identity(): ApplianceIdentity {
     return ApplianceIdentity(strictString("deviceId"), strictString("publicKey"), strictString("fingerprint"))
 }
 private fun ApplianceIdentity.toJson() = JSONObject().put("deviceId", deviceId).put("publicKey", publicKey).put("fingerprint", fingerprint)
-private fun JSONObject.exactKeys(vararg keys: String) { require(keys().asSequence().toSet() == keys.toSet()) }
-private fun JSONObject.strictString(key: String) = (get(key) as? String) ?: error("Invalid control response.")
-private fun JSONObject.strictBoolean(key: String) = (get(key) as? Boolean) ?: error("Invalid control response.")
-private fun JSONObject.strictLong(key: String): Long = when (val value = get(key)) {
+internal fun JSONObject.exactKeys(vararg keys: String) { require(keys().asSequence().toSet() == keys.toSet()) }
+internal fun JSONObject.strictString(key: String) = (get(key) as? String) ?: error("Invalid control response.")
+internal fun JSONObject.strictBoolean(key: String) = (get(key) as? Boolean) ?: error("Invalid control response.")
+internal fun JSONObject.strictLong(key: String): Long = when (val value = get(key)) {
     is Int -> value.toLong()
     is Long -> value
     else -> error("Invalid control response.")

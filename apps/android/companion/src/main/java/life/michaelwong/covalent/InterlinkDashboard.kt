@@ -41,6 +41,9 @@ internal fun InterlinkApplianceDashboard(manager: EmbeddedNodeManager) {
             override fun status(peerId: String, localId: String) = connection().let {
                 client.applianceStatus(it.baseUrl, it.token, peerId, localId)
             }
+            override fun platform(peerId: String, localId: String) = connection().let {
+                client.appliancePlatform(it.baseUrl, it.token, peerId, localId)
+            }
         })
     }
     val scope = rememberCoroutineScope()
@@ -57,7 +60,7 @@ internal fun InterlinkApplianceDashboard(manager: EmbeddedNodeManager) {
             while (true) {
                 gate.withLock {
                     busy = true
-                    state = state.copy(connection = ApplianceConnectionState.CHECKING, observation = null)
+                    state = state.copy(connection = ApplianceConnectionState.CHECKING, observation = null, platform = null)
                     try { state = withContext(Dispatchers.IO) { controller.refresh(manager.folderSyncRequested()) } }
                     finally { busy = false }
                 }
@@ -67,6 +70,7 @@ internal fun InterlinkApplianceDashboard(manager: EmbeddedNodeManager) {
     }
 
     InterlinkApplianceCard(state, busy, { refresh++ }, { choosing = true })
+    InterlinkPlatformCard(state)
     if (selectionFailed) Text(stringResource(R.string.interlink_pi_selection_failed), color = MaterialTheme.colorScheme.error)
     if (choosing) AlertDialog(
         onDismissRequest = { choosing = false },

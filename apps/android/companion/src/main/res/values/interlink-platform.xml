@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="interlink_storage_title">Cards, drives &amp; cameras</string>
+    <string name="interlink_platform_unsupported">Update your Pi to see storage and system details here.</string>
+    <string name="interlink_platform_unavailable">Pi system details are unavailable. Refresh to check again.</string>
+    <string name="interlink_storage_space">%1$s available on your Pi after its protected reserve.</string>
+    <string name="interlink_storage_space_unknown">Available Pi space is unknown.</string>
+    <string name="interlink_volumes_unavailable">Card and drive service is unavailable. Saved counts are hidden.</string>
+    <string name="interlink_cameras_unavailable">Camera service is unavailable.</string>
+    <string name="interlink_storage_empty">Connect a card reader, drive or compatible camera to your Pi.</string>
+    <string name="interlink_storage_truncated">Some sources are not shown. Connect fewer sources and refresh.</string>
+    <string name="interlink_source_disconnected">Source disconnected</string>
+    <string name="interlink_source_camera">Camera connected</string>
+    <string name="interlink_source_drive">Drive connected</string>
+    <string name="interlink_source_destination">Destination · Photo imports on your Pi</string>
+    <string name="interlink_source_counts">%1$s eligible files · %2$s</string>
+    <string name="interlink_preview_incomplete">Partial cached scan. The final count is unknown; previously imported files are included.</string>
+    <string name="interlink_preview_cached">Cached scan, including previously imported files. Contents may have changed.</string>
+    <string name="interlink_preview_scanning">Checking source contents…</string>
+    <string name="interlink_preview_unavailable">File count and size are unavailable.</string>
+    <string name="interlink_source_automatic">Saved automatic import setting · On</string>
+    <string name="interlink_source_manual">Saved automatic import setting · Off</string>
+    <string name="interlink_import_approval_unavailable">Import approval from this phone is unavailable. Originals remain on the source.</string>
+    <string name="interlink_updates_title">System updates</string>
+    <string name="interlink_updates_unavailable">Update details are unavailable.</string>
+    <string name="interlink_updates_unconfigured">Set up private update access on your Pi.</string>
+    <string name="interlink_updates_busy">An update check or preparation is in progress.</string>
+    <string name="interlink_updates_automatic">Automatic signed update checks are enabled.</string>
+    <string name="interlink_updates_paused">Automatic update checks are paused.</string>
+</resources>

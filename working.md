@@ -1,3 +1,46 @@
+# Owner-bonded Pi platform observations — 2026-10-31
+
+Interlink now reads cached card/drive previews, protected Pi space and signed
+update readiness through the existing pinned, signed owner-control channel.
+The card displays source/destination, partial/unknown/cached counts and saved
+settings distinctly. Old counts disappear on lost services, changed bonds or
+new Pi selection. Camera sizes remain unknown. Cached observations never grant
+import, update-change, cleanup or deletion authority. No mutating operation is
+introduced; attachment-bound once/remember confirmation is the next control gap.
+
+NodeRuntimeConfig has an explicit optional async native reader. Ordinary nodes
+are unsupported. Before/after full owner checks, one read permit and bounded
+host futures prevent stale disclosure/overlap. The Pi adapter uses a fixed local
+root-peer-verified socket,32KiB bound and whole-response deadline. The root host
+projects existing service state and permits the shell UID only that exact read.
+No token, auth URL, raw error, arbitrary path or source filename is returned.
+See docs/appliance-platform.md and the OpenAPI60-route contract.
+
+Final local proof: full node336/0 in97.53s, zero ignored/filtered; workspace/all-
+target/all-feature clippy with denied warnings; Android JVM241/0; five native
+API36 UI tests in9.961s, including200%text partial/unknown details; frozen lint
+has0 errors/11 warnings. Foundation passes:60 operations,445 references and123
+verb-checked client call sites. Pi projection has40 checks on host JVM and
+Android36; their exact JSON matches the Rust/Kotlin fixture. Three real Unix
+socket tests pass, including peer credentials and a7second dripping-response
+limit. These do not establish a real Android privileged broker or physical Pi.
+
+The new native storage screenshot is canonical once in docs/brand. The visual
+APK uses a separate preview identity, generic Application and omitted native
+producers. It proves rendering/component behavior, not full native companion
+packaging/startup or real pairing/import/cloud acceptance. Normal gates remain.
+The owned guest boot/framework identities remain unchanged. Test apps/AVD/data/
+registration/ports are removed after capture; shared ADB and SDKs remain.
+
+The first Rust test compile catches a fixture borrow conflict, then passes.
+A temporary adapter harness first overpins an uncached Rustix version, then its
+Mac socket paths exceed AF_UNIX limits. It now reuses exact workspace lock
+versions and relative fixture paths without changing global working directory.
+All attempts remain distinct in private audit2026-10-31-platform-snapshot.
+Actual native bridge/frame behavior is never inferred from a compilation alone.
+
+## Earlier owner-comparison iteration
+
 # Interlink comparison before owner approval — 2026-10-31
 
 The approval-required dashboard now displays this phone and the selected Pi's

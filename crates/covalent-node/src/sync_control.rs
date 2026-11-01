@@ -89,10 +89,17 @@ pub enum FolderControlOperation {
         requester_id: DeviceId,
         target_id: DeviceId,
     },
+    ReadAppliancePlatform {
+        requester_id: DeviceId,
+        target_id: DeviceId,
+    },
 }
 impl FolderControlOperation {
     fn alpn(&self) -> &'static [u8] {
-        if matches!(self, Self::ReadApplianceStatus { .. }) {
+        if matches!(
+            self,
+            Self::ReadApplianceStatus { .. } | Self::ReadAppliancePlatform { .. }
+        ) {
             return APPLIANCE_CONTROL_ALPN;
         }
         let one_way = match self {
@@ -109,9 +116,10 @@ impl FolderControlOperation {
             | Self::CommitLinkRun(_)
             | Self::ReportLinkRun(_)
             | Self::CommitEndpointRoster(_) => true,
-            Self::SendRemoval(_) | Self::ProbeAddress { .. } | Self::ReadApplianceStatus { .. } => {
-                false
-            }
+            Self::SendRemoval(_)
+            | Self::ProbeAddress { .. }
+            | Self::ReadApplianceStatus { .. }
+            | Self::ReadAppliancePlatform { .. } => false,
         };
         if one_way {
             LINK_CONTROL_ALPN
@@ -133,7 +141,8 @@ impl FolderControlOperation {
             Self::ReportLinkRun(report) => report.reporter_id,
             Self::CommitEndpointRoster(commit) => commit.source_id,
             Self::ProbeAddress { requester_id, .. }
-            | Self::ReadApplianceStatus { requester_id, .. } => *requester_id,
+            | Self::ReadApplianceStatus { requester_id, .. }
+            | Self::ReadAppliancePlatform { requester_id, .. } => *requester_id,
         }
     }
 
@@ -150,9 +159,9 @@ impl FolderControlOperation {
             Self::CommitLinkRun(commit) => Some(commit.target_id),
             Self::ReportLinkRun(report) => Some(report.source_id),
             Self::CommitEndpointRoster(commit) => Some(commit.target_id),
-            Self::ProbeAddress { target_id, .. } | Self::ReadApplianceStatus { target_id, .. } => {
-                Some(*target_id)
-            }
+            Self::ProbeAddress { target_id, .. }
+            | Self::ReadApplianceStatus { target_id, .. }
+            | Self::ReadAppliancePlatform { target_id, .. } => Some(*target_id),
         }
     }
 }
@@ -184,6 +193,7 @@ pub enum FolderControlPayload {
     LinkSettings(crate::sync_engine::LinkSettingsCommit),
     LinkRun(crate::sync_engine::LinkRunCommit),
     ApplianceStatus(crate::appliance_control::ApplianceStatus),
+    AppliancePlatform(crate::appliance_control::AppliancePlatformStatus),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -715,6 +725,18 @@ pub async fn serve_folder_control_connection(
                     },
                     None => FolderControlPayload::Rejected,
                 }
+            } else if let FolderControlOperation::ReadAppliancePlatform { requester_id, .. } =
+                request.operation
+            {
+                match controller_bond {
+                    Some(bond) => match bond.read_platform(&engine, requester_id).await {
+                        Ok(value) => FolderControlPayload::AppliancePlatform(value),
+                        Err(FolderControlError::Rejected) => FolderControlPayload::Rejected,
+                        Err(FolderControlError::Busy) => FolderControlPayload::Busy,
+                        Err(_) => FolderControlPayload::NeedsAttention,
+                    },
+                    None => FolderControlPayload::Rejected,
+                }
             } else {
                 match service {
                     Some(service) => apply_remote(service, request.operation.clone()).await,
@@ -748,7 +770,8 @@ async fn apply_remote(
 ) -> FolderControlPayload {
     match operation {
         // Administrative operations must pass the separate bond gate above.
-        FolderControlOperation::ReadApplianceStatus { .. } => FolderControlPayload::Rejected,
+        FolderControlOperation::ReadApplianceStatus { .. }
+        | FolderControlOperation::ReadAppliancePlatform { .. } => FolderControlPayload::Rejected,
         FolderControlOperation::CommitEndpointRoster(commit) => {
             match service.receive_endpoint_roster(&commit).await {
                 Ok(()) => FolderControlPayload::Ack,

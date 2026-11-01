@@ -19,6 +19,10 @@ native cards and adaptive endpoints remain shared with Covalent.
 
 ## Captured implementation
 
+- `interlink-storage-preview.png`: actual native storage card with synthetic
+  source counts, destination and protected space. It is read-only; the shown
+  counts are cached and do not approve imports or establish transfer/backup.
+
 - `interlink-dashboard-light.png` / `interlink-dashboard-dark.png`: current
   selected-Pi dashboard with synthetic approved status.
 - `interlink-dashboard-offline.png`: the same selected Pi retained while

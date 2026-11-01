@@ -73,6 +73,11 @@ authority boundary. The preview is synthetic and never approves a real device.
 
 Privileged settings, attachment-bound once/remember import confirmations and
 real phone/Pi approval/roaming/control acceptance remain work.
+
+The separate platform card now reads authenticated host observations, including
+cached volume previews, protected space and update readiness. It hides stale
+counts on failures or bond changes. Details and capability boundaries are in
+`docs/appliance-platform.md`; no mutating control is added by the read path.
 The general photo-link setup still supports existing paired destinations; the
 new selected controller reference does not silently migrate or retarget them.
 Do not claim completed headless control or a gold ROM from this dashboard.

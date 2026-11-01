@@ -185,6 +185,11 @@ class CovalentNodeClient(
             baseUrl, "POST", "/api/v1/appliance/status", token,
             JSONObject().put("peerId", requireUuid(peerId, "appliance")).toString(), 8192), peerId, localId)
 
+    internal fun appliancePlatform(baseUrl: String, token: String, peerId: String, localId: String) =
+        life.michaelwong.covalent.appliance.parseAppliancePlatform(requestBoundedObject(
+            baseUrl, "POST", "/api/v1/appliance/platform", token,
+            JSONObject().put("peerId", requireUuid(peerId, "appliance")).toString(), 40_960), peerId, localId)
+
     /** Reads only the redacted folder-sync projection from the authenticated node. */
     fun folderSyncStatus(baseUrl: String, token: String): FolderSyncStatus =
         request(baseUrl, "GET", "/api/v1/sync/status", token, null).body.toFolderSyncStatus()

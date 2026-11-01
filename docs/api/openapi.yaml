@@ -141,6 +141,45 @@ paths:
           $ref: "#/components/responses/ClientError"
         "503":
           $ref: "#/components/responses/Conflict"
+  /api/v1/appliance/platform:
+    post:
+      summary: Read redacted Pi storage previews and update readiness through its owner bond
+      operationId: applianceRemotePlatform
+      description: >-
+        Unix hosts only. Uses the same pinned signed covalent-appliance/1 read-only
+        channel as status. No host bridge means unsupported; a failed host read
+        means unavailable, with a required null snapshot. Counts are cached source
+        observations including previously imported media, never import or cleanup
+        approval. Returns no credentials, auth URLs, raw errors or native paths.
+        The local request limit is 4096 bytes and the response limit is 40960 bytes.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [peerId]
+              properties:
+                peerId:
+                  $ref: "#/components/schemas/DeviceId"
+      responses:
+        "200":
+          description: Owner-authorized observations, including explicit unavailable states.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AppliancePlatformStatus"
+        "400":
+          $ref: "#/components/responses/ClientError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/ClientError"
+        "413":
+          $ref: "#/components/responses/ClientError"
+        "503":
+          $ref: "#/components/responses/Conflict"
   /healthz:
     get:
       summary: Check node process readiness
@@ -1964,6 +2003,152 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/ControllerPublicIdentity"
+    AppliancePlatformStatus:
+      type: object
+      additionalProperties: false
+      required: [schemaVersion, applianceId, controllerId, bondGeneration, platformSupported, platformAvailable, snapshot]
+      allOf:
+        - if:
+            properties:
+              platformAvailable:
+                const: false
+          then:
+            properties:
+              snapshot:
+                type: "null"
+          else:
+            properties:
+              platformSupported:
+                const: true
+              snapshot:
+                $ref: "#/components/schemas/AppliancePlatformSnapshot"
+      properties:
+        schemaVersion:
+          const: 1
+        applianceId:
+          $ref: "#/components/schemas/DeviceId"
+        controllerId:
+          $ref: "#/components/schemas/DeviceId"
+        bondGeneration:
+          type: string
+          format: uuid
+        platformSupported:
+          type: boolean
+        platformAvailable:
+          type: boolean
+        snapshot:
+          oneOf:
+            - type: "null"
+            - $ref: "#/components/schemas/AppliancePlatformSnapshot"
+    AppliancePlatformSnapshot:
+      type: object
+      additionalProperties: false
+      required: [schemaVersion, volumeServiceAvailable, cameraServiceAvailable, sourcesTruncated, sources, storage, updates, importApprovalAvailable, sourceCleanupAvailable]
+      description: Fixed read-only observations. No field is an attachment generation or an approval token.
+      properties:
+        schemaVersion:
+          const: 1
+        volumeServiceAvailable:
+          type: boolean
+        cameraServiceAvailable:
+          type: boolean
+        sourcesTruncated:
+          type: boolean
+        sources:
+          type: array
+          maxItems: 24
+          items:
+            $ref: "#/components/schemas/ApplianceImportSource"
+        storage:
+          oneOf:
+            - type: "null"
+            - type: object
+              additionalProperties: false
+              required: [availableAfterReserveBytes, reserveBytes]
+              properties:
+                availableAfterReserveBytes:
+                  type: integer
+                  minimum: 0
+                  maximum: 9223372036854775807
+                reserveBytes:
+                  const: 2147483648
+        updates:
+          oneOf:
+            - type: "null"
+            - type: object
+              additionalProperties: false
+              required: [configured, automatic, busy]
+              properties:
+                configured:
+                  type: boolean
+                  description: Saved private-access configuration exists; not a successful repository check.
+                automatic:
+                  type: boolean
+                busy:
+                  type: boolean
+        importApprovalAvailable:
+          const: false
+        sourceCleanupAvailable:
+          const: false
+    ApplianceImportSource:
+      type: object
+      additionalProperties: false
+      required: [sourceId, kind, name, connected, automatic, destination, preview]
+      properties:
+        sourceId:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+          description: Opaque display reference, never attachment identity or approval authority.
+        kind:
+          enum: [volume, camera]
+        name:
+          type: string
+          minLength: 1
+          maxLength: 64
+        connected:
+          type: boolean
+          description: False when the relevant service is unavailable; disconnected sources have unavailable previews.
+        automatic:
+          type: boolean
+          description: Saved local import setting, not current activity or completion.
+        destination:
+          type: string
+          pattern: '^DCIM/GPhoto/Imports/[0-9a-f]{16}$'
+        preview:
+          type: object
+          additionalProperties: false
+          required: [state, counts]
+          allOf:
+            - if:
+                properties:
+                  state:
+                    enum: [ready, incomplete]
+              then:
+                properties:
+                  counts:
+                    type: object
+              else:
+                properties:
+                  counts:
+                    type: "null"
+          properties:
+            state:
+              enum: [unavailable, pending, scanning, ready, incomplete]
+            counts:
+              oneOf:
+                - type: "null"
+                - type: object
+                  additionalProperties: false
+                  required: [eligibleFiles, eligibleBytes]
+                  properties:
+                    eligibleFiles:
+                      type: integer
+                      minimum: 0
+                      maximum: 100000
+                    eligibleBytes:
+                      type: integer
+                      minimum: 0
+                      maximum: 429496729600000
     ApplianceControlStatus:
       type: object
       additionalProperties: false

@@ -82,6 +82,40 @@ class InterlinkDashboardInstrumentedTest {
 
     private fun connected() = ApplianceDashboardState(SELECTED, ApplianceConnectionState.CONNECTED,
         ApplianceContext(PHONE, listOf(PI)), listOf(ApplianceCandidate(PI, SELECTED.name)), OBSERVATION)
+
+    @Test fun platformCountsDisappearWhenSystemDetailsOrControllerApprovalAreLost() {
+        val platform = AppliancePlatformObservation(SELECTED.confirmedGeneration!!, true,
+            PiPlatformSnapshot(true, true, false, listOf(PiImportSource("a".repeat(64), false, "Camera card", true, false,
+                "DCIM/GPhoto/Imports/" + "b".repeat(16), PiPreviewState.READY, 7, 2048)), null, null))
+        val state = mutableStateOf(connected().copy(platform = platform))
+        compose.setContent { InterlinkTheme { Column(Modifier.verticalScroll(rememberScrollState())) { InterlinkPlatformCard(state.value) } } }
+        compose.onNodeWithTag("interlink-source-counts").performScrollTo().assertIsDisplayed()
+        compose.runOnIdle { state.value = connected().copy(platform = platform.copy(snapshot = null)) }
+        compose.onNodeWithTag("interlink-source-counts").assertDoesNotExist()
+        compose.onNodeWithText(resources.getString(R.string.interlink_platform_unavailable)).assertIsDisplayed()
+        compose.runOnIdle { state.value = connected().copy(connection = ApplianceConnectionState.APPROVAL_REQUIRED, platform = platform) }
+        compose.onNodeWithTag("interlink-platform-card").assertDoesNotExist()
+    }
+
+    @Test fun largeTextKeepsPartialAndUnknownStorageDetailsReachable() {
+        val source = PiImportSource("a".repeat(64), false, "Camera card with a long source name 📷", true, false,
+            "DCIM/GPhoto/Imports/" + "b".repeat(16), PiPreviewState.INCOMPLETE, 7, 2048)
+        val snapshot = PiPlatformSnapshot(true, true, false, listOf(source), null, PiUpdateState(true, true, false))
+        val platform = AppliancePlatformObservation(SELECTED.confirmedGeneration!!, true, snapshot)
+        val state = mutableStateOf(connected().copy(platform = platform))
+        compose.setContent {
+            val density = LocalDensity.current
+            CompositionLocalProvider(LocalDensity provides Density(density.density, 2f)) {
+                InterlinkTheme { Column(Modifier.width(280.dp).verticalScroll(rememberScrollState())) { InterlinkPlatformCard(state.value) } }
+            }
+        }
+        compose.onNodeWithTag("interlink-source-counts").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(resources.getString(R.string.interlink_preview_incomplete)).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(resources.getString(R.string.interlink_updates_automatic)).performScrollTo().assertIsDisplayed()
+        compose.runOnIdle { state.value = connected().copy(platform = platform.copy(snapshot = snapshot.copy(sources = listOf(source.copy(preview = PiPreviewState.UNAVAILABLE, count = null, bytes = null))))) }
+        compose.onNodeWithTag("interlink-source-counts").assertDoesNotExist()
+        compose.onNodeWithText(resources.getString(R.string.interlink_preview_unavailable)).performScrollTo().assertIsDisplayed()
+    }
     private companion object {
         val PHONE = ApplianceIdentity("11111111-1111-4111-8111-111111111111", "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE", "a".repeat(20))
         val PI = ApplianceIdentity("22222222-2222-4222-8222-222222222222", "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI", "b".repeat(20))

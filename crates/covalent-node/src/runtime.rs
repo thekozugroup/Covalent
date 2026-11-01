@@ -225,6 +225,9 @@ pub struct NodeRuntimeConfig {
     /// it starts the already-prepared folder service through the local API.
     #[cfg(unix)]
     pub defer_folder_sync_start: bool,
+    /// Optional host-owned read-only system observations. Absent on ordinary nodes.
+    #[cfg(unix)]
+    pub appliance_platform: Option<Arc<dyn crate::appliance_platform::AppliancePlatformReader>>,
 }
 
 impl NodeRuntimeConfig {
@@ -260,6 +263,8 @@ impl NodeRuntimeConfig {
             folder_sync_access_unavailable: false,
             #[cfg(unix)]
             defer_folder_sync_start: false,
+            #[cfg(unix)]
+            appliance_platform: None,
         }
     }
 }
@@ -341,6 +346,8 @@ impl NodeRuntime {
             folder_sync_access_unavailable,
             #[cfg(unix)]
             defer_folder_sync_start,
+            #[cfg(unix)]
+            appliance_platform,
         } = configuration;
 
         let key_protector =
@@ -495,6 +502,10 @@ impl NodeRuntime {
             .context("inspect recovery progress")?
             .then(|| (Arc::clone(&recovery_state), Arc::clone(&engine)));
         state = state.with_recovery_state(Arc::clone(&recovery_state));
+        #[cfg(unix)]
+        if let Some(reader) = appliance_platform {
+            state = state.with_appliance_platform(reader);
+        }
         #[cfg(unix)]
         if folder_sync_access_unavailable {
             state = state.with_folder_sync(
