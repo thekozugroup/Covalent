@@ -190,6 +190,32 @@ class CovalentNodeClient(
             baseUrl, "POST", "/api/v1/appliance/platform", token,
             JSONObject().put("peerId", requireUuid(peerId, "appliance")).toString(), 40_960), peerId, localId)
 
+    internal fun applianceImports(baseUrl: String, token: String, selected: life.michaelwong.covalent.appliance.SelectedAppliance) =
+        life.michaelwong.covalent.appliance.parsePiImports(requestBoundedObject(
+            baseUrl, "POST", "/api/v1/appliance/imports/context", token,
+            JSONObject().put("peerId", selected.appliance.deviceId).toString(), 40_960), selected)
+
+    internal fun applianceImportActions(baseUrl: String, token: String, local: life.michaelwong.covalent.appliance.ApplianceIdentity) =
+        life.michaelwong.covalent.appliance.parsePiImportActions(requestBoundedObject(
+            baseUrl, "GET", "/api/v1/appliance/imports/actions", token, null, 131_072), local)
+
+    internal fun confirmApplianceImport(baseUrl: String, token: String, choice: life.michaelwong.covalent.appliance.PiImportChoice) =
+        life.michaelwong.covalent.appliance.parsePiSavedImport(requestBoundedObject(
+            baseUrl, "POST", "/api/v1/appliance/imports/confirm", token, choice.canonicalPayload(), 8192), choice.bond.controller)
+            .also { require(it.choice == choice) }
+
+    internal fun checkApplianceImport(baseUrl: String, token: String, action: life.michaelwong.covalent.appliance.PiSavedImport) =
+        life.michaelwong.covalent.appliance.parsePiSavedImport(requestBoundedObject(
+            baseUrl, "POST", "/api/v1/appliance/imports/check", token,
+            JSONObject().put("actionId", action.choice.id).toString(), 8192), action.choice.bond.controller)
+            .also { require(it.choice == action.choice && it.payload == action.payload && it.signature == action.signature && it.source == action.source && it.order == action.order) }
+
+    internal fun withdrawApplianceImport(baseUrl: String, token: String, action: life.michaelwong.covalent.appliance.PiSavedImport) =
+        life.michaelwong.covalent.appliance.parsePiSavedImport(requestBoundedObject(
+            baseUrl, "POST", "/api/v1/appliance/imports/withdraw", token,
+            JSONObject().put("actionId", action.choice.id).toString(), 8192), action.choice.bond.controller)
+            .also { require(it.choice == action.choice && it.payload == action.payload && it.signature == action.signature && it.source == action.source && it.order == action.order && it.withdrawalRequested) }
+
     /** Reads only the redacted folder-sync projection from the authenticated node. */
     fun folderSyncStatus(baseUrl: String, token: String): FolderSyncStatus =
         request(baseUrl, "GET", "/api/v1/sync/status", token, null).body.toFolderSyncStatus()

@@ -19,6 +19,17 @@ native cards and adaptive endpoints remain shared with Covalent.
 
 ## Captured implementation
 
+- `interlink-import-confirmation.png`: current actual native confirmation with
+  synthetic source, count/size, named destination and usable space. A new source
+  defaults to once; remembering is an explicit checkbox. Folder details reveals
+  the fixed relative path. No import or RPC runs in the visual fixture.
+- `interlink-import-confirmation-large-dark.png`: the same dialog in dark mode
+  at200% system text. Content scrolls; confirmation/dismiss remain reachable.
+  Ten native component tests cover the current dashboard and import flows,
+  including optional details, double submission, explicit remember, busy/offline
+  controls, pending-source pause and large text. Font/night restore and unchanged
+  boot/framework identities are recorded in the private platform audit.
+
 - `interlink-notification-preview.png`: actual Android notification using the
   production builder and merged Interlink icon/title resources. Its visible
   example-data label is synthetic; no sync engine or cloud backup is running.
@@ -72,5 +83,6 @@ Readiness never means an active transfer or completed Google Photos backup;
 unavailable folder access takes priority over readiness on repeated starts.
 
 This is an implemented design direction, not a blanket accessibility or Material
-compliance certification. Bonded owner control, import confirmations, real-device
-roaming and the remaining screens still need end-to-end acceptance.
+compliance certification. Bonded owner control/import confirmations are wired in
+source. Complete native startup, actual phone/Pi control, background alerts,
+real-device roaming and the remaining screens still need end-to-end acceptance.

@@ -34,28 +34,7 @@ internal fun parseAppliancePlatform(json: JSONObject, peerId: String, localId: S
     val sources = List(items.length()) { index ->
         val source = items.getJSONObject(index)
         source.exactKeys("sourceId", "kind", "name", "connected", "automatic", "destination", "preview")
-        val id = source.strictString("sourceId").also { require(it.matches(Regex("[0-9a-f]{64}"))) }
-        val kind = source.strictString("kind").also { require(it in setOf("camera", "volume")) }
-        val name = source.strictString("name").also { text ->
-            require(text.isNotBlank() && text.codePointCount(0, text.length) <= 64 && text.codePoints().noneMatch {
-                Character.isISOControl(it) || it in 0x200b..0x200f || it in 0x202a..0x202e || it in 0x2060..0x206f || it == 0xfeff
-            })
-        }
-        val connected = source.strictBoolean("connected")
-        require(!connected || if (kind == "camera") cameras else volumes)
-        val destination = source.strictString("destination").also { require(it.matches(Regex("DCIM/GPhoto/Imports/[0-9a-f]{16}"))) }
-        val preview = source.getJSONObject("preview"); preview.exactKeys("state", "counts")
-        val state = PiPreviewState.entries.single { it.wire == preview.strictString("state") }
-        require(connected || state == PiPreviewState.UNAVAILABLE)
-        val counted = state in setOf(PiPreviewState.READY, PiPreviewState.INCOMPLETE)
-        require(counted != preview.isNull("counts"))
-        var count: Long? = null; var bytes: Long? = null
-        if (counted) {
-            val counts = preview.getJSONObject("counts"); counts.exactKeys("eligibleFiles", "eligibleBytes")
-            count = counts.strictLong("eligibleFiles"); bytes = counts.strictLong("eligibleBytes")
-            require(count in 0..100_000 && bytes >= count && bytes <= count * 4_294_967_296L)
-        }
-        PiImportSource(id, kind == "camera", name, connected, source.strictBoolean("automatic"), destination, state, count, bytes)
+        parsePiImportSource(source, volumes, cameras)
     }
     require(sources.map { it.id }.toSet().size == sources.size)
     val space = if (value.isNull("storage")) null else value.getJSONObject("storage").let {
@@ -68,4 +47,30 @@ internal fun parseAppliancePlatform(json: JSONObject, peerId: String, localId: S
     }
     return AppliancePlatformObservation(generation, supported,
         PiPlatformSnapshot(volumes, cameras, value.strictBoolean("sourcesTruncated"), sources, space, updates))
+}
+
+/** Callers validate the exact field set before sharing this projection. */
+internal fun parsePiImportSource(source: JSONObject, volumes: Boolean, cameras: Boolean): PiImportSource {
+    val id = source.strictString("sourceId").also { require(it.matches(Regex("[0-9a-f]{64}"))) }
+    val kind = source.strictString("kind").also { require(it in setOf("camera", "volume")) }
+    val name = source.strictString("name").also { text ->
+        require(text.isNotBlank() && text.codePointCount(0, text.length) <= 64 && text.codePoints().noneMatch {
+            Character.isISOControl(it) || it in 0x200b..0x200f || it in 0x202a..0x202e || it in 0x2060..0x206f || it == 0xfeff
+        })
+    }
+    val connected = source.strictBoolean("connected")
+    require(!connected || if (kind == "camera") cameras else volumes)
+    val destination = source.strictString("destination").also { require(it.matches(Regex("DCIM/GPhoto/Imports/[0-9a-f]{16}"))) }
+    val preview = source.getJSONObject("preview"); preview.exactKeys("state", "counts")
+    val state = PiPreviewState.entries.single { it.wire == preview.strictString("state") }
+    require(connected || state == PiPreviewState.UNAVAILABLE)
+    val counted = state in setOf(PiPreviewState.READY, PiPreviewState.INCOMPLETE)
+    require(counted != preview.isNull("counts"))
+    var count: Long? = null; var bytes: Long? = null
+    if (counted) {
+        val counts = preview.getJSONObject("counts"); counts.exactKeys("eligibleFiles", "eligibleBytes")
+        count = counts.strictLong("eligibleFiles"); bytes = counts.strictLong("eligibleBytes")
+        require(count in 0..100_000 && bytes >= count && bytes <= count * 4_294_967_296L)
+    }
+    return PiImportSource(id, kind == "camera", name, connected, source.strictBoolean("automatic"), destination, state, count, bytes)
 }

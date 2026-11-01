@@ -2,8 +2,9 @@
 
 The native API now carries drive confirmation context and exact signed import
 choices over the existing pinned covalent-appliance/1 channel. This is the
-backend for Interlink; Android confirmation screens and their lifecycle wiring
-remain unfinished. Ordinary hosts have no import bridge and report unsupported.
+backend for Interlink; the native Android client/confirmation and foreground
+lifecycle wiring are now connected (interlink-imports.md). Ordinary hosts have
+no import bridge and report unsupported.
 No new listener, trust-by-discovery, arbitrary settings command, camera consent,
 source deletion or cloud-verification authority is added.
 
@@ -46,8 +47,16 @@ source can be marked superseded by that pause. This does not prove what earlier
 work copied and does not remove originals. Later automatic-import settings are
 shown separately from old admission receipts.
 
+Uncertainty blocks fresh once/remember choices within the same full protected
+bond. A freshly verified replacement root/native bond cannot admit the old
+proof; it can confirm new work without inventing an old result or requiring the
+old card to remain attached. At the history limit, earlier non-executable
+requests for that same Pi can be pruned along with older resolved entries.
+Current-bond uncertainty remains protected. All reservations still require a
+fresh host context; the caller cannot choose an arbitrary replacement bond.
+
 Outbox state is bounded to32 actions/128KiB, privately owned, canonical and
-single-writer locked. Only older resolved entries can be pruned. Unsafe, missing,
+single-writer locked. Unsafe, missing,
 linked, changed, malformed or foreign-identity state refuses import operations
 without resetting it or stopping ordinary sync. An uncertain file publication
 poisons the writer. Restart never dispatches a saved import or withdrawal.
@@ -59,4 +68,6 @@ service recreation, exact duplicate/conflicting UUID, separate withdrawal signin
 and a late original request after withdrawal. Host fixtures have no real file
 importer. Root Android service/crypto evidence is recorded separately by the
 private appliance project; actual phone/Pi/roaming/camera/cloud/update/image
-acceptance remains required. The new local API is not a released companion app.
+acceptance remains required. New actual QUIC coverage verifies explicit revocation/
+reapproval with an old card absent, preserved unknown history and late-proof
+refusal. The new local API is not a released companion app.

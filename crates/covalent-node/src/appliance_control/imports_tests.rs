@@ -103,6 +103,103 @@ fn approve_body(context: &ImportContext, mode: ImportApprovalMode) -> serde_json
 }
 
 #[tokio::test]
+async fn independently_reapproved_bond_can_import_without_replaying_or_resolving_an_old_request() {
+    let pi = Device::new();
+    let phone = Device::new();
+    let host = Arc::new(Host::new());
+    host.ready();
+    let state = pi.state().with_appliance_imports(host.clone());
+    let node = QuicNode::bind(([127, 0, 0, 1], 0).into(), Arc::clone(&pi.engine), &pi.tls).unwrap();
+    let address = node.local_addr().unwrap();
+    eprintln!("owned renewed-bond QUIC fixture {address}");
+    pair(&phone, &pi, address);
+    let store = state.controller_bond.as_ref().unwrap();
+    let bond = store
+        .grant(
+            &pi.engine,
+            store.snapshot().unwrap().generation,
+            phone.engine.public_identity(),
+        )
+        .unwrap();
+    {
+        let mut c = host.context.lock().unwrap();
+        c.bond.appliance = pi.engine.public_identity();
+        c.bond.controller = phone.engine.public_identity();
+        c.bond.native_generation = bond.generation;
+    }
+    let shutdown = node.shutdown_handle();
+    let server = tokio::spawn(
+        node.with_local_provider_enabled(false)
+            .with_controller_bond(state.controller_bond.clone())
+            .run(),
+    );
+    let phone_state = phone.state();
+    let original = crate::appliance_imports::tests::choice(
+        &host.context.lock().unwrap(),
+        ImportApprovalMode::Once,
+    );
+    host.lose_before.store(true, Ordering::SeqCst);
+    let (code, pending) = api(
+        phone_state.clone(),
+        "POST",
+        "/api/v1/appliance/imports/confirm",
+        serde_json::to_value(&original).unwrap(),
+        true,
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK);
+    assert!(pending["receipt"].is_null());
+    assert_eq!(host.effects.load(Ordering::SeqCst), 0);
+    store.revoke(bond.generation).unwrap();
+    let new = store
+        .grant(
+            &pi.engine,
+            store.snapshot().unwrap().generation,
+            phone.engine.public_identity(),
+        )
+        .unwrap();
+    {
+        let mut c = host.context.lock().unwrap();
+        c.bond.native_generation = new.generation;
+        c.bond.root_generation = Uuid::new_v4();
+        c.sources[0].source_id = "b".repeat(64); // The old card is no longer attached.
+    }
+    let replacement = approve_body(&host.context.lock().unwrap(), ImportApprovalMode::Once);
+    let (code, accepted) = api(
+        phone_state.clone(),
+        "POST",
+        "/api/v1/appliance/imports/confirm",
+        replacement,
+        true,
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK);
+    assert_eq!(accepted["receipt"]["outcome"], "accepted");
+    assert_eq!(host.effects.load(Ordering::SeqCst), 1);
+    let proof: SignedImportApproval = serde_json::from_value(pending["proof"].clone()).unwrap();
+    assert!(
+        host.action(ImportOperation::Approve, &proof, None)
+            .await
+            .is_err()
+    );
+    let (code, old) = api(
+        phone_state,
+        "POST",
+        "/api/v1/appliance/imports/check",
+        serde_json::json!({"actionId":original.action_id}),
+        true,
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK);
+    assert!(old["receipt"].is_null());
+    assert_eq!(host.effects.load(Ordering::SeqCst), 1);
+    shutdown.close();
+    server.await.unwrap();
+    shutdown.wait_for_release().await.unwrap();
+    assert!(std::net::UdpSocket::bind(address).is_ok());
+}
+
+#[tokio::test]
 async fn actual_quic_import_confirmation_persists_before_send_and_only_reads_after_lost_reply() {
     let pi = Device::new();
     let phone = Device::new();

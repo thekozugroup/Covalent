@@ -1,0 +1,83 @@
+{
+  "context": {
+    "schemaVersion": 1,
+    "bond": {
+      "appliance": {
+        "deviceId": "543d9999-2705-461b-a835-4770e156f014",
+        "publicKey": "b-wOJVQSPOmNG3HFwVJrQ5_q7S1NmQUVl7LyPiZM_MQ",
+        "fingerprint": "3ab29b86d4e5562e5c47"
+      },
+      "controller": {
+        "deviceId": "d4ae297f-126f-44ca-ac4a-ff3715b36a66",
+        "publicKey": "l5qgXUy4wOki7RxpqeVvd6V4w3A9HudU-cJ2ZmANTgU",
+        "fingerprint": "21ceffca9c6fafa43b94"
+      },
+      "rootGeneration": "88b09c24-13cc-4c35-b75e-e85805db2cd7",
+      "nativeGeneration": "79409991-7281-4666-8cac-970afda7d4c3"
+    },
+    "volumeServiceAvailable": true,
+    "sourcesTruncated": false,
+    "sources": [
+      {
+        "sourceId": "8f16ecbb15ee57627401e21837bcc75b8c9d97f438d33f209fe8c33ccb9baba4",
+        "kind": "volume",
+        "name": "Example SD card",
+        "connected": true,
+        "automatic": false,
+        "destination": "DCIM/GPhoto/Imports/bbbbbbbbbbbbbbbb",
+        "preview": {
+          "state": "ready",
+          "counts": {
+            "eligibleFiles": 1,
+            "eligibleBytes": 5
+          }
+        },
+        "actionSession": "1990ef50-bc89-4965-934b-6a3a48605f78",
+        "actionSequence": 1,
+        "confirmation": {
+          "attachmentId": "7748718b-3f69-4a73-8385-aed5d70aa652",
+          "previewId": "d50885eb-fd62-4e45-86a6-8e575899c0e6"
+        }
+      }
+    ],
+    "storage": {
+      "availableAfterReserveBytes": 8500000000,
+      "reserveBytes": 2147483648
+    },
+    "withdrawalAvailable": true,
+    "sourceCleanupAvailable": false
+  },
+  "action": {
+    "order": 1,
+    "proof": {
+      "payload": "{\"schemaVersion\":1,\"bond\":{\"appliance\":{\"deviceId\":\"543d9999-2705-461b-a835-4770e156f014\",\"publicKey\":\"b-wOJVQSPOmNG3HFwVJrQ5_q7S1NmQUVl7LyPiZM_MQ\",\"fingerprint\":\"3ab29b86d4e5562e5c47\"},\"controller\":{\"deviceId\":\"d4ae297f-126f-44ca-ac4a-ff3715b36a66\",\"publicKey\":\"l5qgXUy4wOki7RxpqeVvd6V4w3A9HudU-cJ2ZmANTgU\",\"fingerprint\":\"21ceffca9c6fafa43b94\"},\"rootGeneration\":\"88b09c24-13cc-4c35-b75e-e85805db2cd7\",\"nativeGeneration\":\"79409991-7281-4666-8cac-970afda7d4c3\"},\"actionId\":\"dccd4fd3-e80c-4019-ab81-d1df704b9398\",\"actionSession\":\"1990ef50-bc89-4965-934b-6a3a48605f78\",\"actionSequence\":1,\"sourceId\":\"8f16ecbb15ee57627401e21837bcc75b8c9d97f438d33f209fe8c33ccb9baba4\",\"kind\":\"volume\",\"mode\":\"once\",\"attachmentId\":\"7748718b-3f69-4a73-8385-aed5d70aa652\",\"previewId\":\"d50885eb-fd62-4e45-86a6-8e575899c0e6\",\"retention\":\"retain\"}",
+      "signature": "U3114o-EereYMGUzvXOaK13kI2w8erweOXqZRnpH4hxEppoMzwzLVxVhfUB4Boy8a_U45lzFSUlQEP5iRqBoCg"
+    },
+    "source": {
+      "sourceId": "8f16ecbb15ee57627401e21837bcc75b8c9d97f438d33f209fe8c33ccb9baba4",
+      "kind": "volume",
+      "name": "Example SD card",
+      "connected": true,
+      "automatic": false,
+      "destination": "DCIM/GPhoto/Imports/bbbbbbbbbbbbbbbb",
+      "preview": {
+        "state": "ready",
+        "counts": {
+          "eligibleFiles": 1,
+          "eligibleBytes": 5
+        }
+      },
+      "actionSession": "1990ef50-bc89-4965-934b-6a3a48605f78",
+      "actionSequence": 1,
+      "confirmation": {
+        "attachmentId": "7748718b-3f69-4a73-8385-aed5d70aa652",
+        "previewId": "d50885eb-fd62-4e45-86a6-8e575899c0e6"
+      }
+    },
+    "withdrawalRequested": false,
+    "withdrawalSignature": null,
+    "supersededBy": null,
+    "receipt": null
+  },
+  "withdrawalSignature": "5inArNjbnxHQi0_L10TPB_RRPancrq1pPVNUFdWAe4f6Y-lAngjGSua675YGPrZn5WcxGhV90XeTqCXG901JCw"
+}

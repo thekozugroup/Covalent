@@ -206,11 +206,11 @@ internal fun requireCanonicalId(value: String) {
     val id = UUID.fromString(value)
     require(id.toString() == value && id != UUID(0, 0))
 }
-private fun JSONObject.identity(): ApplianceIdentity {
+internal fun JSONObject.identity(): ApplianceIdentity {
     exactKeys("deviceId", "publicKey", "fingerprint")
     return ApplianceIdentity(strictString("deviceId"), strictString("publicKey"), strictString("fingerprint"))
 }
-private fun ApplianceIdentity.toJson() = JSONObject().put("deviceId", deviceId).put("publicKey", publicKey).put("fingerprint", fingerprint)
+internal fun ApplianceIdentity.toJson() = JSONObject().put("deviceId", deviceId).put("publicKey", publicKey).put("fingerprint", fingerprint)
 internal fun JSONObject.exactKeys(vararg keys: String) { require(keys().asSequence().toSet() == keys.toSet()) }
 internal fun JSONObject.strictString(key: String) = (get(key) as? String) ?: error("Invalid control response.")
 internal fun JSONObject.strictBoolean(key: String) = (get(key) as? Boolean) ?: error("Invalid control response.")

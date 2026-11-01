@@ -303,11 +303,10 @@ impl ImportOutbox {
             return Err(());
         }
         if choice.mode != covalent_core::appliance_import::ImportApprovalMode::Off
-            && current.actions.iter().any(|a| {
-                !a.resolved()
-                    && a.choice()
-                        .is_ok_and(|c| c.bond.appliance == choice.bond.appliance)
-            })
+            && current
+                .actions
+                .iter()
+                .any(|a| !a.resolved() && a.choice().is_ok_and(|c| c.bond == choice.bond))
         {
             return Err(());
         }
@@ -317,7 +316,14 @@ impl ImportOutbox {
                 .actions
                 .iter()
                 .enumerate()
-                .filter(|(_, a)| a.resolved())
+                // The API has freshly verified this full bond. An older bond
+                // cannot admit a delayed packet; its outcome stays unknown.
+                .filter(|(_, a)| {
+                    a.resolved()
+                        || a.choice().is_ok_and(|c| {
+                            c.bond.appliance == choice.bond.appliance && c.bond != choice.bond
+                        })
+                })
                 .min_by_key(|(_, a)| a.order)
                 .map(|(i, _)| i)
                 .ok_or(())?;
@@ -504,6 +510,38 @@ mod tests {
                 "{mode}"
             );
         }
+    }
+    #[test]
+    fn fresh_owner_bond_does_not_inherit_old_pending_admission_or_exhaust_its_history() {
+        let d = directory();
+        let (phone, mut context) = fixture();
+        let box_ =
+            ImportOutbox::open(d.path().join("outbox.json"), phone.public_identity()).unwrap();
+        let original =
+            sign_import_approval(&phone, &choice(&context, ImportApprovalMode::Once)).unwrap();
+        box_.reserve(original.clone(), context.sources[0].clone())
+            .unwrap();
+        let duplicate =
+            sign_import_approval(&phone, &choice(&context, ImportApprovalMode::Once)).unwrap();
+        assert!(box_.reserve(duplicate, context.sources[0].clone()).is_err());
+        // Each iteration stands for a separately verified current host bond.
+        for _ in 0..40 {
+            context.bond.root_generation = Uuid::new_v4();
+            let proof =
+                sign_import_approval(&phone, &choice(&context, ImportApprovalMode::Once)).unwrap();
+            assert!(box_.reserve(proof, context.sources[0].clone()).unwrap());
+            assert!(
+                box_.list()
+                    .unwrap()
+                    .iter()
+                    .all(|a| !a.resolved() && a.receipt.is_none())
+            );
+        }
+        assert_eq!(box_.list().unwrap().len(), MAX_RECORDS);
+        assert!(box_.list().unwrap().iter().all(|a| a.proof != original));
+        let current =
+            sign_import_approval(&phone, &choice(&context, ImportApprovalMode::Once)).unwrap();
+        assert!(box_.reserve(current, context.sources[0].clone()).is_err());
     }
     #[test]
     fn pending_imports_allow_an_explicit_later_pause_as_safe_recovery() {

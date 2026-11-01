@@ -9,6 +9,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -18,7 +19,7 @@ import life.michaelwong.covalent.ui.FolderShareCard
 import life.michaelwong.covalent.ui.FolderSyncOverview
 import life.michaelwong.covalent.appliance.*
 
-/** Debug-only visual fixture. Every value is synthetic; callbacks change no state. */
+/** Debug-only visual fixture. Every value is synthetic; import callbacks change only local rendering. */
 class InterlinkPreviewActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -38,6 +39,8 @@ class InterlinkPreviewActivity : ComponentActivity() {
         val pi = ApplianceIdentity("22222222-2222-4222-8222-222222222222", "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI", "a".repeat(20))
         val selected = SelectedAppliance(phone, pi, "Living room Pi", "44444444-4444-4444-8444-444444444444")
         val previewMode = intent.getStringExtra("previewMode")
+        val importExample = interlinkImportExample(selected)
+        val importPreview = previewMode?.startsWith("import-") == true
         if (previewMode == "notification" && android.os.Build.VERSION.SDK_INT >= 33 &&
             checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) == android.content.pm.PackageManager.PERMISSION_GRANTED) {
             life.michaelwong.covalent.node.NodeProviderNotification.createChannel(this)
@@ -55,12 +58,17 @@ class InterlinkPreviewActivity : ComponentActivity() {
             context = ApplianceContext(phone, listOf(pi)), candidates = listOf(ApplianceCandidate(pi, selected.name)),
             observation = if (previewMode in setOf("offline", "approval")) null else
                 ApplianceObservation(selected.confirmedGeneration!!, ApplianceSyncState.RUNNING, 1, true),
-            platform = if (previewMode != "storage") null else AppliancePlatformObservation(selected.confirmedGeneration!!, true,
+            platform = if (previewMode != "storage" && !importPreview) null else AppliancePlatformObservation(selected.confirmedGeneration!!, true,
                 PiPlatformSnapshot(true, true, false, listOf(PiImportSource("a".repeat(64), false, "Camera SD card", true, false,
                     "DCIM/GPhoto/Imports/912666d028529101", PiPreviewState.READY, 320, 1_400_000_000)), 8_500_000_000,
                     PiUpdateState(true, true, false))),
         )
         setContent {
+            var review by remember { mutableStateOf(if (previewMode == "import-confirmation") importExample else null) }
+            val exampleAction = PiSavedImport(1, importExample.choice(PiImportMode.ONCE), importExample.choice(PiImportMode.ONCE).canonicalPayload(), "example-only",
+                importExample.source, false, null, null)
+            val imports = PiImportsState(selected, PiImportsObservation(selected.confirmedGeneration!!, true, importExample.context),
+                if (previewMode == "import-pending") listOf(exampleAction) else emptyList(), true)
             InterlinkTheme {
                 InterlinkScaffold { padding ->
                     Column(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding)
@@ -69,7 +77,10 @@ class InterlinkPreviewActivity : ComponentActivity() {
                         Text("Example data · visual preview", style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant)
                         InterlinkApplianceCard(dashboard, false, {}, {})
-                        if (previewMode == "storage") InterlinkPlatformCard(dashboard)
+                        if (previewMode == "storage" || importPreview) InterlinkPlatformCard(dashboard, if (importPreview) imports else null) { _, pause ->
+                            review = importExample.copy(pause = pause)
+                        }
+                        if (importPreview) InterlinkImportRequests(dashboard, imports, false, {}, {})
                         Text("Your photo links", style = MaterialTheme.typography.headlineMedium,
                             fontWeight = FontWeight.SemiBold)
                         Text(stringResource(R.string.interlink_subtitle))
@@ -86,6 +97,7 @@ class InterlinkPreviewActivity : ComponentActivity() {
                             color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
+                review?.let { InterlinkImportConfirmation(it, false, { review = null }, { review = null }) }
             }
         }
     }

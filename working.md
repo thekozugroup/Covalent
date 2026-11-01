@@ -1,3 +1,38 @@
+# Native Interlink drive confirmations — 2026-11-01
+
+Previous turn was progress: public6d7bd47 and privatef286162 were signed/pushed/
+verified with separate transport and native root evidence. Current companion
+connects strict API models/client, fresh source-bound review, once/explicit
+remember/pause and saved result/check/withdraw controls. A new source defaults
+to once; an already remembered source keeps its saved choice. Double submission,
+stale source/owner/selection, malformed data and foreign identities refuse.
+Offline request history is labelled and disabled. Polling is foreground only;
+background alerts, camera parity and remaining headless settings remain.
+
+A discovered recovery bug is fixed in the shared outbox: unknown old-bond requests
+could block a newly approved controller forever, especially after the old card
+disappeared. Fresh context must prove the complete new root/native bond. Only
+same-bond uncertainty blocks a new once/remember; old outcomes stay unknown and
+cannot execute again. Bounded pruning may retire old non-executable history for
+that same Pi without fabricating acknowledgement. Current-bond protection stays.
+Actual QUIC revoke/reapprove/late-proof and bounded-history tests cover this.
+
+Full node345/0 and JVM250/0 tests pass, zero ignored/filtered. Workspace/all-target/
+all-feature clippy passes with warnings denied. Final API36 native UI:10/0 in
+17.719s; normal-manifest companion lint:0 errors/11 existing warnings. Foundation
+and65-operation/484-reference/128-client-call contract pass. Final light and
+dark200% confirmation captures live once in docs/brand; boot/system-server/
+surface-flinger identities and1.0x animations remain unchanged. Font/night are
+restored. Complete native producers were omitted only in the separate preview
+APK; normal production package/worker/startup gates remain. Final source/preview/
+cleanup evidence is in the private platform audit. The first JVM attempt lacked
+SDK environment; the next caught offline
+history during a pending-state edit, then the final250 pass. Initial UI capture
+was too wordy; the polished confirmation keeps source/destination/counts/space
+and moves the raw path behind Folder details. Source data and Google backup
+claims stay distinct. No new dependency, lockfile, version, physical install,
+release/merge or gold claim. See docs/interlink-imports.md.
+
 # Phone import transport and durable pending requests — 2026-11-01
 
 Adds an optional fixed native import host, strict context/receipt models and

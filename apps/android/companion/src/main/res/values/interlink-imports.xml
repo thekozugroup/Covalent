@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="interlink_import_review">Review import</string>
+    <string name="interlink_import_pause">Pause imports</string>
+    <string name="interlink_import_title">Import photos?</string>
+    <string name="interlink_import_pause_title">Pause %1$s?</string>
+    <string name="interlink_import_once">Import once</string>
+    <string name="interlink_import_remember_action">Import &amp; remember</string>
+    <string name="interlink_import_remember">Import automatically next time</string>
+    <string name="interlink_import_remember_detail">Remember only this source.</string>
+    <string name="interlink_import_originals">Originals stay on the source. Google Photos backup is separate.</string>
+    <string name="interlink_import_pause_detail">Turn off automatic imports for this source. Work already accepted may still finish. Originals stay on the source.</string>
+    <string name="interlink_import_counts_detail">Counts include files already imported.</string>
+    <string name="interlink_import_destination">To · %1$s / Photo imports</string>
+    <string name="interlink_import_space">%1$s available for imports</string>
+    <string name="interlink_import_folder_details">Folder details</string>
+    <string name="interlink_import_space_unknown">Pi space could not be checked. Refresh before importing.</string>
+    <string name="interlink_import_preview_wait">A complete preview and enough Pi space are required.</string>
+    <string name="interlink_import_requests_title">Import requests</string>
+    <string name="interlink_import_check">Check result</string>
+    <string name="interlink_import_withdraw">Cancel request</string>
+    <string name="interlink_import_pending">Waiting for confirmation</string>
+    <string name="interlink_import_pending_detail">The Pi may have received this request. Check its result before starting another import.</string>
+    <string name="interlink_import_accepted">Request accepted</string>
+    <string name="interlink_import_accepted_detail">Queued for source verification. This does not confirm copying or Google Photos backup.</string>
+    <string name="interlink_import_paused">Pause accepted</string>
+    <string name="interlink_import_uncertain">Result needs checking</string>
+    <string name="interlink_import_uncertain_detail">Work may have started. Check its result or pause this source before confirming another import.</string>
+    <string name="interlink_import_withdrawing">Cancellation not confirmed</string>
+    <string name="interlink_import_withdrawing_detail">Check its result. Work already accepted may continue.</string>
+    <string name="interlink_import_withdrawn">Request cancelled</string>
+    <string name="interlink_import_withdrawn_detail">This request will not start an import. Originals remain on the source.</string>
+    <string name="interlink_import_expired">Confirmation expired</string>
+    <string name="interlink_import_expired_detail">Review a fresh preview. Earlier copying is not verified here.</string>
+    <string name="interlink_import_superseded">Later pause confirmed</string>
+    <string name="interlink_import_superseded_detail">Earlier copying is not verified here.</string>
+    <string name="interlink_import_previous">Previous approval</string>
+    <string name="interlink_import_previous_detail">This request belongs to an older Pi approval. Its result is unconfirmed; it will not be repeated.</string>
+    <string name="interlink_import_history_unavailable">Saved requests are unavailable. Refresh before starting an import.</string>
+    <string name="interlink_import_review_failed">The source or Pi approval changed. Refresh and review it again.</string>
+    <string name="interlink_import_result_unconfirmed">The result is not confirmed. Check saved requests before trying another import.</string>
+    <string name="interlink_import_history_offline">Saved results · Connect to the Pi to check them.</string>
+    <string name="interlink_camera_approval_unavailable">Camera approval from this phone is unavailable. Originals remain on the camera.</string>
+</resources>
