@@ -19,14 +19,25 @@ before pairing; corrected fixture now passes, with initial failure retained.
 Bounded public proof: artifacts/evidence/interlink-update-transport. Raw execution
 logs remain in the private appliance audit, not this public evidence file.
 
-The private Pi adapter and bundle source-fingerprint wiring are implemented;
-full ARM64 Android compilation and pin publication are the next stage. Phone
-request outbox/readback and Expressive control remain pending; no inert switch,
-APK/release/image or actual Pi/phone update is claimed. Existing failed API37 and
+The private Pi adapter and bundle source-fingerprint wiring now compile as a
+full13,119,256B ARM64 Android/API26 release ELF, with four16KiB LOAD segments. Its
+separate Android test ELF also compiles with both new bridge cases registered;
+neither binary is executed/installed. The private source pin selects signed
+public d39c20d; unchanged worker tree/Go/NDK requirements are verified. Phone
+request outbox/readback and Expressive control remain next; no inert switch,
+new signed bundle, APK/release/image or actual Pi/phone update is claimed. Existing failed API37 and
 Android36 guest-ANR hosted acceptance runs remain failed, without waivers/retries.
 Original candidates/recovery/accounts/keys/pairings/media/Pictures journal and
-PR60/PR1 draft heads/bases remain unchanged. Scoped compiler/source/test scratch
-is tracked for the active Android compile and will be removed before handoff.
+PR60/PR1 draft heads/bases remain unchanged. Owned compiler/source/test scratch
+and its task registration are independently absent; all26 recorded identities
+exited. Removed allocation1,484,083,200B, observed volume free-space increase
+1,446,952,960B with concurrent APFS limits. No VM/AVD/container created. Shared
+ADB listeners, SDKs/toolchains/cache and the unrelated Oatmeal task are preserved.
+Retain public proof38649B and private bounded proof62646B, with original failures
+and explicit execution limits. No compiled binary, checkout or synthetic state
+remains. The broad Mac boot-installer selection fails six root-only chown cases;
+its diagnostic is retained without a source/test/CI waiver. Portable7 and bundle11
+checks pass separately; complete current-head Linux/root admission remains required.
 
 # Known Android37 graphics assertion identified — 2026-11-01
 
