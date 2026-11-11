@@ -1,9 +1,7 @@
 # Contributing
 
-The current rclone implementation is on
-[`codex/production-readiness`](https://github.com/thekozugroup/Covalent/tree/codex/production-readiness)
-in [PR #32](https://github.com/thekozugroup/Covalent/pull/32). Start from that
-branch for current product work; `main` still contains older source. Keep changes
+Current work is on `main`, which contains the released rclone implementation.
+Start from `main`. Keep changes
 atomic, tested, and scoped to the current one-way file product: pairing, folder
 authorization, rclone transfers, shared link settings, scheduling, status, native
 clients, the Docker web console, and LAN/Tailnet discovery.
@@ -21,7 +19,9 @@ legacy encrypted backups; do not silently convert legacy behavior. See the
 ./scripts/check.sh core
 ```
 
-Those commands need only the Rust toolchain. Before a platform-specific check,
+Those commands need only the Rust toolchain. Build output can live outside the
+checkout: set `CARGO_TARGET_DIR` for the whole `check.sh` run and every step,
+including the artifact size check, reads it. Before a platform-specific check,
 run the matching read-only prerequisite report:
 
 ```sh

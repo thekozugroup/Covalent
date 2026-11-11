@@ -2,8 +2,16 @@
 set -eu
 
 repo_root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
-node_binary="$repo_root/target/release/covalent-node"
-cli_binary="$repo_root/target/release/covalent"
+# Measure what `cargo build --release` actually produced. Cargo writes to
+# CARGO_TARGET_DIR when it is set, and resolves a relative value against the
+# directory it was run from, which for every documented check is the repo root.
+target_dir=${CARGO_TARGET_DIR:-"$repo_root/target"}
+case "$target_dir" in
+  /*) ;;
+  *) target_dir="$repo_root/$target_dir" ;;
+esac
+node_binary="$target_dir/release/covalent-node"
+cli_binary="$target_dir/release/covalent"
 image=""
 image_only=false
 platform=""
