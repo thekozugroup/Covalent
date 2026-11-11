@@ -11,7 +11,7 @@ public enum PlatformTier: String, Codable, Sendable {
     /// never does, because "Tier 2" tells a person nothing.
     public var label: String {
         switch self {
-        case .tier1: "Full backup server"
+        case .tier1: "Full Covalent server"
         case .tier2: "Backs up folders you choose"
         }
     }
@@ -23,19 +23,46 @@ public struct NodeStatus: Codable, Equatable, Sendable {
     public let lanDiscovery: Bool
     public let platformTier: PlatformTier
     public let state: String
+    /// Software version of the service that answered, without a leading `v`.
+    /// `nil` from a service at 0.2.12 or earlier, which does not send it.
+    public let version: String?
+    /// The service's once-a-day release check. `nil` from an older service,
+    /// which every view treats exactly like a check that is turned off.
+    public let update: NodeUpdateStatus?
 
     public init(
         deviceName: String,
         protocolVersion: UInt16,
         lanDiscovery: Bool,
         platformTier: PlatformTier,
-        state: String
+        state: String,
+        version: String? = nil,
+        update: NodeUpdateStatus? = nil
     ) {
         self.deviceName = deviceName
         self.protocolVersion = protocolVersion
         self.lanDiscovery = lanDiscovery
         self.platformTier = platformTier
         self.state = state
+        self.version = version
+        self.update = update
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case deviceName, protocolVersion, lanDiscovery, platformTier, state, version, update
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        deviceName = try container.decode(String.self, forKey: .deviceName)
+        protocolVersion = try container.decode(UInt16.self, forKey: .protocolVersion)
+        lanDiscovery = try container.decode(Bool.self, forKey: .lanDiscovery)
+        platformTier = try container.decode(PlatformTier.self, forKey: .platformTier)
+        state = try container.decode(String.self, forKey: .state)
+        // Optional extras: a malformed or unexpected value here must never
+        // cost the person their connection, so it reads as absent instead.
+        version = (try? container.decodeIfPresent(String.self, forKey: .version)) ?? nil
+        update = (try? container.decodeIfPresent(NodeUpdateStatus.self, forKey: .update)) ?? nil
     }
 }
 

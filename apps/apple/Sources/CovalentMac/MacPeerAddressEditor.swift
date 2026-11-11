@@ -59,7 +59,7 @@ struct MacPeerAddressEditor: View {
 
                     Text("Use a numeric IP address and port, such as 192.168.1.20:8787 or [2001:db8::20]:8787. Covalent verifies the device's saved identity and certificate before changing the address.")
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .secondaryLabelStyle()
                 }
 
                 if let acceptedAddressNeedingReload {
@@ -75,7 +75,7 @@ struct MacPeerAddressEditor: View {
                 if let failure {
                     Section("What Happened") {
                         Label(failure.summary, systemImage: "exclamationmark.triangle.fill")
-                            .foregroundStyle(.red)
+                            .foregroundStyle(MacLabelColor.danger)
                             .accessibilityLabel("Address update error")
                             .accessibilityValue(failure.summary)
                         if let detail = failure.detail {
@@ -112,6 +112,7 @@ struct MacPeerAddressEditor: View {
                 if acceptedAddressNeedingReload != nil {
                     Button("Reload Status") { reloadStatus() }
                         .buttonStyle(.borderedProminent)
+                        .accentFill()
                         .keyboardShortcut(.defaultAction)
                         .disabled(isWorking)
                 } else {
@@ -119,6 +120,7 @@ struct MacPeerAddressEditor: View {
                         submit()
                     }
                     .buttonStyle(.borderedProminent)
+                    .accentFill()
                     .keyboardShortcut(.defaultAction)
                     .disabled(!canSubmit || isWorking || model.folderSyncMutationInFlight)
                     .accessibilityHint(

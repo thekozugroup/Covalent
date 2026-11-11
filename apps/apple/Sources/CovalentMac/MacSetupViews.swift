@@ -21,12 +21,12 @@ struct MacConnectionView: View {
                     .scaledSymbolFont(size: 30)
                     .foregroundStyle(MacLabelColor.accentGlyph)
                     .scaledSymbolFrame(54)
-                    .background(Color.blue.opacity(0.1), in: RoundedRectangle(cornerRadius: 13))
+                    .background(MacFillColor.accentTint, in: RoundedRectangle(cornerRadius: MacCornerRadius.block))
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 4) {
                     Text(model.phase == .ready ? "Service Connection" : "Connect Covalent")
                         .font(.title.weight(.semibold))
-                    Text("The API token stays in this Mac's Keychain and is never included in settings exports.")
+                    Text("The access token stays in this Mac's Keychain and is never included in settings exports.")
                         .secondaryLabelStyle()
                 }
                 Spacer()
@@ -36,7 +36,7 @@ struct MacConnectionView: View {
             Divider()
 
             Form {
-                Section("Backup server") {
+                Section("Covalent server") {
                     TextField("Service address", text: $serviceAddress, prompt: Text("http://127.0.0.1:8787"))
                         .textContentType(.URL)
                         .accessibilityIdentifier("connection.address")
@@ -50,6 +50,7 @@ struct MacConnectionView: View {
                         }
                         Button(revealToken ? "Hide" : "Show") { revealToken.toggle() }
                             .buttonStyle(.plain)
+                            .accessibilityLabel(revealToken ? "Hide access token" : "Show access token")
                     }
                     .accessibilityIdentifier("connection.token")
                     HStack {
@@ -64,6 +65,7 @@ struct MacConnectionView: View {
                     TextField("Device name", text: $deviceName, prompt: Text("Home Mac"))
                         .accessibilityIdentifier("connection.deviceName")
                     Toggle("Find devices on the local network", isOn: $lanDiscoveryEnabled)
+                        .accentFill()
                     Text("Discovery advertises only a temporary service ID, protocol range, and port. It never advertises backup names or paths.")
                         .font(.caption)
                         .secondaryLabelStyle()
@@ -97,7 +99,9 @@ struct MacConnectionView: View {
                     .keyboardShortcut(.cancelAction)
                 Spacer()
                 if isConnecting {
-                    ProgressView().controlSize(.small)
+                    ProgressView()
+                        .controlSize(.small)
+                        .accessibilityLabel("Connecting")
                 }
                 Button("Connect") {
                     isConnecting = true
@@ -115,6 +119,7 @@ struct MacConnectionView: View {
                     }
                 }
                 .buttonStyle(.borderedProminent)
+                .accentFill()
                 .keyboardShortcut(.defaultAction)
                 .disabled(token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isConnecting)
                 .accessibilityIdentifier("connection.connect")
@@ -221,6 +226,7 @@ struct MacSettingsImportView: View {
                     }
                 }
                 .buttonStyle(.borderedProminent)
+                .accentFill()
                 .keyboardShortcut(.defaultAction)
                 .disabled(data == nil || isImporting)
             }

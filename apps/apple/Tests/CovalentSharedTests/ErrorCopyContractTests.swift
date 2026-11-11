@@ -198,7 +198,7 @@ import Testing
                 409,
                 "folder_sync_unavailable",
                 false,
-                "Folder sync is unavailable on this device. Check that folder sync is installed and the shared folder is available, then try again.",
+                "Folder sync is unavailable on this device. Check that folder sync is installed and the link's folder is available, then try again.",
                 .retry
             ),
             (

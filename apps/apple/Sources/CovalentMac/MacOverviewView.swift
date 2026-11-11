@@ -13,6 +13,7 @@ struct MacOverviewView: View {
                         openLinks()
                     }
                     .buttonStyle(.borderedProminent)
+                    .accentFill()
                     .disabled(!model.isAuthorized)
                     .accessibilityIdentifier("status.createLink")
 
@@ -38,9 +39,12 @@ struct MacOverviewView: View {
                     Text(model.serviceStatusLabel)
                         .foregroundStyle(.primary)
                 }
+                if let update = model.status?.availableUpdate {
+                    MacUpdateNotice(update: update, managesLocalService: model.managesLocalService)
+                }
                 if model.phase != .ready {
                     Label(serviceGuidance, systemImage: serviceSymbol)
-                        .foregroundStyle(.secondary)
+                        .secondaryLabelStyle()
                     if model.phase == .offline {
                         Button("Try Again") { Task { await model.refresh() } }
                     } else if model.phase == .needsAuthorization {
@@ -63,6 +67,7 @@ struct MacOverviewView: View {
         .navigationTitle("Status")
         .accessibilityIdentifier("status.view")
         .task { await model.refreshFolders() }
+        .task { await model.refreshServiceStatus() }
     }
 
     @ViewBuilder
@@ -71,7 +76,7 @@ struct MacOverviewView: View {
             ProgressView("Checking links…")
         } else if let error = model.folderSyncError {
             Label(error, systemImage: "exclamationmark.triangle")
-                .foregroundStyle(.secondary)
+                .secondaryLabelStyle()
         } else if let status = model.folderSyncStatus, status.availability != "available" {
             Label("Link status is unavailable", systemImage: "exclamationmark.triangle")
             Text("Open Links for details and recovery actions.")
@@ -159,6 +164,45 @@ struct MacOverviewView: View {
     }
 }
 
+/// A quiet note that a newer Covalent release is published.
+///
+/// The app has no updater and is ad-hoc signed; it never downloads or
+/// installs anything. So the copy says what the person does next, and the
+/// only action opens the release page in their browser.
+struct MacUpdateNotice: View {
+    let update: AvailableUpdate
+    let managesLocalService: Bool
+    @Environment(\.openURL) private var openURL
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label {
+                Text("Covalent \(update.version) is available")
+                    .font(.body.weight(.semibold))
+            } icon: {
+                Image(systemName: "arrow.down.circle")
+                    .foregroundStyle(MacLabelColor.accentGlyph)
+                    .accessibilityHidden(true)
+            }
+            Text(
+                managesLocalService
+                    ? "Download it from the release page, then replace this copy of Covalent."
+                    : "Update your Covalent server the way it was installed, for example by updating its container."
+            )
+            .font(.callout)
+            .secondaryLabelStyle()
+            Button("Open Release Page") { openURL(update.releaseURL) }
+                .accessibilityHint("Opens the Covalent \(update.version) release page in your browser.")
+                .accessibilityIdentifier("update.openReleasePage")
+        }
+        .accessibilityElement(children: .contain)
+    }
+}
+
+/// A standalone notice with an icon, a title and optional actions.
+///
+/// `tint` colours the icon at full strength and washes the panel with it, so
+/// pass an opaque ``MacLabelColor`` token rather than a system colour.
 struct MacCallout<Actions: View>: View {
     let title: String
     let message: String
@@ -181,7 +225,7 @@ struct MacCallout<Actions: View>: View {
             actions()
         }
         .padding(16)
-        .background(tint.opacity(0.08), in: RoundedRectangle(cornerRadius: 14))
-        .overlay { RoundedRectangle(cornerRadius: 14).stroke(tint.opacity(0.22)) }
+        .background(tint.opacity(0.08), in: RoundedRectangle(cornerRadius: MacCornerRadius.card))
+        .overlay { RoundedRectangle(cornerRadius: MacCornerRadius.card).stroke(tint.opacity(0.22)) }
     }
 }

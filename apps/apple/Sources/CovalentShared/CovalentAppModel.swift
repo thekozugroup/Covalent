@@ -208,6 +208,10 @@ public final class CovalentAppModel: ObservableObject {
     /// normal alert detail and are never shown in the folder list.
     @Published public private(set) var folderSyncError: String?
     @Published public private(set) var folderSyncMutationInFlight = false
+    /// This device's own recorded causes for failed runs. `nil` when nothing
+    /// shown has failed, when the service predates the route, or when the
+    /// request failed: the Links view then keeps today's plain "Failed".
+    @Published public private(set) var folderRunFailures: FolderRunFailures?
     /// A failed helper restart must retry releasing retired sandbox scopes even
     /// after their bookmarks have already been removed from persistence.
     private var folderSyncScopeRefreshRequired = false
@@ -355,7 +359,7 @@ public final class CovalentAppModel: ObservableObject {
             // surfacing a bare "not found".
             alert = AppAlert(
                 title: "Quick pairing isn't available",
-                message: "Your backup server is running an older version that doesn't support quick pairing. "
+                message: "Your Covalent server is running an older version that doesn't support quick pairing. "
                     + "Update it, or pair using Advanced recovery.",
                 detail: ErrorPresenter.detail(for: error),
                 recovery: .chooseAnotherDevice
@@ -564,8 +568,8 @@ public final class CovalentAppModel: ObservableObject {
             report(
                 error,
                 title: localNodeBootstrapper == nil
-                    ? "Can't reach your backup server"
-                    : "Your backup server didn't start"
+                    ? "Can't reach your Covalent server"
+                    : "The local service didn't start"
             ) { [weak self] in
                 await self?.refresh()
             }
@@ -583,6 +587,7 @@ public final class CovalentAppModel: ObservableObject {
     private func refreshFoldersDuringMutation() async {
       guard configuration.apiToken != nil else {
         folderSyncStatus = nil
+        folderRunFailures = nil
         folderSyncError = "Connect to this Mac's local service to manage folders."
         return
       }
@@ -593,6 +598,7 @@ public final class CovalentAppModel: ObservableObject {
       do {
         let snapshot = try await reconciledFolderStatus()
         folderSyncStatus = snapshot
+        await refreshFolderRunFailures(for: snapshot)
         if snapshot.availability == "available", localNodeBootstrapper != nil {
           folderSyncLaunchState = folderSyncLaunchState(
             grants: directoryGrants,
@@ -605,8 +611,36 @@ public final class CovalentAppModel: ObservableObject {
       } catch {
         folderSyncLaunchState = nil
         folderSyncStatus = nil
+        folderRunFailures = nil
         folderSyncError = "Folder sync status is unavailable. Try again."
       }
+    }
+
+    /// Asks for causes only while a shown run has actually failed, so a
+    /// healthy Links list costs no extra request. Silent by design: any
+    /// failure here, including a 401 or an older service, means "no causes".
+    private func refreshFolderRunFailures(for snapshot: FolderSyncStatus) async {
+      let anyRunFailed = snapshot.shares.contains { share in
+        guard share.phase != .removed, let run = share.linkRun else { return false }
+        return run.phase == .interrupted || run.destinations.contains { $0.result == .failed }
+      }
+      guard anyRunFailed else {
+        folderRunFailures = nil
+        return
+      }
+      folderRunFailures = (try? await client.folderRunFailures()) ?? nil
+    }
+
+    /// True when this app started, and looks after, the service it talks to.
+    /// False when it was connected by hand to a Covalent server elsewhere.
+    public var managesLocalService: Bool { localNodeBootstrapper != nil }
+
+    /// Re-reads only the service status, which carries its version and the
+    /// release check. Silent: on any failure the last status stays in place,
+    /// and nothing changes unless the service is already ready.
+    public func refreshServiceStatus() async {
+      guard phase == .ready, let latest = try? await client.status(), phase == .ready else { return }
+      status = latest
     }
 
     private func reconciledFolderStatus() async throws -> FolderSyncStatus {
@@ -681,7 +715,7 @@ public final class CovalentAppModel: ObservableObject {
         return true
       } catch {
         invalidateFolderSyncLaunchState(unlessInitialScanBusy: error)
-        report(error, title: "Folder couldn't be shared") { [weak self] in
+        report(error, title: "Link couldn't be created") { [weak self] in
           _ = await self?.offerFolder(
             peerId: peerId,
             folderId: folderId,
@@ -710,13 +744,13 @@ public final class CovalentAppModel: ObservableObject {
           return true
         } catch {
           invalidateFolderSyncLaunchState(unlessInitialScanBusy: error)
-          report(error, title: "Destination couldn't be added") { [weak self] in
+          report(error, title: "Recipient couldn't be added") { [weak self] in
             await self?.retryFolderDestination(draft)
           }
           return false
         }
       } catch {
-        report(error, title: "Destination couldn't be added")
+        report(error, title: "Recipient couldn't be added")
         return false
       }
     }
@@ -728,7 +762,7 @@ public final class CovalentAppModel: ObservableObject {
         try await submitFolderOffer(draft)
       } catch {
         invalidateFolderSyncLaunchState(unlessInitialScanBusy: error)
-        report(error, title: "Destination couldn't be added")
+        report(error, title: "Recipient couldn't be added")
       }
     }
 
@@ -845,7 +879,7 @@ public final class CovalentAppModel: ObservableObject {
         return true
       } catch {
         invalidateFolderSyncLaunchState(unlessInitialScanBusy: error)
-        report(error, title: "Folder couldn't be accepted") { [weak self] in
+        report(error, title: "Invitation couldn't be accepted") { [weak self] in
           _ = await self?.acceptFolder(offerId: offerId, grant: grant)
         }
         return false
@@ -1339,7 +1373,7 @@ public final class CovalentAppModel: ObservableObject {
         try await removePendingFolderRepair(offerId: offerId)
         await refreshFoldersDuringMutation()
       } catch {
-        report(error, title: "Folder couldn't be removed")
+        report(error, title: "Link couldn't be removed")
       }
     }
 
@@ -2034,8 +2068,8 @@ public final class CovalentAppModel: ObservableObject {
         guard let grant = directoryGrants.first(where: { $0.id == id }) else { return }
         guard grant.purpose != .folderSync else {
             alert = AppAlert(
-                title: "Manage this folder in Folders",
-                message: "Stop sharing the folder from Folders before removing its access."
+                title: "Manage this folder in Links",
+                message: "Remove its link in Links before removing access to the folder."
             )
             return
         }
@@ -2558,7 +2592,7 @@ public final class CovalentAppModel: ObservableObject {
             let identity = try await client.transportIdentity()
             return "127.0.0.1:\(identity.peerPort)"
         } catch {
-            report(error, title: "Transport identity unavailable")
+            report(error, title: "This Mac's connection details are unavailable")
             return nil
         }
     }
@@ -2570,7 +2604,7 @@ public final class CovalentAppModel: ObservableObject {
                 endpoints: []
             )
         } catch {
-            report(error, title: "Invitation could not be created")
+            report(error, title: "Pairing file could not be created")
             return nil
         }
     }
@@ -2590,7 +2624,7 @@ public final class CovalentAppModel: ObservableObject {
                 inviterRoles: inviterRoles
             )
         } catch {
-            report(error, title: "Invitation could not be accepted")
+            report(error, title: "Pairing file could not be used")
             return nil
         }
     }
@@ -2627,7 +2661,7 @@ public final class CovalentAppModel: ObservableObject {
             await refresh()
             return confirmation
         } catch {
-            report(error, title: "Pairing could not be finalized")
+            report(error, title: "Pairing could not be finished")
             return nil
         }
     }
@@ -2644,7 +2678,7 @@ public final class CovalentAppModel: ObservableObject {
             providers = persisted
             return true
         } catch {
-            report(error, title: "Backup device could not be added")
+            report(error, title: "Device could not be added")
             return false
         }
     }
@@ -2978,7 +3012,7 @@ extension AppModelError: LocalizedError {
         case .settingsFileTooLarge: "The settings file is larger than the 2 MiB limit."
         case .transferTooLarge: "The pairing transfer is larger than the 2 MiB limit."
         case .pairingNotMutuallyConfirmed: "Both devices must sign the matching code before pairing can finish."
-        case .providerBindingMismatch: "The connected device did not match the transport identity signed during pairing."
+        case .providerBindingMismatch: "The connected device did not match the connection details both devices signed during pairing."
         }
     }
 }

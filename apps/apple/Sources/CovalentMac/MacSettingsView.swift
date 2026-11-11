@@ -81,7 +81,7 @@ struct MacSettingsView: View {
             Button("Check Again") { Task { await model.retryRecovery() } }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Covalent will check your backup devices again. Keep them online while the check runs.")
+            Text("Covalent will check your devices again. Keep them online while the check runs.")
         }
         .sheet(isPresented: $showOpenSourceNotices) {
             MacOpenSourceNoticesView()
@@ -94,6 +94,7 @@ struct MacSettingsView: View {
                 TextField("Device name", text: $deviceName)
                     .textFieldStyle(.roundedBorder)
                 Toggle("Find devices on the local network", isOn: $lanDiscoveryEnabled)
+                    .accentFill()
                 Text("Turning this off stops mDNS advertising and browsing. Manual addresses and Tailscale candidates remain available.")
                     .font(.caption)
                     .secondaryLabelStyle()
@@ -110,6 +111,7 @@ struct MacSettingsView: View {
                         }
                     }
                     .buttonStyle(.borderedProminent)
+                    .accentFill()
                     .disabled(!model.isAuthorized || isSaving || !fieldsChanged)
                 }
             }
@@ -143,7 +145,11 @@ struct MacSettingsView: View {
                     Button("Create Recovery Kit…") { confirmRecoveryExport = true }
                         .disabled(!model.isAuthorized || isExportingRecovery)
                         .accessibilityIdentifier("recovery.export")
-                    if isExportingRecovery { ProgressView().controlSize(.small) }
+                    if isExportingRecovery {
+                        ProgressView()
+                            .controlSize(.small)
+                            .accessibilityLabel("Creating recovery kit")
+                    }
                     if let phase = model.recoveryStatus?.phase,
                        [.pending, .partial, .blocked, .noCatalogs].contains(phase) {
                         Button("Check Again") { confirmRecoveryRetry = true }
@@ -162,7 +168,7 @@ struct MacSettingsView: View {
                     if status.newerSnapshotMayExist {
                         Label("A newer backup may exist on a device that has not responded yet.", systemImage: "exclamationmark.triangle.fill")
                             .font(.caption.weight(.semibold))
-                            .foregroundStyle(.orange)
+                            .foregroundStyle(MacLabelColor.warning)
                     }
                 }
             }
@@ -181,6 +187,7 @@ struct MacSettingsView: View {
                         HStack {
                             Image(systemName: grant.purpose == .backupSource ? "folder" : "folder.badge.plus")
                                 .foregroundStyle(MacLabelColor.accentGlyph)
+                                .accessibilityHidden(true)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(grant.displayName)
                                 Text(grant.purpose.displayName)
@@ -189,9 +196,9 @@ struct MacSettingsView: View {
                             }
                             Spacer()
                             if grant.purpose == .folderSync {
-                                Text("Manage in Folders")
+                                Text("Manage in Links")
                                     .font(.caption)
-                                    .foregroundStyle(.secondary)
+                                    .secondaryLabelStyle()
                             } else {
                                 Button("Remove", role: .destructive) { grantToRemove = grant }
                             }
@@ -215,7 +222,7 @@ struct MacSettingsView: View {
                         Task { await model.disconnect() }
                     }
                 }
-                Text("Your access token is only ever sent over an encrypted connection. An unencrypted address is accepted only when the backup server runs on this Mac.")
+                Text("Your access token is only ever sent over an encrypted connection. An unencrypted address is accepted only when the Covalent server runs on this Mac.")
                     .font(.caption)
                     .secondaryLabelStyle()
             }
@@ -224,18 +231,45 @@ struct MacSettingsView: View {
 
     private var platformLimits: some View {
         settingsSection("Background work", systemImage: "clock.arrow.circlepath") {
-            Text("Your backup server saves its progress and picks up interrupted work where it left off. Keep this Mac awake for long folder operations; Covalent does not run unrestricted in the background, only within what macOS allows.")
+            Text("Your Covalent server saves its progress and picks up interrupted work where it left off. Keep this Mac awake for long folder operations; Covalent does not run unrestricted in the background, only within what macOS allows.")
                 .secondaryLabelStyle()
         }
     }
 
     private var about: some View {
         settingsSection("About", systemImage: "info.circle") {
-            Button("Open Source Notices…") {
-                showOpenSourceNotices = true
+            VStack(alignment: .leading, spacing: 12) {
+                if let appVersion = Self.appVersion {
+                    LabeledContent("Version", value: appVersion)
+                        .accessibilityIdentifier("settings.version")
+                }
+                // The app and the service it talks to can differ when it is
+                // connected to a Covalent server elsewhere; say so only then.
+                if let serviceVersion = model.status?.displayVersion, serviceVersion != Self.appVersion {
+                    LabeledContent(
+                        model.managesLocalService ? "Local service version" : "Covalent server version",
+                        value: serviceVersion
+                    )
+                }
+                if let update = model.status?.availableUpdate {
+                    MacUpdateNotice(update: update, managesLocalService: model.managesLocalService)
+                } else if let summary = model.status?.updateCheckSummary {
+                    Text(summary)
+                        .font(.caption)
+                        .secondaryLabelStyle()
+                }
+                Button("Open Source Notices…") {
+                    showOpenSourceNotices = true
+                }
+                .accessibilityIdentifier("settings.openSourceNotices")
             }
-            .accessibilityIdentifier("settings.openSourceNotices")
         }
+        .task { await model.refreshServiceStatus() }
+    }
+
+    /// The same number the standard About panel shows.
+    private static var appVersion: String? {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
     }
 
     private func settingsSection<Content: View>(
@@ -249,7 +283,7 @@ struct MacSettingsView: View {
             content()
                 .padding(16)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
+                .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: MacCornerRadius.block))
         }
     }
 
@@ -333,11 +367,11 @@ struct MacSettingsView: View {
     private func recoveryStatusCopy(_ status: RecoveryStatus) -> String {
         switch status.phase {
         case .notConfigured: "No device recovery is in progress."
-        case .pending: "Recovery is waiting to check the selected backup devices."
-        case .imported: "Recovered \(status.recoveredBackups.count) backup\(status.recoveredBackups.count == 1 ? "" : "s") and checked all your backup devices."
-        case .partial: "Some backup devices have not confirmed recovery. Retry after they are reachable."
-        case .blocked: "Covalent could not safely recover a backup yet. Bring your backup devices online and try again."
-        case .noCatalogs: "All your backup devices were checked, but no backups were found."
+        case .pending: "Recovery is waiting to check the selected devices."
+        case .imported: "Recovered \(status.recoveredBackups.count) backup\(status.recoveredBackups.count == 1 ? "" : "s") and checked all your devices."
+        case .partial: "Some devices have not confirmed recovery. Retry after they are reachable."
+        case .blocked: "Covalent could not safely recover a backup yet. Bring your devices online and try again."
+        case .noCatalogs: "All your devices were checked, but no backups were found."
         }
     }
 }

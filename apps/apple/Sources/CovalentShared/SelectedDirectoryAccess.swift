@@ -245,7 +245,7 @@ extension SelectedDirectoryError: LocalizedError {
         case .permissionRevoked: "This folder is no longer available. Choose it again to restore access."
         case .accessDenied: "Covalent could not open this folder. Check its permission and try again."
         case .coordinationFailed: "The system could not coordinate safe access to this folder."
-        case .tooManyFolderSyncGrants: "Remove a shared folder before adding another one."
+        case .tooManyFolderSyncGrants: "Remove a link before adding another one."
         }
     }
 }
@@ -265,17 +265,17 @@ extension FolderAccessRepairError: LocalizedError {
     public var errorDescription: String? {
         switch self {
         case .repairNotRequired:
-            "Folder access is already available. Refresh Folders before making another change."
+            "Folder access is already available. Refresh Links before making another change."
         case .shareMissing:
-            "This shared folder is no longer available. Refresh Folders and choose the current share."
+            "This link is no longer available. Refresh Links and choose the current link."
         case .pendingRepairMissing:
             "Choose this folder again before retrying access repair."
         case .differentRepairAlreadyPending:
             "Finish the saved folder repair before choosing a different folder."
         case .ambiguousSavedAccess:
-            "Covalent can't safely match the saved access to this share. Repair or remove one shared folder at a time."
+            "Covalent can't safely match the saved access to this link. Repair or remove one link at a time."
         case .folderAlreadyUsed:
-            "That folder is already used by another shared folder. Choose a different folder."
+            "That folder is already used by another link. Choose a different folder."
         case .savedGrantMissing:
             "The saved folder access is missing. Choose the folder again."
         case .invalidSavedRepair:

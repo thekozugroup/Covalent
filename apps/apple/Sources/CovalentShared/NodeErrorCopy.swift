@@ -149,7 +149,7 @@ public enum NodeTransportCopy {
         let detail = ErrorDiagnostic.describe(error)
         guard let urlError = error as? URLError else {
             return NodeClientFailure(
-                summary: "Covalent could not reach your backup server.",
+                summary: "This app couldn't reach your Covalent server.",
                 detail: detail,
                 recovery: .retry
             )
@@ -163,7 +163,7 @@ public enum NodeTransportCopy {
     /// only realistic cause: the two sides are on different versions.
     public static func describeDecodingFailure(_ error: Error) -> NodeClientFailure {
         NodeClientFailure(
-            summary: "Covalent could not understand your backup server's reply. "
+            summary: "This app couldn't understand your Covalent server's reply. "
                 + "This usually means the app and the server are running different versions.",
             detail: ErrorDiagnostic.describe(error),
             recovery: .none
@@ -188,17 +188,17 @@ public enum NodeTransportCopy {
                 .checkNetworkSettings
             )
         case .internationalRoamingOff:
-            ("Data roaming is turned off, so Covalent can't reach your backup server.", .checkNetworkSettings)
+            ("Data roaming is turned off, so this app can't reach your Covalent server.", .checkNetworkSettings)
         case .callIsActive:
             ("A phone call is using the network. Try again once the call ends.", .retry)
         case .timedOut:
             (
-                "Your backup server didn't answer in time. Make sure it's turned on and awake, then try again.",
+                "Your Covalent server didn't answer in time. Make sure it's turned on and awake, then try again.",
                 .retry
             )
         case .cannotConnectToHost, .cannotFindHost, .dnsLookupFailed:
             (
-                "Covalent couldn't reach your backup server at this address. "
+                "This app couldn't reach your Covalent server at this address. "
                     + "Check that it's running and on the same network as this device.",
                 .reconnect
             )
@@ -215,7 +215,7 @@ public enum NodeTransportCopy {
             )
         case .secureConnectionFailed:
             (
-                "Covalent couldn't open a secure connection to your backup server. "
+                "This app couldn't open a secure connection to your Covalent server. "
                     + "Check that the server is reachable and its certificate is still valid.",
                 .reconnect
             )
@@ -225,16 +225,16 @@ public enum NodeTransportCopy {
                 .reconnect
             )
         case .userAuthenticationRequired:
-            ("Your backup server asked Covalent to sign in again.", .reconnect)
+            ("Your Covalent server asked this app to sign in again.", .reconnect)
         case .badServerResponse, .zeroByteResource, .cannotParseResponse:
             (
-                "Your backup server sent back something Covalent couldn't read. Try again in a moment.",
+                "Your Covalent server sent back something this app couldn't read. Try again in a moment.",
                 .retry
             )
         case .cancelled:
             ("Covalent stopped this request before it finished.", .retry)
         case .badURL, .unsupportedURL:
-            ("That backup server address isn't a complete web address.", .reconnect)
+            ("That Covalent server address isn't a complete web address.", .reconnect)
         case .cannotCreateFile, .cannotWriteToFile, .cannotRemoveFile, .cannotMoveFile, .cannotOpenFile:
             (
                 "Covalent ran out of room to stage this transfer on this device. Free up storage, then try again.",
@@ -243,15 +243,15 @@ public enum NodeTransportCopy {
         case .fileDoesNotExist, .fileIsDirectory, .noPermissionsToReadFile:
             ("Covalent lost access to a file it was working with. Choose the folder again.", .chooseFolderAgain)
         case .resourceUnavailable:
-            ("What Covalent asked for isn't available on your backup server right now.", .retry)
+            ("What this app asked for isn't available on your Covalent server right now.", .retry)
         case .redirectToNonExistentLocation, .httpTooManyRedirects:
             (
-                "Something on your network redirected Covalent away from your backup server. "
+                "Something on your network redirected this app away from your Covalent server. "
                     + "Check the address in setup.",
                 .reconnect
             )
         default:
-            ("Covalent could not reach your backup server.", .retry)
+            ("This app couldn't reach your Covalent server.", .retry)
         }
     }
 }
@@ -280,34 +280,34 @@ public enum NodeAPIErrorCopy {
     private static func fallback(status: Int, retryable: Bool) -> (String, RecoveryHint) {
         switch status {
         case 401, 403:
-            ("Your backup server refused this request. Reconnect this app to it.", .reconnect)
+            ("Your Covalent server refused this request. Reconnect this app to it.", .reconnect)
         case 404:
-            ("Covalent couldn't find that on your backup server.", .none)
+            ("This app couldn't find that on your Covalent server.", .none)
         case 408, 429:
-            ("Your backup server is busy. Try again in a moment.", .retry)
+            ("Your Covalent server is busy. Try again in a moment.", .retry)
         case 413:
-            ("That's larger than your backup server accepts in one go. Try a smaller folder.", .none)
+            ("That's larger than your Covalent server accepts in one go. Try a smaller folder.", .none)
         case 507:
-            ("Your backup server is out of space.", .freeUpSpace)
+            ("Your Covalent server is out of space.", .freeUpSpace)
         case 500...599:
             (
-                "Something went wrong on your backup server. Try again; if it keeps happening, check its logs.",
+                "Something went wrong on your Covalent server. Try again; if it keeps happening, check its logs.",
                 .retry
             )
         default:
             retryable
-                ? ("Your backup server couldn't complete that request. Try again in a moment.", .retry)
-                : ("Your backup server couldn't complete that request.", .none)
+                ? ("Your Covalent server couldn't complete that request. Try again in a moment.", .retry)
+                : ("Your Covalent server couldn't complete that request.", .none)
         }
     }
 
     private static let catalog: [String: (String, RecoveryHint)] = [
         // Authorization
         "authentication_required": (
-            "This app is no longer signed in to your backup server. Reconnect it to continue.", .reconnect
+            "This app is no longer signed in to your Covalent server. Reconnect it to continue.", .reconnect
         ),
         "not_authorized": (
-            "Your backup server refused this request. Reconnect this app to it.", .reconnect
+            "Your Covalent server refused this request. Reconnect this app to it.", .reconnect
         ),
         "invalid_certificate": (
             "Covalent doesn't trust this server's security certificate. Choose the certificate again in setup.",
@@ -316,11 +316,11 @@ public enum NodeAPIErrorCopy {
 
         // Capacity
         "insufficient_storage": (
-            "Your backup server is out of space. Free some up, or choose a different device to keep this copy.",
+            "Your Covalent server is out of space. Free some up, or choose a different device to keep this copy.",
             .freeUpSpace
         ),
         "resource_limit": (
-            "This is larger than your backup server can handle in one pass. Try backing up a smaller folder.",
+            "This is larger than your Covalent server can handle in one pass. Try backing up a smaller folder.",
             .none
         ),
 
@@ -332,10 +332,10 @@ public enum NodeAPIErrorCopy {
         "job_not_complete": ("This job hasn't finished yet. Wait for it to complete.", .none),
         "job_not_found": ("Covalent couldn't find this job. It may have already finished.", .none),
         "invalid_job_id": ("Covalent couldn't read this job's identifier. Start the operation again.", .retry),
-        "node_busy": ("Your backup server is busy with something else. Try again in a moment.", .retry),
-        "node_state_locked": ("Your backup server is applying another change. Try again in a moment.", .retry),
+        "node_busy": ("Your Covalent server is busy with something else. Try again in a moment.", .retry),
+        "node_state_locked": ("Your Covalent server is applying another change. Try again in a moment.", .retry),
         "archive_processing_timeout": (
-            "Your backup server took too long to work through this backup. "
+            "Your Covalent server took too long to work through this backup. "
                 + "Try again, or choose a smaller folder.",
             .retry
         ),
@@ -349,7 +349,7 @@ public enum NodeAPIErrorCopy {
             "Confirm that you want to create recovery files or retry recovery, then continue.", .none
         ),
         "recovery_not_configured": (
-            "This backup server was set up normally. To replace a lost device, start a new installation with its recovery files.", .none
+            "This Covalent server was set up normally. To replace a lost device, start a new installation with its recovery files.", .none
         ),
 
         // Source folder
@@ -363,7 +363,7 @@ public enum NodeAPIErrorCopy {
             "The folder you chose is no longer available to Covalent. Choose it again.", .chooseFolderAgain
         ),
         "folder_sync_unavailable": (
-            "Folder sync is unavailable on this device. Check that folder sync is installed and the shared folder is available, then try again.",
+            "Folder sync is unavailable on this device. Check that folder sync is installed and the link's folder is available, then try again.",
             .retry
         ),
         "folder_sync_busy": (
@@ -469,7 +469,7 @@ public enum NodeAPIErrorCopy {
             "Some of this backup's encrypted data is damaged. Verify the backup to see what can still be restored.",
             .none
         ),
-        "backup_unavailable": ("This backup isn't available on your backup server right now.", .retry),
+        "backup_unavailable": ("This backup isn't available on your Covalent server right now.", .retry),
         "invalid_archive": ("Covalent couldn't verify this backup's contents. Start the backup again.", .retry),
         "invalid_archive_entry": (
             "Covalent couldn't verify one of the files in this backup. Start the backup again.", .retry
@@ -501,7 +501,7 @@ public enum NodeAPIErrorCopy {
         // anything technical — so the copy names the next physical action every
         // time, and never asks them to reason about what went wrong.
         "claim_unavailable": (
-            "This backup server has already been set up by someone. "
+            "This Covalent server has already been set up by someone. "
                 + "If that wasn't you, restart Covalent on the server before going any further.",
             .none
         ),
@@ -526,7 +526,7 @@ public enum NodeAPIErrorCopy {
             "Setup codes are being entered too quickly. Wait a moment, then try again.", .retry
         ),
         "claim_certificate_unavailable": (
-            "This backup server is still preparing its security certificate. Wait a few seconds, then try again.",
+            "This Covalent server is still preparing its security certificate. Wait a few seconds, then try again.",
             .retry
         ),
 
@@ -536,7 +536,7 @@ public enum NodeAPIErrorCopy {
         // explicit override in the server's settings, so the copy names that
         // rather than reporting a condition.
         "peer_endpoint_unavailable": (
-            "This backup server doesn't know which address other devices should use to reach it. "
+            "This Covalent server doesn't know which address other devices should use to reach it. "
                 + "Set that address in its settings — containers usually need it filled in by hand — then try again.",
             .none
         ),
@@ -549,7 +549,7 @@ public enum NodeAPIErrorCopy {
             "That device turned down the pairing request. Nothing was trusted.", .chooseAnotherDevice
         ),
         "invitation_unavailable": (
-            "This pairing invitation has expired or was already used. Start pairing again.", .chooseAnotherDevice
+            "This pairing request has expired or was already used. Start pairing again.", .chooseAnotherDevice
         ),
         "protocol_incompatible": (
             "These two devices run versions of Covalent that can't work together. Update both, then try again.",
@@ -570,32 +570,32 @@ public enum NodeAPIErrorCopy {
 
         // Request contract — the app and the server disagree
         "invalid_contract": (
-            "This app and your backup server don't agree on how to talk to each other. "
+            "This app and your Covalent server don't agree on how to talk to each other. "
                 + "Update both to the same version.",
             .none
         ),
         "invalid_json": (
-            "This app and your backup server don't agree on how to talk to each other. "
+            "This app and your Covalent server don't agree on how to talk to each other. "
                 + "Update both to the same version.",
             .none
         ),
         "invalid_content_type": (
-            "This app and your backup server don't agree on how to talk to each other. "
+            "This app and your Covalent server don't agree on how to talk to each other. "
                 + "Update both to the same version.",
             .none
         ),
         "method_not_allowed": (
-            "This app asked for something your backup server doesn't offer. Update both to the same version.",
+            "This app asked for something your Covalent server doesn't offer. Update both to the same version.",
             .none
         ),
         "route_not_found": (
-            "This app asked for something your backup server doesn't offer. Update both to the same version.",
+            "This app asked for something your Covalent server doesn't offer. Update both to the same version.",
             .none
         ),
         "invalid_page_cursor": ("Covalent lost its place while loading this list. Try again.", .retry),
         "invalid_page_limit": ("Covalent lost its place while loading this list. Try again.", .retry),
         "internal_error": (
-            "Something went wrong on your backup server. Try again; if it keeps happening, check its logs.",
+            "Something went wrong on your Covalent server. Try again; if it keeps happening, check its logs.",
             .retry
         ),
     ]

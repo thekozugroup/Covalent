@@ -28,6 +28,7 @@ struct MacFirstLaunchRecoveryView: View {
                     }
                 }
                 .buttonStyle(.borderedProminent)
+                .accentFill()
                 .disabled(starting)
                 .accessibilityIdentifier("firstLaunch.setup")
                 Text("Start the local service, then pair a device and create a link.")
@@ -80,7 +81,7 @@ struct MacFirstLaunchRecoveryView: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Covalent will open your recovery files and check legacy backup devices. Keep those devices online while recovery runs.")
+            Text("Covalent will open your recovery files and check your other devices for legacy backups. Keep those devices online while recovery runs.")
         }
     }
 

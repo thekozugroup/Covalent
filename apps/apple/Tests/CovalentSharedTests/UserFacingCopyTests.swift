@@ -28,8 +28,9 @@ import Testing
         #expect(
             offenders.isEmpty,
             """
-            These strings show a person a word that only means something inside this repository.
-            Use the shared glossary — backup server, storage device, extra copy, backup — which
+            These strings show a person a word that only means something inside this repository,
+            or a term the shared glossary retired. Use the glossary — link, device, Covalent
+            server, recipient, pairing file — which
             `apps/android/app/src/main/res/values/strings.xml` also follows:
             \(offenders.joined(separator: "\n"))
             """
@@ -109,6 +110,10 @@ import Testing
         "endpoint", "endpoints", "epoch", "opaque locator",
         "durable", "resumable", "bearer", "mutually signed", "mutually finalized",
         "local API token", "covalent-node", "node-ready.json", "local-api-token",
+        // Retired by the shared glossary. These read as plain English, which
+        // is why they come back: "Covalent server", "invitation", and "the
+        // device that started pairing" / "the joining device" replace them.
+        "backup server", "backup servers", "folder offer", "inviter", "responder",
     ]
 
     /// Literals that are genuinely technical and correctly shown as-is.

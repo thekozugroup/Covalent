@@ -146,6 +146,7 @@ struct MacOpenSourceNoticesView: View {
                 switch state {
                 case .loading:
                     ProgressView()
+                        .accessibilityLabel("Loading notices")
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 case let .ready(text):
                     ScrollView {

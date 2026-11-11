@@ -1110,7 +1110,7 @@ extension AppleArchiveTransferError: LocalizedError {
         case .restoreDestinationMustBeEmpty:
             "Choose a writable restore folder so Covalent can inventory it before the signed preview."
         case .nonEmptyRestorePlan:
-            "Your backup server sent a restore plan that could change files already in that folder."
+            "Your Covalent server sent a restore plan that could change files already in that folder."
         case let .restorePlanMismatch(path): "The restore archive did not match its signed plan at \(path)."
         case .destinationChanged: "The restore folder changed after preview. Recheck the target and preview again."
         case let .sourceChanged(path): "The backup source changed while reading \(path). Retry after writes stop."

@@ -65,6 +65,7 @@ struct MacDevicesView: View {
             Spacer()
             Button("Find Devices") { Task { await model.refreshDiscovery() } }
                 .buttonStyle(.borderedProminent)
+                .accentFill()
                 .controlSize(.large)
                 .disabled(!model.isAuthorized)
                 .accessibilityIdentifier("devices.pair")
@@ -107,7 +108,7 @@ struct MacDevicesView: View {
                     title: "LAN discovery is off",
                     message: "Enter a LAN IP or Tailscale address above, or enable LAN discovery in Settings for automatic nearby-device hints.",
                     systemImage: "network.slash",
-                    tint: .secondary
+                    tint: MacLabelColor.secondary
                 ) {
                     Button("Settings") { model.selectedSection = .settings }
                 }
@@ -119,7 +120,7 @@ struct MacDevicesView: View {
                         + "discovery never grants trust automatically."
                 )
                 .frame(maxWidth: .infinity, minHeight: 180)
-                .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 14))
+                .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: MacCornerRadius.card))
             } else {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 260), spacing: 12)], spacing: 12) {
                     ForEach(model.discoveryCandidates) { candidate in
@@ -127,11 +128,12 @@ struct MacDevicesView: View {
                             HStack {
                                 Image(systemName: candidate.source == .tailscale ? "network.badge.shield.half.filled" : "dot.radiowaves.left.and.right")
                                     .foregroundStyle(MacLabelColor.accentGlyph)
+                                    .accessibilityHidden(true)
                                 Text(candidate.source.label).font(.headline)
                                 Spacer()
                                 Text(candidate.isCompatible ? "Protocol 1" : "Incompatible")
                                     .font(.caption)
-                                    .foregroundStyle(candidate.isCompatible ? Color.secondary : Color.orange)
+                                    .foregroundStyle(candidate.isCompatible ? MacLabelColor.secondary : MacLabelColor.warning)
                             }
                             Text(candidate.endpoint)
                                 .font(.subheadline.monospaced())
@@ -152,7 +154,7 @@ struct MacDevicesView: View {
                         }
                         .padding(15)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
+                        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: MacCornerRadius.block))
                     }
                 }
             }
@@ -178,7 +180,7 @@ struct MacDevicesView: View {
                     message: "Pair another device, then create a one-way folder link."
                 )
                 .frame(maxWidth: .infinity, minHeight: 180)
-                .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 14))
+                .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: MacCornerRadius.card))
             } else {
                 VStack(spacing: 0) {
                     ForEach(savedDeviceRows) { row in
@@ -187,6 +189,7 @@ struct MacDevicesView: View {
                                 .font(.title2)
                                 .foregroundStyle(MacLabelColor.accentGlyph)
                                 .frame(width: 34)
+                                .accessibilityHidden(true)
                             VStack(alignment: .leading, spacing: 3) {
                                 Text(row.displayName ?? row.address).font(.headline)
                                 if row.displayName != nil {
@@ -219,7 +222,7 @@ struct MacDevicesView: View {
                                         systemImage: reachability.connectionStatusSymbol
                                     )
                                     .font(.caption)
-                                    .foregroundStyle(reachability == .reachable ? Color.green : Color.secondary)
+                                    .foregroundStyle(reachability == .reachable ? MacLabelColor.success : MacLabelColor.secondary)
                                     .accessibilityLabel("\(row.accessibilityName), \(reachability.connectionStatusLabel)")
                                 }
                             } else {
@@ -228,7 +231,7 @@ struct MacDevicesView: View {
                                     systemImage: ProviderReachability.unknown.connectionStatusSymbol
                                 )
                                 .font(.caption)
-                                .foregroundStyle(.secondary)
+                                .secondaryLabelStyle()
                                 .accessibilityLabel("\(row.accessibilityName), status unknown")
                             }
                             Menu {
@@ -266,7 +269,7 @@ struct MacDevicesView: View {
                         if row.id != savedDeviceRows.last?.id { Divider().padding(.leading, 62) }
                     }
                 }
-                .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 14))
+                .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: MacCornerRadius.card))
             }
             // The expansion is bound to explicit state, and the whole label row
             // toggles it. Left to itself, SwiftUI gives this group an
@@ -279,7 +282,7 @@ struct MacDevicesView: View {
             // in is a glyph a few points wide.
             DisclosureGroup(isExpanded: $isAdvancedRecoveryExpanded) {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Legacy recovery only: exchange signed setup files by hand when network pairing cannot be used, or when reconnecting an older backup server.")
+                    Text("Legacy recovery only: exchange signed setup files by hand when network pairing cannot be used, or when reconnecting an older Covalent server.")
                         .font(.caption)
                         .secondaryLabelStyle()
                     Button("Offline Pairing with Signed Files…") { model.requestManualPairing() }
@@ -301,9 +304,9 @@ struct MacDevicesView: View {
     private var trustExplanation: some View {
         MacCallout(
             title: "Pairing and transport are separate safeguards",
-            message: "Both devices first sign the same permissions and the same comparison code. The storage connection then locks onto the exact certificate that was exchanged through that confirmed channel.",
+            message: "Both devices first sign the same permissions and the same confirmation code. The storage connection then locks onto the exact certificate that was exchanged through that confirmed channel.",
             systemImage: "checkmark.shield",
-            tint: .blue
+            tint: MacLabelColor.accentGlyph
         ) {
             EmptyView()
         }
@@ -345,7 +348,8 @@ struct MacProviderConnectionView: View {
                     TextEditor(text: $signedTransportJSON)
                         .font(.caption.monospaced())
                         .frame(height: 220)
-                        .overlay { RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.25)) }
+                        .clipShape(RoundedRectangle(cornerRadius: MacCornerRadius.block))
+                        .overlay { RoundedRectangle(cornerRadius: MacCornerRadius.block).stroke(Color.secondary.opacity(0.25)) }
                 }
                 Text("A legacy backup connection checks the other device's identity, name, address, certificate, and certificate fingerprint against what both devices signed during pairing. Every one must match exactly.")
                     .font(.caption)
@@ -365,6 +369,7 @@ struct MacProviderConnectionView: View {
                     }
                 }
                 .buttonStyle(.borderedProminent)
+                .accentFill()
                 .keyboardShortcut(.defaultAction)
                 .disabled(
                     signedTransportJSON.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -379,8 +384,8 @@ struct MacProviderConnectionView: View {
 
 struct MacPairingView: View {
     enum Mode: String, CaseIterable, Identifiable {
-        case invite = "Invite a device"
-        case join = "Join an invitation"
+        case invite = "Start Pairing"
+        case join = "Join Pairing"
         var id: String { rawValue }
     }
 
@@ -436,11 +441,11 @@ struct MacPairingView: View {
 
     private var inviteFlow: some View {
         VStack(alignment: .leading, spacing: 16) {
-            pairingStep(1, "Create a 10-minute invitation") {
-                Text("Covalent signs this Mac's reachable transport automatically. No address or certificate entry is required.")
+            pairingStep(1, "Create a pairing file (valid 10 minutes)") {
+                Text("Covalent adds this Mac's address and certificate for you. You don't need to enter either.")
                     .font(.caption)
                     .secondaryLabelStyle()
-                Button("Create Invitation") {
+                Button("Create Pairing File") {
                     isWorking = true
                     Task {
                         if let invitation = await model.createInvitation(),
@@ -451,18 +456,20 @@ struct MacPairingView: View {
                     }
                 }
                 .buttonStyle(.borderedProminent)
+                .accentFill()
                 .disabled(isWorking)
                 if !transferJSON.isEmpty {
-                    transferBox(title: "Send this invitation to the other device", text: transferJSON)
+                    transferBox(title: "Send this pairing file to the other device", text: transferJSON)
                 }
             }
 
-            pairingStep(2, "Paste the signed response and compare codes") {
-                transferEditor(text: $sessionJSON, prompt: "Paste the other device's signed reply")
+            pairingStep(2, "Paste the reply file and compare codes") {
+                transferEditor(text: $sessionJSON, prompt: "Paste the other device's reply file")
                 if let session = try? model.pairingSession(from: sessionJSON) {
                     pairingConsent(session)
                     authenticationCode(session.authenticationString)
                     Toggle("I compared this code on both physical devices", isOn: $comparedCode)
+                        .accentFill()
                     Button(session.inviterConfirmationSignature == nil ? "Confirm This Mac" : "This Mac Confirmed") {
                         isWorking = true
                         Task {
@@ -476,17 +483,18 @@ struct MacPairingView: View {
                     }
                     .disabled(!comparedCode || session.inviterConfirmationSignature != nil || isWorking)
                     if session.inviterConfirmationSignature != nil {
-                        transferBox(title: "Return this signed session, then paste the final response here", text: sessionJSON)
+                        transferBox(title: "Send this final file back to the other device", text: sessionJSON)
                     }
                 }
             }
 
-            pairingStep(3, "Finalize mutual trust") {
-                Text("After the other device signs the same code, paste its returned session above.")
+            pairingStep(3, "Finish pairing") {
+                Text("After the other device confirms the same code, paste its reply file above.")
                     .font(.caption)
                     .secondaryLabelStyle()
-                Button("Finalize Pairing") { finalize(asInviter: true) }
+                Button("Finish Pairing") { finalize(asInviter: true) }
                     .buttonStyle(.borderedProminent)
+                    .accentFill()
                     .disabled(!sessionIsMutuallySigned || isWorking)
             }
         }
@@ -494,22 +502,22 @@ struct MacPairingView: View {
 
     private var joinFlow: some View {
         VStack(alignment: .leading, spacing: 16) {
-            pairingStep(1, "Paste an invitation and choose exact roles") {
-                transferEditor(text: $transferJSON, prompt: "Paste the invitation")
+            pairingStep(1, "Paste the pairing file and choose permissions") {
+                transferEditor(text: $transferJSON, prompt: "Paste the pairing file")
                 if let invitation = try? model.pairingInvitation(from: transferJSON) {
-                    Label("Invitation from \(invitation.inviterDeviceName)", systemImage: "checkmark.seal")
+                    Label("Pairing file from \(invitation.inviterDeviceName)", systemImage: "checkmark.seal")
                         .font(.subheadline)
                     DisclosureGroup("Permissions to grant") {
                         VStack(alignment: .leading, spacing: 8) {
                             Text("This device can…").font(.caption.weight(.semibold))
                             roleToggles(selection: $responderRoles)
                             Divider()
-                            Text("Inviting device can…").font(.caption.weight(.semibold))
+                            Text("The device that started pairing can…").font(.caption.weight(.semibold))
                             roleToggles(selection: $inviterRoles)
                         }
                         .padding(.top, 8)
                     }
-                    Button("Accept Invitation") {
+                    Button("Use Pairing File") {
                         isWorking = true
                         Task {
                             if let session = await model.acceptInvitation(
@@ -523,15 +531,17 @@ struct MacPairingView: View {
                         }
                     }
                     .buttonStyle(.borderedProminent)
+                    .accentFill()
                     .disabled(isWorking)
                 }
             }
 
             if let session = try? model.pairingSession(from: sessionJSON) {
-                pairingStep(2, "Compare and sign the code") {
+                pairingStep(2, "Compare and confirm the code") {
                     pairingConsent(session)
                     authenticationCode(session.authenticationString)
                     Toggle("I compared this code on both physical devices", isOn: $comparedCode)
+                        .accentFill()
                     Button(session.responderConfirmationSignature == nil ? "Confirm This Mac" : "This Mac Confirmed") {
                         isWorking = true
                         Task {
@@ -545,16 +555,17 @@ struct MacPairingView: View {
                     }
                     .disabled(!comparedCode || session.responderConfirmationSignature != nil || isWorking)
                     if session.responderConfirmationSignature != nil {
-                        transferBox(title: "Send this signed session to the inviter", text: sessionJSON)
-                        Text("Paste the reply that the inviting device signed and returned into the box below.")
+                        transferBox(title: "Send this reply file to the other device", text: sessionJSON)
+                        Text("Paste the final file that the other device sends back into the box below.")
                             .font(.caption)
                             .secondaryLabelStyle()
-                        transferEditor(text: $sessionJSON, prompt: "Paste final signed session")
+                        transferEditor(text: $sessionJSON, prompt: "Paste the final file")
                     }
                 }
-                pairingStep(3, "Finalize mutual trust") {
-                    Button("Finalize Pairing") { finalize(asInviter: false) }
+                pairingStep(3, "Finish pairing") {
+                    Button("Finish Pairing") { finalize(asInviter: false) }
                         .buttonStyle(.borderedProminent)
+                        .accentFill()
                         .disabled(!sessionIsMutuallySigned || isWorking)
                 }
             }
@@ -571,7 +582,7 @@ struct MacPairingView: View {
                 .font(.caption.weight(.bold))
                 .foregroundStyle(.white)
                 .frame(width: 24, height: 24)
-                .background(Color.blue, in: Circle())
+                .background(MacFillColor.accent, in: Circle())
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 10) {
                 Text(title).font(.headline)
@@ -598,7 +609,7 @@ struct MacPairingView: View {
                 }
             }
             .padding(10)
-            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: MacCornerRadius.block))
         }
     }
 
@@ -607,7 +618,8 @@ struct MacPairingView: View {
             TextEditor(text: text)
                 .font(.caption.monospaced())
                 .frame(height: 72)
-                .overlay { RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.25)) }
+                .clipShape(RoundedRectangle(cornerRadius: MacCornerRadius.block))
+                .overlay { RoundedRectangle(cornerRadius: MacCornerRadius.block).stroke(Color.secondary.opacity(0.25)) }
             if text.wrappedValue.isEmpty {
                 Text(prompt)
                     .font(.caption)
@@ -621,32 +633,32 @@ struct MacPairingView: View {
 
     private func authenticationCode(_ code: String) -> some View {
         VStack(spacing: 5) {
-            Text("Comparison code")
+            Text("Confirmation code")
                 .font(.caption)
                 .secondaryLabelStyle()
             Text(code)
                 .font(.system(.title2, design: .monospaced, weight: .semibold))
                 .textSelection(.enabled)
-                .accessibilityLabel("Comparison code \(code.replacingOccurrences(of: "-", with: " "))")
+                .accessibilityLabel("Confirmation code \(code.replacingOccurrences(of: "-", with: " "))")
         }
         .padding(12)
         .frame(maxWidth: .infinity)
-        .background(Color.blue.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+        .background(MacFillColor.accentTint, in: RoundedRectangle(cornerRadius: MacCornerRadius.block))
     }
 
     private func pairingConsent(_ session: PairingSession) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Exact signed consent").font(.caption.weight(.semibold))
-            Text("Inviter: \(session.invitation.inviterDeviceName.isEmpty ? "Unnamed device" : session.invitation.inviterDeviceName) · \(session.invitation.inviterDeviceId.uuidString)")
-            Text("Inviter receives: \(roleSummary(session.inviterRoles))")
+            Text("What both devices are agreeing to").font(.caption.weight(.semibold))
+            Text("Started pairing: \(session.invitation.inviterDeviceName.isEmpty ? "Unnamed device" : session.invitation.inviterDeviceName) · \(session.invitation.inviterDeviceId.uuidString)")
+            Text("Starting device can: \(roleSummary(session.inviterRoles))")
             Divider()
-            Text("Responder: \(session.responderName) · \(session.responderDeviceId.uuidString)")
-            Text("Responder receives: \(roleSummary(session.responderRoles))")
+            Text("Joining: \(session.responderName) · \(session.responderDeviceId.uuidString)")
+            Text("Joining device can: \(roleSummary(session.responderRoles))")
         }
         .font(.caption)
         .textSelection(.enabled)
         .padding(10)
-        .background(Color.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+        .background(MacFillColor.warningTint, in: RoundedRectangle(cornerRadius: MacCornerRadius.block))
         .accessibilityElement(children: .combine)
     }
 
@@ -663,6 +675,7 @@ struct MacPairingView: View {
                 if enabled { selection.wrappedValue.insert(role) }
                 else { selection.wrappedValue.remove(role) }
             })
+            .accentFill()
         }
     }
 
@@ -690,7 +703,8 @@ struct MacPairingView: View {
             Spacer()
             Image(systemName: "checkmark.circle.fill")
                 .scaledSymbolFont(size: 54)
-                .foregroundStyle(.green)
+                .foregroundStyle(MacLabelColor.success)
+                .accessibilityHidden(true)
             Text("Pairing Complete").font(.title.weight(.semibold))
             Text("\(peer.displayName) is trusted with exactly the roles both devices approved.")
                 .secondaryLabelStyle()
@@ -710,6 +724,7 @@ struct MacPairingView: View {
                     }
                 }
                 .buttonStyle(.borderedProminent)
+                .accentFill()
                 .keyboardShortcut(.defaultAction)
                 .disabled(isAddingBackupDevice)
                 .accessibilityIdentifier("pairing.useAsBackupDevice")
@@ -722,6 +737,7 @@ struct MacPairingView: View {
                     .multilineTextAlignment(.center)
                 Button("Done") { dismiss() }
                     .buttonStyle(.borderedProminent)
+                    .accentFill()
                     .keyboardShortcut(.defaultAction)
             }
             Spacer()
@@ -763,7 +779,7 @@ struct MacNetworkPairingView: View {
         VStack(spacing: 22) {
             Image(systemName: current.state == .complete ? "checkmark.shield.fill" : "laptopcomputer.and.iphone")
                 .scaledSymbolFont(size: 52)
-                .foregroundStyle(current.state == .failed ? .red : .blue)
+                .foregroundStyle(current.state == .failed ? MacLabelColor.danger : MacLabelColor.accentGlyph)
                 .accessibilityHidden(true)
             Text(title)
                 .font(.title.weight(.semibold))
@@ -781,11 +797,11 @@ struct MacNetworkPairingView: View {
                     Text(current.authenticationString)
                         .font(.system(.title, design: .monospaced, weight: .semibold))
                         .textSelection(.enabled)
-                        .accessibilityLabel("Comparison code \(current.authenticationString.replacingOccurrences(of: "-", with: " "))")
+                        .accessibilityLabel("Confirmation code \(current.authenticationString.replacingOccurrences(of: "-", with: " "))")
                 }
                 .padding(16)
                 .frame(maxWidth: 400)
-                .background(Color.blue.opacity(0.09), in: RoundedRectangle(cornerRadius: 12))
+                .background(MacFillColor.accentTint, in: RoundedRectangle(cornerRadius: MacCornerRadius.block))
             }
 
             switch current.state {
@@ -798,6 +814,7 @@ struct MacNetworkPairingView: View {
                     }
                 }
                 .buttonStyle(.borderedProminent)
+                .accentFill()
                 .controlSize(.large)
                 .disabled(isWorking)
                 .accessibilityIdentifier("networkPairing.confirm")
@@ -807,19 +824,21 @@ struct MacNetworkPairingView: View {
                 if model.isProviderReady(for: current) {
                     Label("Device ready for links", systemImage: "checkmark.circle.fill")
                         .font(.headline)
-                        .foregroundStyle(.green)
+                        .foregroundStyle(MacLabelColor.success)
                     Button("Done") { finish() }
                         .buttonStyle(.borderedProminent)
+                        .accentFill()
                         .keyboardShortcut(.defaultAction)
                 } else {
                     ProgressView("Saving the signed connection to this device…")
                 }
             case .failed:
                 Text(current.failureMessage ?? "The devices could not finish pairing.")
-                    .foregroundStyle(.red)
+                    .foregroundStyle(MacLabelColor.danger)
                     .multilineTextAlignment(.center)
                 Button("Close") { finish() }
                     .buttonStyle(.borderedProminent)
+                    .accentFill()
             }
 
             if current.state != .complete && current.state != .failed {

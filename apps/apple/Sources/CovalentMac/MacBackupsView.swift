@@ -141,7 +141,7 @@ private struct MacSnapshotDetail: View {
                 .scaledSymbolFont(size: 34)
                 .foregroundStyle(MacLabelColor.accentGlyph)
                 .scaledSymbolFrame(52)
-                .background(Color.blue.opacity(0.1), in: RoundedRectangle(cornerRadius: 12))
+                .background(MacFillColor.accentTint, in: RoundedRectangle(cornerRadius: MacCornerRadius.block))
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 5) {
                 Text(snapshot.displayName)
@@ -169,7 +169,7 @@ private struct MacSnapshotDetail: View {
                 ? "The check found missing or damaged data on this Mac. Repair can use intact copies from the storage devices you selected."
                 : "The backup was saved on this Mac, but one or more devices you selected did not confirm receiving every part of it.",
             systemImage: "exclamationmark.triangle.fill",
-            tint: .orange
+            tint: MacLabelColor.warning
         ) {
             Button("Verify") { Task { _ = await model.verify(snapshot) } }
                 .disabled(model.activeTask != nil)
@@ -192,7 +192,7 @@ private struct MacSnapshotDetail: View {
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: MacCornerRadius.block))
         .accessibilityElement(children: .combine)
     }
 
@@ -211,6 +211,7 @@ private struct MacSnapshotDetail: View {
                     HStack {
                         Image(systemName: "server.rack")
                             .foregroundStyle(MacLabelColor.accentGlyph)
+                            .accessibilityHidden(true)
                         VStack(alignment: .leading) {
                             Text(providerName(providerId))
                             Text(providerId.uuidString)
@@ -229,17 +230,17 @@ private struct MacSnapshotDetail: View {
                                     systemImage: reachability.connectionStatusSymbol
                                 )
                                 .font(.caption)
-                                .foregroundStyle(reachability == .reachable ? Color.green : Color.secondary)
+                                .foregroundStyle(reachability == .reachable ? MacLabelColor.success : MacLabelColor.secondary)
                                 .accessibilityLabel("\(providerName(providerId)), \(reachability.connectionStatusLabel)")
                             }
                         } else {
                             Label("No saved connection", systemImage: "questionmark.circle")
                                 .font(.caption)
-                                .foregroundStyle(.secondary)
+                                .secondaryLabelStyle()
                         }
                     }
                     .padding(12)
-                    .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
+                    .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: MacCornerRadius.block))
                 }
             }
         }
@@ -254,6 +255,7 @@ private struct MacSnapshotDetail: View {
             HStack {
                 Button("Preview Restore…") { onRestore() }
                     .buttonStyle(.borderedProminent)
+                    .accentFill()
                     .controlSize(.large)
                     .disabled(model.activeTask != nil)
                     .accessibilityIdentifier("snapshot.previewRestore")
@@ -342,6 +344,7 @@ struct MacRestoreSetupView: View {
                 Spacer()
                 Button("Create Preview") { requestPreview() }
                 .buttonStyle(.borderedProminent)
+                .accentFill()
                 .keyboardShortcut(.defaultAction)
                 .disabled(destinationGrantId == nil || isPreparing)
             }
@@ -426,7 +429,7 @@ struct MacRestorePreviewView: View {
                     VStack(alignment: .leading, spacing: 5) {
                         Text("Restore Preview")
                             .font(.title.weight(.semibold))
-                        Text("No files have been written. Your backup server signed the exact contents and actions this restore will perform.")
+                        Text("No files have been written. Your Covalent server signed the exact contents and actions this restore will perform.")
                             .secondaryLabelStyle()
                     }
                     Spacer()
@@ -454,7 +457,7 @@ struct MacRestorePreviewView: View {
                 if !hasSignedTargetInventory {
                     Label("This preview has no signed destination inventory. Create a new preview before restoring.", systemImage: "exclamationmark.triangle.fill")
                         .font(.subheadline)
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(MacLabelColor.warning)
                 } else {
                     Label("Restore is confined to \(context.destinationDisplayName). Any folder change stops it.", systemImage: "checkmark.shield")
                         .font(.subheadline)
@@ -469,6 +472,7 @@ struct MacRestorePreviewView: View {
                 }
                 Button("Restore") { requestRestore() }
                 .buttonStyle(.borderedProminent)
+                .accentFill()
                 .disabled(!canRestore)
                 .accessibilityIdentifier("restore.execute")
             }
@@ -525,7 +529,7 @@ struct MacRestoreResultView: View {
         VStack(spacing: 22) {
             Image(systemName: "checkmark.circle.fill")
                 .scaledSymbolFont(size: 54)
-                .foregroundStyle(.green)
+                .foregroundStyle(MacLabelColor.success)
                 .accessibilityHidden(true)
             VStack(spacing: 6) {
                 Text("Restore Complete")
@@ -541,10 +545,11 @@ struct MacRestoreResultView: View {
             }
             if result.rejectedProviderCopies > 0 {
                 Label("\(result.rejectedProviderCopies) invalid copies from storage devices were rejected.", systemImage: "checkmark.shield")
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(MacLabelColor.warning)
             }
             Button("Done", action: done)
                 .buttonStyle(.borderedProminent)
+                .accentFill()
                 .keyboardShortcut(.defaultAction)
         }
         .padding(32)

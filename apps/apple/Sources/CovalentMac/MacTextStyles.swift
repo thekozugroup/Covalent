@@ -67,10 +67,38 @@ enum MacLabelColor {
 
     /// Opaque blue for decorative glyphs inside combined accessibility
     /// elements. It preserves contrast on the app's system backgrounds.
+    /// Kozu Cobalt 800 / 200: 7.5:1 on the light window, 9.0:1 on the dark.
     static let accentGlyph = dynamic(
         named: "CovalentAccentGlyph",
-        light: NSColor(red: 0.0, green: 0.157, blue: 0.431, alpha: 1),
-        dark: NSColor(red: 0.784, green: 0.886, blue: 1.0, alpha: 1)
+        light: srgb(0x2539B8),
+        dark: srgb(0xC0DAFF)
+    )
+
+    // Status text. System `.orange`, `.green` and `.red` are tuned as fills:
+    // as text on the light window they measure roughly 2:1 to 4:1. These are
+    // the Kozu status ramps, one step darker in light mode than the web and
+    // Android apps use, because the macOS window background is #ECECEC rather
+    // than white. Each clears 6:1 on the window and 7:1 on a white card.
+
+    /// Something needs review or did not finish. Replaces `.orange` text.
+    static let warning = dynamic(
+        named: "CovalentWarningLabel",
+        light: srgb(0x953D00),
+        dark: srgb(0xFABC00)
+    )
+
+    /// Something is connected or completed. Replaces `.green` text.
+    static let success = dynamic(
+        named: "CovalentSuccessLabel",
+        light: srgb(0x016630),
+        dark: srgb(0x05DF72)
+    )
+
+    /// Something failed or is about to be destroyed. Replaces `.red` text.
+    static let danger = dynamic(
+        named: "CovalentDangerLabel",
+        light: srgb(0x9F0712),
+        dark: srgb(0xFFA3A4)
     )
 
     /// Builds an appearance-aware opaque colour.
@@ -84,6 +112,57 @@ enum MacLabelColor {
             appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? dark : light
         })
     }
+
+    /// An opaque sRGB colour from a `0xRRGGBB` literal, so the values here read
+    /// the same as the Kozu tokens they are taken from.
+    static func srgb(_ hex: UInt32) -> NSColor {
+        NSColor(
+            srgbRed: CGFloat((hex >> 16) & 0xFF) / 255,
+            green: CGFloat((hex >> 8) & 0xFF) / 255,
+            blue: CGFloat(hex & 0xFF) / 255,
+            alpha: 1
+        )
+    }
+}
+
+/// Opaque fills from the Kozu Cobalt and status ramps.
+///
+/// These replace `Color.blue.opacity(…)` and `Color.orange.opacity(…)`, which
+/// blended with whatever sat behind them and so rendered a different colour on
+/// a window, a card and a sheet. Text placed on the tints keeps at least 7:1
+/// with ``MacLabelColor/secondary`` and ``MacLabelColor/accentGlyph``.
+enum MacFillColor {
+    /// The accent: prominent buttons, switches, checkboxes, progress bars and
+    /// badges. Apply it to a control with `accentFill()`.
+    ///
+    /// The same value in both appearances. Kozu's dark accent is the lighter
+    /// #96C4FF, but a prominent macOS button keeps its white label, and white
+    /// on #96C4FF is 1.8:1. White on this is 5.3:1.
+    static let accent = Color(nsColor: MacLabelColor.srgb(0x2C5AFC))
+
+    /// Quiet blue panel behind an icon tile or a code to compare.
+    static let accentTint = MacLabelColor.dynamic(
+        named: "CovalentAccentTint",
+        light: MacLabelColor.srgb(0xDCEAFF),
+        dark: MacLabelColor.srgb(0x23378E)
+    )
+
+    /// Quiet amber panel behind details to check before agreeing.
+    static let warningTint = MacLabelColor.dynamic(
+        named: "CovalentWarningTint",
+        light: MacLabelColor.srgb(0xFFFBEB),
+        dark: MacLabelColor.srgb(0x461901)
+    )
+}
+
+/// The two corner radii the app draws itself. Native controls keep their own.
+enum MacCornerRadius {
+    /// A large standalone panel: an empty state, a list card, a callout.
+    static let card: CGFloat = 28
+
+    /// A block nested inside a view or card: a tile, a notice, a field.
+    /// Blocks have 10 to 16 points of padding, too little for ``card``.
+    static let block: CGFloat = 12
 }
 
 /// An empty-state panel whose text colours the app controls.
@@ -145,4 +224,18 @@ extension View {
         foregroundStyle(MacLabelColor.secondary)
     }
 
+    /// Gives one native control the Kozu accent in place of the system one.
+    ///
+    /// Use it only on a control that *fills* with its tint and draws its own
+    /// contrasting label or knob over it: a `.borderedProminent` button, a
+    /// switch, a checkbox, a progress bar.
+    ///
+    /// It is deliberately not set once on the window. A tint is inherited, and
+    /// since macOS 26 an ordinary bordered button that inherits one draws its
+    /// *label* in that colour. Every secondary button in the app would turn
+    /// blue, and in dark mode ``MacFillColor/accent`` as text on the window
+    /// measures about 3:1.
+    func accentFill() -> some View {
+        tint(MacFillColor.accent)
+    }
 }

@@ -169,7 +169,7 @@ import Testing
             #expect(!described.contains("NSURLErrorDomain"))
             #expect(!described.contains("Error Domain"))
             #expect(!described.contains("UserInfo"))
-            #expect(described.contains("backup server"))
+            #expect(described.contains("Covalent server"))
             #expect(error.recoveryHint != RecoveryHint.none)
             // The raw text is still available, just not leading.
             #expect(error.diagnosticDetail?.isEmpty == false)

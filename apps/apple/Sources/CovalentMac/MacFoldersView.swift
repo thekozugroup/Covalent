@@ -35,7 +35,7 @@ struct MacFoldersView: View {
                   Text("Stopped on This Mac")
                   Text("Covalent will confirm removal when \(peerName(for: share, status: status)) reconnects. Files stay on both devices.")
                     .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .secondaryLabelStyle()
                 }
                 .padding(.vertical, 4)
               }
@@ -83,7 +83,7 @@ struct MacFoldersView: View {
         Text(newLinkConsequenceConfirmation)
       }
       .confirmationDialog(
-        "Remove Shared Folder?",
+        "Remove Link?",
         isPresented: Binding(
           get: { folderBeingRemoved != nil },
           set: { if !$0 { folderBeingRemoved = nil } }
@@ -96,7 +96,7 @@ struct MacFoldersView: View {
         }
         Button("Cancel", role: .cancel) {}
       } message: {
-        Text("Sync stops on this Mac now and on the other device when it reconnects. Files stay on both devices.")
+        Text("This link stops on this Mac now and on the other device when it reconnects. Files stay on both devices.")
       }
     }
 
@@ -104,7 +104,7 @@ struct MacFoldersView: View {
     private var folderContent: some View {
       if model.folderSyncLoading && model.folderSyncStatus == nil {
         Section {
-          ProgressView("Checking Folder Sync…")
+          ProgressView("Checking links…")
         }
       } else if let message = model.folderSyncError {
         unavailableSection(
@@ -117,10 +117,10 @@ struct MacFoldersView: View {
         if status.issue == "folderAccess", !shares.isEmpty {
           Section {
             Label(
-              "Choose each affected folder again. Covalent keeps the existing share and files while restoring access.",
+              "Choose each affected folder again. Covalent keeps the existing link and files while restoring access.",
               systemImage: "exclamationmark.folder"
             )
-            .foregroundStyle(.secondary)
+            .secondaryLabelStyle()
             .accessibilityLabel("Folder access needs attention")
             .accessibilityValue("Choose the affected folder again to restore access.")
           } header: {
@@ -135,31 +135,35 @@ struct MacFoldersView: View {
           )
         } else if status.isInitialScanning && shares.isEmpty {
           Section {
-            ContentUnavailableView(
-              "Checking Folders",
+            MacEmptyState(
               systemImage: "folder.badge.gearshape",
-              description: Text("Covalent is checking local folder contents before sync starts.")
+              title: "Checking Folders",
+              message: "Covalent is checking local folder contents before links run."
             )
+            .frame(maxWidth: .infinity)
           }
         } else if shares.isEmpty {
-          Section {
-            ContentUnavailableView(
-              "Keep a Folder in Sync",
-              systemImage: "folder.badge.plus",
-              description: Text("Choose a paired device and a folder on this Mac.")
-            )
-          }
+          noLinksSection
         } else {
           shareSection(shares, status: status)
         }
       } else {
-        Section {
-          ContentUnavailableView(
-            "Keep a Folder in Sync",
-            systemImage: "folder.badge.plus",
-            description: Text("Choose a paired device and a folder on this Mac.")
-          )
-        }
+        noLinksSection
+      }
+    }
+
+    /// `MacEmptyState`, not `ContentUnavailableView`: the system view paints
+    /// its title and message in the 50%-alpha secondary colour, which fails
+    /// contrast on the card a grouped form draws behind it.
+    private var noLinksSection: some View {
+      Section {
+        MacEmptyState(
+          systemImage: "folder.badge.plus",
+          title: "No Links Yet",
+          message: "Pair a device, then choose a source folder to create a one-way link."
+        )
+        // Centred in the card, as the system view it replaces was.
+        .frame(maxWidth: .infinity)
       }
     }
 
@@ -204,7 +208,7 @@ struct MacFoldersView: View {
             .font(.subheadline.weight(.semibold))
             .foregroundStyle(
               state == .needsAttention || state == .invitationExpired
-                ? AnyShapeStyle(.red) : AnyShapeStyle(MacLabelColor.secondary)
+                ? AnyShapeStyle(MacLabelColor.danger) : AnyShapeStyle(MacLabelColor.secondary)
             )
         }
         LabeledContent {
@@ -220,7 +224,7 @@ struct MacFoldersView: View {
         }
         if let policy = share.linkPolicy {
           Label {
-            Text(share.incoming ? "Receives files from the source" : "Sends files to the destination")
+            Text(share.incoming ? "Receives files from the source" : "Sends files to the recipient")
               .font(.body.weight(.semibold))
               .foregroundStyle(.primary)
           } icon: {
@@ -239,14 +243,14 @@ struct MacFoldersView: View {
         } else {
           Text("Existing two-way folder")
             .font(.callout)
-            .foregroundStyle(.secondary)
+            .secondaryLabelStyle()
         }
         if share.expired {
           Text(share.incoming
             ? "Ask the other device to send a new invitation, then choose your folder again."
             : "Send a new invitation so the other device can choose its folder and accept again.")
             .font(.subheadline)
-            .foregroundStyle(.secondary)
+            .secondaryLabelStyle()
         }
         HStack {
           Spacer()
@@ -277,12 +281,12 @@ struct MacFoldersView: View {
           }
         }
         .accessibilityLabel("Choose folder again for \(share.label)")
-        .accessibilityHint("Opens the system folder picker and preserves the share identity.")
+        .accessibilityHint("Opens the system folder picker and keeps the same link.")
 
         Button("Remove…", role: .destructive) {
           folderBeingRemoved = share
         }
-        .accessibilityLabel("Remove \(share.label) from sync")
+        .accessibilityLabel("Remove the \(share.label) link")
       } else if share.incoming && share.phase == .offered {
         Button("Choose Folder…") {
           chooseFolder(purpose: .folderSync) { grant in
@@ -302,14 +306,14 @@ struct MacFoldersView: View {
       } else {
         if !share.incoming, share.linkPolicy != nil, isSettingsRow(share, status: status) {
           if hasConfirmedSettings(for: share, status: status) {
-            Button("Add Destination…") {
+            Button("Add Recipient…") {
               destinationSourceOfferId = share.offerId
               destinationPeer = nil
             }
-            .accessibilityLabel("Add a destination for \(share.label)")
+            .accessibilityLabel("Add a recipient for \(share.label)")
           } else {
-            Label("Add a destination after source settings are confirmed", systemImage: "clock")
-              .foregroundStyle(.secondary)
+            Label("Add a recipient after source settings are confirmed", systemImage: "clock")
+              .secondaryLabelStyle()
           }
         }
 
@@ -368,7 +372,7 @@ struct MacFoldersView: View {
         Button("Remove…", role: .destructive) {
           folderBeingRemoved = share
         }
-        .accessibilityLabel("Remove \(share.label) from sync")
+        .accessibilityLabel("Remove the \(share.label) link")
       }
     }
 
@@ -379,16 +383,16 @@ struct MacFoldersView: View {
     ) -> some View {
       if let pending = state.pendingChange {
         Label("Waiting for the source to apply this settings change", systemImage: "clock")
-          .foregroundStyle(.secondary)
+          .secondaryLabelStyle()
         Text(settingsSummary(pending.settings))
           .font(.callout)
-          .foregroundStyle(.secondary)
+          .secondaryLabelStyle()
       } else if let conflict = state.conflictedChange {
         Label("Settings change needs review", systemImage: "exclamationmark.triangle")
-          .foregroundStyle(.orange)
+          .foregroundStyle(MacLabelColor.warning)
         Text("Attempted: \(settingsSummary(conflict.settings))")
           .font(.callout)
-          .foregroundStyle(.secondary)
+          .secondaryLabelStyle()
       } else if let saved = model.pendingFolderLinkSettingsChanges.first(where: {
         $0.folderId == share.folderId
       }) {
@@ -396,13 +400,13 @@ struct MacFoldersView: View {
           saved.requiresReview ? "Saved settings change needs review" : "Settings change is not confirmed",
           systemImage: saved.requiresReview ? "exclamationmark.triangle" : "wifi.exclamationmark"
         )
-        .foregroundStyle(saved.requiresReview ? .orange : .secondary)
+        .foregroundStyle(saved.requiresReview ? MacLabelColor.warning : MacLabelColor.secondary)
         Text(settingsSummary(saved.settings))
           .font(.callout)
-          .foregroundStyle(.secondary)
+          .secondaryLabelStyle()
       } else if !state.confirmed {
         Label("Waiting for confirmed source settings", systemImage: "clock")
-          .foregroundStyle(.secondary)
+          .secondaryLabelStyle()
       }
     }
 
@@ -552,18 +556,18 @@ struct MacFoldersView: View {
           saved.requiresReview ? "Run request needs review" : "Run request is not confirmed",
           systemImage: saved.requiresReview ? "exclamationmark.triangle" : "wifi.exclamationmark"
         )
-        .foregroundStyle(saved.requiresReview ? .orange : .secondary)
+        .foregroundStyle(saved.requiresReview ? MacLabelColor.warning : MacLabelColor.secondary)
       } else if share.linkRun?.pendingRequest != nil {
         Label("Run request is waiting for the source device", systemImage: "clock")
-        .foregroundStyle(.secondary)
+        .secondaryLabelStyle()
       } else if share.linkRun?.rejectedRequest != nil {
         Label("A run request needs review", systemImage: "exclamationmark.triangle")
-          .foregroundStyle(.orange)
+          .foregroundStyle(MacLabelColor.warning)
       }
 
       if let run = share.linkRun, let phase = run.phase {
         let runStyle = phase == .incomplete || phase == .interrupted
-          ? AnyShapeStyle(.orange) : AnyShapeStyle(.primary)
+          ? AnyShapeStyle(MacLabelColor.warning) : AnyShapeStyle(.primary)
         Label {
           Text(runPhaseLabel(phase))
             .font(.body.weight(.semibold))
@@ -572,6 +576,11 @@ struct MacFoldersView: View {
           Image(systemName: runPhaseSymbol(phase))
             .foregroundStyle(runStyle)
         }
+        // This Mac is the source and could not prepare the run.
+        if phase == .interrupted, !share.incoming,
+           let cause = model.folderRunFailures?.failure(for: share, role: .source) {
+          runFailureCause(cause)
+        }
         ForEach(run.destinations, id: \.peerId) { destination in
           let peer = status.peers.first { $0.peerId == destination.peerId }
           LabeledContent {
@@ -579,14 +588,17 @@ struct MacFoldersView: View {
               .font(.body.weight(.medium))
               .foregroundStyle(.primary)
           } label: {
-            Text(peer?.displayName ?? (share.incoming ? "This Mac" : "Destination"))
+            Text(peer?.displayName ?? (share.incoming ? "This Mac" : "Recipient"))
               .font(.body.weight(.semibold))
               .foregroundStyle(.primary)
           }
+          if destination.result == .failed {
+            destinationFailureDetail(share: share, peer: peer)
+          }
         }
         if run.destinations.contains(where: { $0.result == .failed }) {
-          Label("A destination did not finish this run", systemImage: "exclamationmark.triangle")
-            .foregroundStyle(.orange)
+          Label("A recipient did not finish this run", systemImage: "exclamationmark.triangle")
+            .foregroundStyle(MacLabelColor.warning)
           if !settings.settings.deletionPolicy.restoreLocalDeletions {
             Text("If this failed after an interrupted copy, choose Edit Link Settings, enable Restore files deleted at a destination, and confirm before the next run. Files you deleted at a destination may download again.")
               .font(.callout.weight(.medium))
@@ -600,20 +612,47 @@ struct MacFoldersView: View {
                 status.shares.contains(where: { $0.folderId == share.folderId && $0.phase == .ready }) {
         Text("Idle. Run this link when you want to transfer changes.")
           .font(.callout)
-          .foregroundStyle(.secondary)
+          .secondaryLabelStyle()
       }
 
       if case .scheduled = settings.settings.cadence {
         if share.incoming {
           Text("The source device starts scheduled runs.")
             .font(.callout)
-            .foregroundStyle(.secondary)
+            .secondaryLabelStyle()
         } else if let next = share.linkRun?.nextDueAtUnixMs {
           Text("Next run: \(formattedRunDate(next))")
             .font(.callout)
-            .foregroundStyle(.secondary)
+            .secondaryLabelStyle()
         }
       }
+    }
+
+    /// Why a recipient's copy failed, when this Mac can know.
+    ///
+    /// A cause is recorded only by the device that made the attempt and is
+    /// never sent between devices. So this Mac explains its own failed copy,
+    /// and for another recipient points to that device instead. With a
+    /// service too old to report causes, it adds nothing to today's "Failed".
+    @ViewBuilder
+    private func destinationFailureDetail(share: FolderShare, peer: FolderSyncPeer?) -> some View {
+      if let failures = model.folderRunFailures {
+        if share.incoming, peer == nil,
+           let cause = failures.failure(for: share, role: .destination) {
+          runFailureCause(cause)
+        } else if !share.incoming, let peer {
+          Text("Open Covalent on \(peer.displayName) to see why.")
+            .font(.callout.weight(.medium))
+            .secondaryLabelStyle()
+        }
+      }
+    }
+
+    private func runFailureCause(_ failure: FolderRunFailure) -> some View {
+      Text(failure.plainCause)
+        .font(.callout.weight(.medium))
+        .secondaryLabelStyle()
+        .accessibilityLabel(failure.isInformational ? failure.plainCause : "Reason: \(failure.plainCause)")
     }
 
     private func destinationComposer(source: FolderShare, status: FolderSyncStatus) -> some View {
@@ -621,15 +660,15 @@ struct MacFoldersView: View {
         $0.folderId == source.folderId && $0.phase != .removed
       }.map(\.peerId))
       let availablePeers = status.peers.filter { !existingPeers.contains($0.peerId) }
-      return Section("Add Destination") {
+      return Section("Add Recipient") {
         LabeledContent("Source Link", value: source.label)
         Text("Covalent will reuse this link’s source folder and shared settings.")
           .font(.callout)
-          .foregroundStyle(.secondary)
+          .secondaryLabelStyle()
 
         if availablePeers.isEmpty {
-          Label("Every paired device is already a destination for this link.", systemImage: "checkmark.circle")
-            .foregroundStyle(.secondary)
+          Label("Every paired device is already a recipient for this link.", systemImage: "checkmark.circle")
+            .secondaryLabelStyle()
           Button("Done", role: .cancel) {
             destinationSourceOfferId = nil
             destinationPeer = nil
@@ -641,7 +680,7 @@ struct MacFoldersView: View {
               Text(peer.displayName).tag(Optional(peer.peerId))
             }
           }
-          .accessibilityHint("Selects one additional destination for \(source.label).")
+          .accessibilityHint("Selects one additional recipient for \(source.label).")
 
           HStack {
             Button("Cancel", role: .cancel) {
@@ -649,7 +688,7 @@ struct MacFoldersView: View {
               destinationPeer = nil
             }
             Spacer()
-            Button("Add Destination") {
+            Button("Add Recipient") {
               guard let peerId = destinationPeer else { return }
               Task {
                 if await model.addFolderDestination(from: source.offerId, to: peerId) {
@@ -673,8 +712,8 @@ struct MacFoldersView: View {
     private func shareComposer(status: FolderSyncStatus) -> some View {
       return Section("New One-Way Link") {
         if status.peers.isEmpty {
-          Label("Pair a device before sharing a folder.", systemImage: "laptopcomputer.and.iphone")
-            .foregroundStyle(.secondary)
+          Label("Pair a device before creating a link.", systemImage: "laptopcomputer.and.iphone")
+            .secondaryLabelStyle()
         } else {
           LabeledContent("Paired Device") {
             MacPopUpPicker(
@@ -684,7 +723,7 @@ struct MacFoldersView: View {
               },
               accessibilityIdentifier: "links.new.peer",
               accessibilityLabel: "Paired Device",
-              accessibilityHelp: "Selects the paired device that will receive this folder offer."
+              accessibilityHelp: "Selects the paired device that will receive this link."
             )
           }
           .disabled(pendingOffer != nil)
@@ -696,7 +735,7 @@ struct MacFoldersView: View {
             .accessibilityHint("Names the folder for the paired device.")
             .disabled(pendingOffer != nil)
 
-          Text("This Mac is the source. Changes on the destination never change files on this Mac.")
+          Text("This Mac is the source. Changes made on a recipient never change files on this Mac.")
             .font(.callout.weight(.medium))
             .secondaryLabelStyle()
           LabeledContent {
@@ -742,18 +781,20 @@ struct MacFoldersView: View {
               .font(.body.weight(.semibold))
               .foregroundStyle(MacLabelColor.sidebarUnselected)
           }
+            .accentFill()
             .disabled(pendingOffer != nil)
           Toggle("Run only while charging on Android devices", isOn: $androidConditions.chargingOnly)
+            .accentFill()
             .disabled(pendingOffer != nil)
           Text("These conditions apply only on Android devices. Wi-Fi can be a local network without internet access.")
             .font(.callout)
-            .foregroundStyle(.secondary)
+            .secondaryLabelStyle()
 
           if let pendingOffer {
-            Label("The previous result was uncertain. Retry the same folder offer.", systemImage: "arrow.clockwise")
+            Label("The previous result was uncertain. Send the same invitation again.", systemImage: "arrow.clockwise")
               .font(.callout)
-              .foregroundStyle(.secondary)
-            Button("Try Sharing Again") {
+              .secondaryLabelStyle()
+            Button("Send Invitation Again") {
               submit(pendingOffer)
             }
             .keyboardShortcut(.defaultAction)
@@ -768,7 +809,7 @@ struct MacFoldersView: View {
             }
             .keyboardShortcut(.defaultAction)
             .disabled(chosenPeer == nil || !model.isAuthorized || model.folderSyncMutationInFlight)
-            .accessibilityHint("Opens the system folder picker, then sends one folder offer.")
+            .accessibilityHint("Opens the system folder picker, then sends one invitation.")
           }
         }
       }
@@ -847,7 +888,7 @@ struct MacFoldersView: View {
 
     private func unavailableCopy(for status: FolderSyncStatus) -> String {
       if status.issue == "folderAccess" {
-        return "Saved folder access needs attention. Choose the affected folder again to preserve its existing share."
+        return "Saved folder access needs attention. Choose the affected folder again to keep its existing link."
       }
       if status.lifecycle == "needsAttention" {
         return "Folder sync needs attention. Try again after the local service is ready."
@@ -919,26 +960,31 @@ private struct MacFolderLinkSettingsEditor: View {
     Form {
       Section("\(editor.label) Settings") {
         Toggle("Pause this link", isOn: $proposed.paused)
+          .accentFill()
         FolderCadenceControls(cadence: $proposed.cadence)
         Toggle("Use Wi-Fi only on Android devices", isOn: $proposed.androidConditions.wifiOnly)
+          .accentFill()
         Toggle("Run only while charging on Android devices", isOn: $proposed.androidConditions.chargingOnly)
+          .accentFill()
         Text("These conditions apply only on Android devices. Wi-Fi can be a local network without internet access.")
           .font(.callout)
-          .foregroundStyle(.secondary)
+          .secondaryLabelStyle()
         Toggle(
           "Delete destination copies when source files are deleted",
           isOn: $proposed.deletionPolicy.propagateSourceDeletions
         )
+        .accentFill()
         Text(proposed.deletionPolicy.sourceDeletionExplanation)
           .font(.callout)
-          .foregroundStyle(.secondary)
+          .secondaryLabelStyle()
         Toggle(
           "Restore files deleted at a destination",
           isOn: $proposed.deletionPolicy.restoreLocalDeletions
         )
+        .accentFill()
         Text(proposed.deletionPolicy.destinationDeletionExplanation)
           .font(.callout)
-          .foregroundStyle(.secondary)
+          .secondaryLabelStyle()
       }
       HStack {
         Button("Cancel", role: .cancel) { dismiss() }
@@ -1006,11 +1052,11 @@ private struct FolderCadenceControls: View {
           ("Continuous", FolderLinkCadenceMode.continuous),
         ],
         accessibilityIdentifier: "folder-link-cadence",
-        accessibilityLabel: "Transfers",
+        accessibilityLabel: "Timing",
         accessibilityHelp: "Chooses whether this link runs on request, on a schedule, or continuously."
       )
     } label: {
-      Text("Transfers")
+      Text("Timing")
         .font(.body.weight(.semibold))
         .foregroundStyle(.primary)
     }
@@ -1036,7 +1082,7 @@ private struct FolderCadenceControls: View {
       }
       Text("Choose 15 to 525,600 minutes. The source device starts each scheduled run.")
         .font(.callout)
-        .foregroundStyle(.secondary)
+        .secondaryLabelStyle()
     }
   }
 

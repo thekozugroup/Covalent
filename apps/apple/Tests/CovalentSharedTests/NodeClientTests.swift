@@ -19,6 +19,50 @@ import Testing
     #expect(status.lanDiscovery)
 }
 
+@Test func statusCarriesTheHeldTokenSoAuthorizedOnlyFieldsStillArrive() async throws {
+    let token = String(repeating: "s", count: 32)
+    let recorder = RequestRecorder { request in
+        #expect(request.url?.path == "/api/v1/status")
+        #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer \(token)")
+        return TestResponse.response(
+            request,
+            status: 200,
+            json: #"{"deviceName":"Test Mac","protocolVersion":1,"lanDiscovery":true,"platformTier":"tier1","state":"ready","version":"0.2.12","update":{"state":"upToDate","latestVersion":"0.2.12","releaseUrl":null,"checkedAtUnixMs":1,"failure":null}}"#
+        )
+    }
+    let client = try makeClient(recorder: recorder, token: token)
+    let status = try await client.status()
+    #expect(status.displayVersion == "0.2.12")
+    #expect(status.update?.knownState == .upToDate)
+}
+
+@Test func statusNeverSendsTheTokenOverPlainHTTPToAnotherMachine() async throws {
+    let recorder = RequestRecorder { request in
+        #expect(request.value(forHTTPHeaderField: "Authorization") == nil)
+        return TestResponse.response(
+            request,
+            status: 200,
+            json: #"{"deviceName":"Test Mac","protocolVersion":1,"lanDiscovery":true,"platformTier":"tier1","state":"ready"}"#
+        )
+    }
+    let port = RecordingURLProtocol.recorder.install(recorder)
+    let session = URLSessionConfiguration.ephemeral
+    session.protocolClasses = [RecordingURLProtocol.self]
+    let client = NodeClient(
+        configuration: try NodeConnectionConfiguration(
+            baseURL: URL(string: "http://nas.example.test:\(port)")!,
+            apiToken: String(repeating: "s", count: 32)
+        ),
+        session: URLSession(configuration: session)
+    )
+    // The public probe still answers, and an older service's missing
+    // version and release check simply read as absent.
+    let status = try await client.status()
+    #expect(status.deviceName == "Test Mac")
+    #expect(status.version == nil)
+    #expect(status.update == nil)
+}
+
 @Test func authenticatedExportSendsBearerAndDecodesSettings() async throws {
     let token = String(repeating: "a", count: 32)
     let recorder = RequestRecorder { request in

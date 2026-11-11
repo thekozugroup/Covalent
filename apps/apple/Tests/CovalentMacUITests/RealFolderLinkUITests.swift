@@ -92,7 +92,7 @@ final class RealFolderLinkUITests: XCTestCase {
         let pairingID = try string(pending, "pairingId")
         let code = try string(pending, "authenticationString")
         let comparisonCode = app.staticTexts[
-            "Comparison code \(code.replacingOccurrences(of: "-", with: " "))"
+            "Confirmation code \(code.replacingOccurrences(of: "-", with: " "))"
         ]
         XCTAssertTrue(comparisonCode.waitForExistence(timeout: transitionTimeout))
         let confirm = app.buttons["networkPairing.confirm"]
@@ -388,6 +388,9 @@ final class RealFolderLinkUITests: XCTestCase {
         app.launchEnvironment.removeValue(forKey: "COVALENT_UI_TEST_TOKEN_FILE")
         app.launchEnvironment.removeValue(forKey: "COVALENT_UI_TEST_FIRST_LAUNCH")
         app.launchEnvironment["COVALENT_ADVERTISED_PEER_ADDRESS"] = "127.0.0.1:8787"
+        // The managed helper inherits the app's environment. Tests never ask
+        // GitHub for the latest release; the real app leaves the check on.
+        app.launchEnvironment["COVALENT_UPDATE_CHECK"] = "false"
         app.launch()
         return app
     }

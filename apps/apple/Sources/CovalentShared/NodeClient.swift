@@ -95,7 +95,15 @@ public actor NodeClient {
     }
 
     public func status() async throws -> NodeStatus {
-        let status: NodeStatus = try await send(path: "api/v1/status", authenticated: false)
+        // Status is a public probe and still works with no token. When this
+        // client holds one and the transport may carry it (HTTPS or loopback,
+        // the same rule as every authenticated call), send it, so a service
+        // that reports its version and release check only to an authorized
+        // client still reports them here. Over plain HTTP to another machine
+        // the token is never sent and the request is the public one.
+        let mayCarryToken = configuration.apiToken != nil
+            && (configuration.baseURL.scheme?.lowercased() == "https" || configuration.baseURL.isLoopback)
+        let status: NodeStatus = try await send(path: "api/v1/status", authenticated: mayCarryToken)
         guard status.protocolVersion == covalentProtocolVersion else {
             throw NodeClientError.unsupportedProtocol(status.protocolVersion)
         }
@@ -145,6 +153,22 @@ public actor NodeClient {
             timeout: nil,
             expectedStatusCodes: [204]
         )
+    }
+
+    /// Why this device's own most recent attempt at each link failed.
+    ///
+    /// Returns `nil` from a service at 0.2.12 or earlier, which answers this
+    /// route with 404: that means "no causes available", not a fault.
+    public func folderRunFailures() async throws -> FolderRunFailures? {
+      do {
+        let failures: FolderRunFailures = try await send(path: "api/v1/sync/run-failures")
+        guard failures.schemaVersion == 1, failures.failures.count <= 4_096 else {
+          throw NodeClientError.invalidResponse
+        }
+        return failures
+      } catch let NodeClientError.api(status, _, _, _) where status == 404 {
+        return nil
+      }
     }
 
     public func folderSyncStatus() async throws -> FolderSyncStatus {
@@ -2780,18 +2804,18 @@ extension NodeClientError: LocalizedError {
     /// Plain-English copy only. Technical text lives in ``diagnosticDetail``.
     public var errorDescription: String? {
         switch self {
-        case .invalidServiceURL: "Enter a complete web address for your backup server, starting with http or https."
+        case .invalidServiceURL: "Enter a complete web address for your Covalent server, starting with http or https."
         case .invalidToken: "That access token isn't one Covalent can use."
         case .invalidTrustedCertificate: "Choose a valid DER or PEM certificate for an HTTPS server."
-        case .missingToken: "Connect this app to your backup server before continuing."
+        case .missingToken: "Connect this app to your Covalent server before continuing."
         case .insecureAuthenticatedTransport:
             "Covalent won't send its access token over an unencrypted connection to another device. "
                 + "Use an HTTPS address."
-        case .invalidResponse: "Your backup server sent back something Covalent couldn't read."
+        case .invalidResponse: "Your Covalent server sent back something this app couldn't read."
         case let .invalidPayload(failure): failure.summary
         case .unsupportedProtocol:
-            "This app and your backup server are running versions that can't work together. Update both."
-        case .unauthorized: "This app is no longer signed in to your backup server. Reconnect it to continue."
+            "This app and your Covalent server are running versions that can't work together. Update both."
+        case .unauthorized: "This app is no longer signed in to your Covalent server. Reconnect it to continue."
         case let .transport(failure): failure.summary
         case let .api(status, code, message, retryable):
             NodeAPIErrorCopy.describe(status: status, code: code, message: message, retryable: retryable).summary

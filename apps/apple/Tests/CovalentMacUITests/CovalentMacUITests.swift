@@ -319,6 +319,9 @@ final class CovalentMacUITests: XCTestCase {
         app.launchEnvironment["COVALENT_UI_TEST_BASE_URL"] = "http://127.0.0.1:\(try XCTUnwrap(port))"
         app.launchEnvironment["COVALENT_UI_TEST_TOKEN_FILE"] = try XCTUnwrap(tokenFile)
         if firstLaunch { app.launchEnvironment["COVALENT_UI_TEST_FIRST_LAUNCH"] = "1" }
+        // No helper starts in this mode today; keep it that way if one ever
+        // does: tests never ask GitHub for the latest release.
+        app.launchEnvironment["COVALENT_UPDATE_CHECK"] = "false"
         app.launch()
         return app
     }

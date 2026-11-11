@@ -152,6 +152,12 @@ private struct MacMenuBarMenu: View {
         Divider()
 
         Label(statusSummary, systemImage: serviceSymbol)
+        if let update = model.status?.availableUpdate {
+            // Opens the release page only; Covalent installs nothing itself.
+            Button("Covalent \(update.version) Is Available…", systemImage: "arrow.down.circle") {
+                NSWorkspace.shared.open(update.releaseURL)
+            }
+        }
         linkRows
 
         Divider()
@@ -191,6 +197,7 @@ private struct MacMenuBarMenu: View {
       }
       .onAppear {
         Task { await model.refreshFolders() }
+        Task { await model.refreshServiceStatus() }
       }
     }
 

@@ -307,6 +307,7 @@ struct MacActiveTaskBar: View {
             if fractionCompleted == nil {
                 ProgressView()
                     .controlSize(.small)
+                    .accessibilityLabel("In progress")
             }
             VStack(alignment: .leading, spacing: 4) {
                 Text("\(task.kind.label) \(task.title)")
@@ -316,6 +317,7 @@ struct MacActiveTaskBar: View {
                 if let fractionCompleted {
                     ProgressView(value: fractionCompleted)
                         .progressViewStyle(.linear)
+                        .accentFill()
                         .frame(width: 260)
                 }
                 Text(statusDetail)
@@ -336,9 +338,9 @@ struct MacActiveTaskBar: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: MacCornerRadius.block))
         .overlay {
-            RoundedRectangle(cornerRadius: 12)
+            RoundedRectangle(cornerRadius: MacCornerRadius.block)
                 .stroke(Color.primary.opacity(0.1))
         }
         .shadow(color: .black.opacity(0.08), radius: 12, y: 4)
@@ -352,8 +354,8 @@ struct MacActiveTaskBar: View {
 
     private var statusDetail: String {
         task.statusDetail(
-            pausedText: "Paused. Your backup server is holding this job, so it can carry on later.",
-            checkpointText: "Your backup server is saving progress as it goes."
+            pausedText: "Paused. Your Covalent server is holding this job, so it can carry on later.",
+            checkpointText: "Your Covalent server is saving progress as it goes."
         )
     }
 }
