@@ -7,8 +7,10 @@ Covalent; it does not relicense those dependencies.
 `packaging/docker/alpine/runtime-source-lock.json` records the exact thirteen
 installed packages, their eight source origins, architecture, version, declared
 license and base aports provenance. It applies the two pinned OpenSSL 3.5.9-r0
-updates and the three Covalent-local BusyBox 1.37.0-r1000 packages to the pinned
-Alpine 3.23.5 base. Schema 2 declares those three local packages explicitly:
+updates, musl and musl-utils pinned together at 1.2.5-r24 (aports
+`fd05fc094264bce4fb76efc6c7f61ba4abfcb609`, the only revision Alpine still
+publishes, which the OpenSSL upgrade pulls in) and the three Covalent-local
+BusyBox 1.37.0-r1000 packages to the pinned Alpine 3.23.5 base. Schema 2 declares those three local packages explicitly:
 their `installedDatabaseCommit` is null because their actual APK records omit
 `c`, and only `busybox-binsh` overrides the target architecture with `noarch`.
 The other ten package identities retain their upstream requirements.
@@ -28,7 +30,7 @@ not only the final Alpine package record.
 
 ## Source selection
 
-The reviewed lock contains 155 distinct inputs: complete files from the eight
+The reviewed lock contains 156 distinct inputs: complete files from the eight
 exact aports recipe directories, upstream source archives, and the netbase
 inputs declared by the baselayout recipe. Each input has an exact HTTPS URL,
 size and SHA-256. Recipe entries also record their Git blob identity and original mode. Each origin
@@ -44,7 +46,7 @@ After the final APK installation and package checks, the runtime stage removes
 The build checks the installed database and filesystem before packaging the
 runtime image; Covalent does not install packages after this point.
 
-The final `runtime-source.tar.gz` contains 155 inputs across seven origins:
+The final `runtime-source.tar.gz` contains 156 inputs across seven origins:
 
 - `alpine-base`, `alpine-baselayout` and `alpine-keys`;
 - `busybox` and `ca-certificates`;

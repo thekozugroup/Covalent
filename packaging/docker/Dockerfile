@@ -203,12 +203,19 @@ FROM alpine:3.23@sha256:fd791d74b68913cbb027c6546007b3f0d3bc45125f797758156952bc
 # silently select a different runtime. Both libraries are retained because
 # apk-tools and BusyBox ssl_client require them even though Covalent and Caddy
 # are statically linked and do not load OpenSSL. BusyBox ssl_client retains both.
+# Upgrading OpenSSL also upgrades its musl dependency to the repository's only
+# published revision, so musl and musl-utils are pinned together at that exact
+# revision and stay on one reviewed aports commit.
 RUN apk add --no-cache --upgrade \
       ca-certificates-bundle=20260611-r0 \
       libcrypto3=3.5.9-r0 \
       libssl3=3.5.9-r0 \
+      musl=1.2.5-r24 \
+      musl-utils=1.2.5-r24 \
     && apk info -e 'libcrypto3=3.5.9-r0' \
     && apk info -e 'libssl3=3.5.9-r0' \
+    && apk info -e 'musl=1.2.5-r24' \
+    && apk info -e 'musl-utils=1.2.5-r24' \
     && addgroup -S -g 65532 covalent \
     && adduser -S -D -H -u 65532 -G covalent -s /sbin/nologin covalent \
     && install -d -m 0700 -o 65532 -g 65532 /home/covalent /config /data /restore

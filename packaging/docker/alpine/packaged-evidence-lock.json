@@ -1,29 +1,29 @@
 {
   "schema": 1,
-  "sourceLockSHA256": "20591f042cf01ec684358efe00c4d68204ff9b67ae3826413a1a2d77e764c3a1",
+  "sourceLockSHA256": "f0019ee634ac4632c6c3e0e49544c5f49d189521c6e6aa4ac18790dd789414f4",
   "targets": {
     "amd64": {
       "noticeBundle": {
         "path": "THIRD-PARTY-NOTICES.txt",
         "bytes": 130550,
-        "sha256": "03520a298be5a1ef3f5c6bf6573d1d7e139918254dd7fe8db2b1d812738cc36f"
+        "sha256": "14e87d6eede92e6192ed3f7e18055d2cb50248d82e7c9146c2d340fcc3855d2c"
       },
       "sourceReadmeSHA256": "ce088c422e53653cc1f2c77feeb01e740629194499d745b4464f5f949b4a5686",
-      "sourceManifestSHA256": "a799a11283be38c47819ba0716d3592b9e60af7be1e9076000fec2bbe7bd961e",
-      "sourceFiles": 155,
+      "sourceManifestSHA256": "101e416454f21c54e5e704c48ed6b5ae0f02aad913f30a34f3102a8f6e35baaa",
+      "sourceFiles": 156,
       "builderInstalledDatabaseSHA256": "ee901a1bd0ac592eb270ad6ff62f09ef9205bbc076ae8c2302e3ae0fb20bd664"
     },
     "arm64": {
       "noticeBundle": {
         "path": "THIRD-PARTY-NOTICES.txt",
         "bytes": 130562,
-        "sha256": "97e185233d494e28e537c48192b4d4d690d6eba03e30d6e75d83928a00612aef"
+        "sha256": "8b82610c8b9823041f52094f6f30a786507535c7e83c3ddbbbedba6ca7882228"
       },
       "sourceReadmeSHA256": "ce088c422e53653cc1f2c77feeb01e740629194499d745b4464f5f949b4a5686",
-      "sourceManifestSHA256": "a799a11283be38c47819ba0716d3592b9e60af7be1e9076000fec2bbe7bd961e",
-      "sourceFiles": 155,
+      "sourceManifestSHA256": "101e416454f21c54e5e704c48ed6b5ae0f02aad913f30a34f3102a8f6e35baaa",
+      "sourceFiles": 156,
       "builderInstalledDatabaseSHA256": "4eca637e7036de8f5e9d90689853e2bf8b9bbc7d3a5f810a7a902c6d4f9505b2"
     }
   },
-  "scope": "Reviewed OpenSSL 3.5.9 source/recipe checksums and unchanged license texts. Notice hashes regenerated from the previously verified bundle with exact version, recipe and notice-path changes. Corresponding-source and builder identities are unchanged; final cold images require separate runtime contract validation."
+  "scope": "Reviewed OpenSSL 3.5.9 source/recipe checksums and unchanged license texts. musl and musl-utils move to 1.2.5-r24 (aports fd05fc094264bce4fb76efc6c7f61ba4abfcb609); the musl recipe tree, inputs and notice hashes were regenerated with the unchanged collector, whose method reproduced the prior 1.2.5-r23 records exactly. Builder identities are unchanged; final cold images require separate runtime contract validation."
 }
