@@ -4,7 +4,7 @@
 FROM scratch AS ca-bundle-input
 ADD --checksum=sha256:a4c5de1bf37652cd98cbe71aec209512ae0508a964961957a6c9650f795e46c4 https://dl-cdn.alpinelinux.org/alpine/v3.23/main/x86_64/ca-certificates-bundle-20261020-r0.apk /ca-bundle.apk
 
-FROM golang:1.26.10-alpine3.23@sha256:a07f231c19b03e6106cf442f02a5bcf262147e744d15b7b5e4b6d81d420c70a0 AS sync-engine-worker
+FROM golang:1.27.0-alpine3.23@sha256:3747dcba41c8b0db3211fda4db61638b980e17ac5bb3c94460a975a9cfe19395 AS sync-engine-worker
 ARG TARGETARCH
 ENV CGO_ENABLED=0 \
     GOTOOLCHAIN=local \
@@ -37,7 +37,7 @@ RUN apk add --no-cache \
     && install -m 0444 /engine-evidence/target-license-inventory.json \
       /engine-worker/target-license-inventory.json
 
-FROM rust:1.97.1-alpine3.23@sha256:c4a364ddbf684fe038e6fa6a4f25b30c8dc85247423e0e660676ece0d17be4a2 AS builder
+FROM rust:1.99.1-alpine3.23@sha256:51e1b72c7f236093c084f6e3051239f033fba9e4c0c1430cc2ed479d0a3bd14c AS builder
 ARG TARGETARCH
 WORKDIR /source
 ENV CARGO_INCREMENTAL=0
@@ -76,7 +76,7 @@ RUN build-linux-sync-engine package \
 #   - GOTOOLCHAIN=local, so the `go 1.26.10` directive in that go.mod is enforced
 #     by the image's own compiler instead of being papered over by an automatic
 #     toolchain download from the network.
-FROM golang:1.26.10-alpine3.23@sha256:a07f231c19b03e6106cf442f02a5bcf262147e744d15b7b5e4b6d81d420c70a0 AS caddy
+FROM golang:1.27.0-alpine3.23@sha256:3747dcba41c8b0db3211fda4db61638b980e17ac5bb3c94460a975a9cfe19395 AS caddy
 COPY --from=ca-bundle-input /ca-bundle.apk /tmp/ca-bundle.apk
 # The old generator owns older source certificates and can regenerate an old
 # bundle during later apk operations. Caddy needs only the pre-generated file.
@@ -174,7 +174,7 @@ RUN set -eu; \
     find /caddy-evidence -type f -exec chmod 0444 {} +
 
 # Build the reviewed local BusyBox revision from frozen corresponding source.
-FROM alpine:3.23@sha256:fd791d74b68913cbb027c6546007b3f0d3bc45125f797758156952bc2d6daf40 AS busybox-package-builder
+FROM alpine:3.24@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf AS busybox-package-builder
 
 ARG SOURCE_DATE_EPOCH=1781306698
 ENV SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH} \
@@ -226,7 +226,7 @@ RUN abuild-keygen -a -i -n \
       done \
     && test "$(find /home/package-builder/output/keys -type f -name '*.rsa.pub' | wc -l)" -eq 1
 
-FROM alpine:3.23@sha256:fd791d74b68913cbb027c6546007b3f0d3bc45125f797758156952bc2d6daf40 AS runtime-base
+FROM alpine:3.24@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf AS runtime-base
 COPY --from=ca-bundle-input /ca-bundle.apk /tmp/ca-bundle.apk
 # Alpine published the fixed OpenSSL security revision after the pinned 3.23.5
 # base image was assembled. Install the reviewed OpenSSL and musl security
