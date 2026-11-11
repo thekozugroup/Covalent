@@ -199,7 +199,7 @@ jobs:
         include:
           - platform: linux/amd64
             artifact: amd64
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
           - platform: linux/arm64
             artifact: arm64
             runner: ubuntu-24.04-arm
@@ -271,7 +271,8 @@ jobs:
     name: Scan private images and seal verified handoff
     needs: [validate, build-digests]
     if: always() && needs.validate.result == 'success' && (needs.build-digests.result == 'success' || needs.validate.outputs.artifact_run_id != '')
-    runs-on: ubuntu-latest
+    # Docker 29's containerd store on ubuntu-latest reports manifest digests as image IDs; the scan binds config IDs.
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       actions: read
@@ -479,7 +480,8 @@ jobs:
     name: Promote, sign, and publish verified image
     needs: [validate, scan-private]
     if: always() && needs.validate.result == 'success' && needs.scan-private.result == 'success'
-    runs-on: ubuntu-latest
+    # Docker 29's containerd store on ubuntu-latest reports manifest digests as image IDs; the scan binds config IDs.
+    runs-on: ubuntu-24.04
     concurrency:
       group: covalent-release-assets-${{ github.repository_id }}
       cancel-in-progress: false

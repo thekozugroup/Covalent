@@ -710,7 +710,11 @@ jobs:
 
   container-foundation:
     name: Container foundation
-    runs-on: ubuntu-latest
+    # ubuntu-latest moved to Ubuntu 26.04 with Docker 29's containerd image
+    # store, where `docker image inspect .Id` is the manifest digest while Grype
+    # records the config digest. Keep the classic store the scan gate binds to,
+    # as the arm64 job does with ubuntu-24.04-arm.
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
