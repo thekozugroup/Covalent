@@ -12,7 +12,7 @@ The release surfaces are:
   running on the phone.
 - Apple Silicon macOS app only (arm64). The app has a normal window and a
   menu-bar item/menu.
-- Docker/Unraid web console, served by the Covalent node.
+- Docker/Unraid web console, served by the Covalent server.
 
 iOS and Windows are unsupported and have no release clients or CI lanes.
 
@@ -96,17 +96,17 @@ use large outlined fields and cards. Text, icons, and controls have Compose
 semantics for headings, buttons, checkboxes, radios, switches, and state
 descriptions.
 
-### Setup — Connect your backup server
+### Setup — Welcome to Covalent
 
-What it looks like: a single scrollable form headed Connect your backup server,
-with two explanatory choices (Server on your network and Setup link), then
-fields for device name, server address/setup link, and access token. HTTPS trust
+What it looks like: a single scrollable form headed Welcome to Covalent, with
+two explanatory choices (Server on your network and Trusted claim output), then
+fields for device name, server address/setup URL, and Server access token. HTTPS trust
 is below: choose a CA certificate or enter an exact certificate fingerprint. A
 prominent Connect button ends the form.
 
-Primary actions: open a covalent://connect link or enter an address, enter the
-token, optionally enroll the exact CA/pin, then Connect. A setup link can only
-prefill the address; it never supplies a token or certificate. The app asks for
+Primary actions: open a covalent://connect setup URL or enter an address, enter
+the access token, optionally enroll the exact CA/pin, then Connect. A setup URL
+can only prefill the address; it never supplies a token or certificate. The app asks for
 local-network permission when needed.
 
 Audit states:
@@ -121,8 +121,8 @@ Audit states:
   was not granted.
 - Connection checking: button reads Checking…; successful verification leads
   to Home. An unauthorized refresh returns to Setup.
-- Already connected: an outside setup link is ignored; changing servers is a
-  deliberate Settings action.
+- Already connected: an outside setup URL is ignored; changing servers is a
+  deliberate Settings action (Change server connection).
 
 ### Home — Your copies. Your devices.
 
@@ -149,18 +149,20 @@ scale.
 
 What it looks like: a Tailscale name/IP field, a Find devices action, discovery
 results, and a secure pairing card. The card shows incoming/outgoing direction,
-peer name, a large short comparison code, expiry, current state, and
-confirmation/cancel action. Advanced pairing reveals the Invite a device and
-Join a device roles, then expands into signed JSON exchange cards with Copy and
-Share buttons.
+the other device's name, a large short confirmation code, expiry, current state,
+and confirmation/cancel action. Advanced pairing reveals Start on this phone and
+Join from this phone, then expands into pairing file, reply file and final file
+exchange cards with Copy and Share buttons.
 
 Primary actions: discover nearby devices, enter a Tailscale address, start or
-accept a pairing, compare identities/roles/code on both physical devices,
-confirm one side, exchange the updated signed session, finalize both sides, and
-Use as backup device when the signed provider transport is ready.
+accept a pairing request, compare identities/roles/confirmation code on both
+physical devices, confirm one side, exchange the reply file and final file,
+choose Finish pairing on both sides, and Use this device for backups when the
+signed provider transport is ready.
 
-Audit states: searching; no candidates; LAN permission denied; outgoing request
-waiting for peer; incoming request; confirmed here/waiting for peer; complete;
+Audit states: searching; no candidates; LAN permission denied; outgoing pairing
+request waiting for the other device; incoming pairing request; confirmed
+here/waiting for the other device; complete;
 expired/cancelled/failed; and provider certificate/capacity mismatch. Advanced
 pairing must not expose a way to type an arbitrary certificate or silently trust
 an address. Technical JSON may be copied/shared only from the explicit recovery
@@ -212,7 +214,7 @@ used/reserved/available storage, measured key protection (secure hardware,
 StrongBox, software-only, or unavailable), maximum GB, keep-free GB, and an
 optional Let nearby devices find this phone switch.
 
-Primary actions: choose the separate server or local phone node, enable/disable
+Primary actions: choose the separate server or the server on this phone, enable/disable
 phone storage, set capacity/free-space limits, toggle discovery, export safe
 settings, import a JSON file, and change server connection. Import first shows
 name/discovery/remembered-backup changes; a reduction in remembered backups
@@ -246,17 +248,19 @@ active-task bar. It also installs a MenuBarExtra with a status icon and menu.
 
 ### Main window and menu bar
 
-The sidebar contains Overview, Backups, Devices, and Settings. Its footer shows
-service state and the connected device name. The detail area is a scrollable
-page; the toolbar offers Refresh and New Backup. Active backup, verification, or
+The sidebar contains Links, Devices, and Status, then Legacy Backups and
+Advanced Settings under Legacy and Advanced. Its Local Service footer shows
+service state and the connected device name. The detail area is a scrollable page; the toolbar
+offers Create Link, Pair Device, and Refresh. Active backup, verification, or
 restore work appears in a bottom task bar with progress plus Pause/Resume and
 Cancel.
 
 The menu-bar icon changes for starting, ready, authorization required, and
-offline. Opening it shows Open Covalent, service summary, active-job controls,
-New Backup, Restore Latest Backup, Refresh Status, Settings, and Quit Covalent.
-The app menu also provides New Backup, Pair Device, Overview/Backups/Devices
-shortcuts, Refresh, and Connect.
+offline. Opening it shows Open Links, service summary, per-link Run Now controls,
+an update notice when a newer release exists, Create Link, Pair Device, Legacy
+Backups, Refresh Status, Advanced Settings…, and Quit Covalent. The app menu
+also provides Create Link, Pair Device…, Links/Devices/Status/Legacy
+Backups/Advanced Settings shortcuts, Refresh, and Connect….
 
 Audit the menu-bar item itself, not only the window: its accessibility label is
 Covalent, its value states service status, and all disabled conditions make sense
@@ -299,22 +303,25 @@ a confirmation explaining that only already-selected intact devices are used.
   signed target-inventory warning or confinement message, Cancel, and Restore.
   Replacement requires another destructive confirmation. Restore Complete then
   reports files, folders, skipped items, and bytes.
-- Secure Pairing sheet: segmented Invite/Join flow, short-lived invitation,
-  copy/share exchange, roles, code comparison, two confirmations, and final
-  signed connection. Direct network pairing is available from Devices.
+- Secure Pairing sheet: Create Pairing File or Use Pairing File, a pairing file
+  valid for 15 minutes, copy/share exchange of the reply file and final file,
+  roles, confirmation-code comparison, two confirmations, and Finish Pairing.
+  Direct network pairing is available from Devices.
 - Import Device Settings sheet: choose a JSON file, review device name/LAN
   discovery/remembered backups, and Replace Settings. Identity keys, backup
   keys, storage credentials, and folder permissions are excluded.
-- Setup/connection sheet: server address, protected token with Show/Hide, token-file
-  chooser, device name, LAN discovery, exact CA chooser, Cancel, and Connect.
+- Setup/connection sheet: Covalent server section with Service address and
+  Server access token (Show/Hide), Choose Token File…, device name, LAN
+  discovery, exact CA chooser, Cancel, and Connect.
 
 ### Devices
 
-What it looks like: Your backup network header with Find Devices; Tailscale
-hostname/IP entry; nearby candidate cards showing source, endpoint, protocol
-compatibility, and Pair with This Device; connected storage-device cards with
-certificate prefix, Connected status, and a Disconnect/Revoke menu; expandable
-Advanced recovery; and a trust-explanation callout.
+What it looks like: Your devices header with Find Devices; device address or
+Tailscale hostname entry with Pair Device; Nearby devices cards showing source,
+endpoint, protocol compatibility, and Pair with This Device; Paired devices
+cards with certificate prefix, Connected status, and a Change Address…/
+Disconnect/Revoke Access… menu; expandable Advanced recovery; and a
+trust-explanation callout.
 
 Primary actions: discover, pair by LAN/Tailscale, complete code-confirmed
 pairing, connect a signed provider, disconnect, revoke, or use offline signed
@@ -360,14 +367,14 @@ labels.
 
 ### Header, status, and claim-token onboarding
 
-The header says Private distributed backup, Covalent, and Tier 1 node. The hero
-card shows This device, node name, service state, protocol, and Refresh status.
-The Local access card contains the local API-token password field and Unlock
-console action. The token is entered from the owner-only covalent claim output;
+The page title is Covalent · Server console. The header shows Covalent and the
+connection state of this server, such as Connecting to this server…. The Unlock
+this console card contains the Server access token password field and the
+Unlock console action. The token is entered from the owner-only covalent claim output;
 it is held only in the current browser tab. The console does not accept a setup
 code.
 
-First-run appearance is loading/connecting until the node responds. Without a
+First-run appearance is Connecting to this server… until the server responds. Without a
 token, data-changing operations remain locked. Invalid/expired token,
 unauthorized, certificate, protocol, offline, capacity, and job errors appear
 in a live toast with plain-language recovery copy; technical details are
@@ -375,15 +382,16 @@ collapsed below it.
 
 ### Pair tab
 
-The Pair tab begins with Pair a device, a Look for devices button, a live search
-status, candidate list, and manual Tailscale name/address form. A pairing card
-appears after starting or receiving a request, showing peer, direction, large
-comparison code, expiry, state, Confirm, and Cancel/Dismiss.
+The Pair tab begins with Pair a device, a Find devices button, a live search
+status, candidate list, and manual device address or Tailscale name form with
+Send pairing request. A pairing card appears after starting or receiving a
+pairing request, showing the other device, direction, large confirmation code,
+expiry, state, Confirm, and Cancel/Dismiss.
 
-An advanced disclosure provides signed invitation creation, invitation
-acceptance with role checkboxes, session/code confirmation, identity/role/code/
-signature summary, finalize buttons, clear exchange, and a final Use as backup
-device card. This is the manual recovery path, not the normal direct pairing
+An advanced disclosure provides pairing file creation, pairing file acceptance
+with role checkboxes, reply file and confirmation-code checks, identity/role/
+code/signature summary, Finish pairing buttons, clear exchange, and a final card
+to use the device for backups. This is the manual recovery path, not the normal direct pairing
 path.
 
 Audit no candidates, discovery off, incoming/outgoing, waiting, confirmed,
@@ -433,7 +441,7 @@ The Settings tab has a heading showing LAN discovery On/Off/Unknown, two cards
 for Download settings and Import settings, and a container-network explanation.
 Export includes only device name, discovery preference, and remembered backups;
 import requires pasted JSON plus an explicit confirmation checkbox. The network
-note describes bridge TCP 8443 for HTTPS management, UDP 8787 peer traffic,
+note describes bridge TCP 8443 for HTTPS management, UDP 8787 device-to-device traffic,
 package CA enrollment, optional host networking, and optional Tailscale sidecar.
 
 Audit export/download, malformed or unsafe import, confirmation unchecked,
@@ -495,5 +503,5 @@ accessibility gaps, release blockers, and owner decisions required.
   and signed-preview restore drills.
 
 Never commit, publish, or attach raw tokens, setup codes, private certificate
-material, signed invitations/sessions, bearer-authenticated URLs, or
+material, pairing, reply or final files, bearer-authenticated URLs, or
 unredacted device identifiers.

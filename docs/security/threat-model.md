@@ -35,6 +35,22 @@ are sensitive. Discovery and Tailnet reachability do not establish trust. A
 compromised endpoint can expose keys, files, and operations available to it.
 Mobile background limits can delay transfers or revoke folder access.
 
+The update notice is the one request a device makes to a party other than its
+paired devices. Covalent on Docker, Unraid and macOS asks
+`https://api.github.com/repos/thekozugroup/Covalent/releases/latest` once a day
+over TLS verified against the system certificate list. It sends no credential
+or identifier beyond the Covalent version, follows no redirect, and reads only a
+strict `vMAJOR.MINOR.PATCH` release tag from a bounded answer. Nothing is
+downloaded or executed, and the release page address it reports is built by
+Covalent under the project's own releases path. A forged or intercepted answer
+can therefore do no more than show or hide a notice; it cannot change what runs.
+GitHub learns the device's network address and Covalent version. The local API
+reports the running version and the check's result only to a caller holding the
+access token; the unauthenticated status answer is unchanged from v0.2.12.
+`COVALENT_UPDATE_CHECK=false` removes the request. Software updates themselves
+remain outside Covalent: see the
+[Docker guide](../../packaging/docker/README.md#release-installation).
+
 This project has not completed an external cryptographic audit. Package signing
 and platform testing limits are described in the [README](../../README.md).
 

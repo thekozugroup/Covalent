@@ -30,6 +30,19 @@ The container briefly restarts and retains its paired devices and link settings.
 An immutable digest can be used instead of `stable` to opt out of channel updates.
 Do not give Covalent the Docker socket. Only the optional updater needs it.
 
+Nothing updates the container unless you choose one of those: Unraid's own
+update button, its Auto Update Applications plugin, or the scoped updater.
+
+Separately, Covalent tells you when a newer release exists. About a minute after
+it starts and then once a day it asks GitHub for the latest release and reports
+the answer with its own version. It never downloads or installs anything, so
+a pinned digest keeps showing the notice until you change the Repository field.
+To make no request at all, edit the container, choose **Add another Path, Port,
+Variable, Label or Device**, add a **Variable** with key `COVALENT_UPDATE_CHECK`
+and value `false`, and apply. The
+[Docker guide](../../packaging/docker/README.md#update-notices) lists exactly
+what the request contains.
+
 ## Setting up
 
 Import the current template from this checkout. Its immutable digest is recorded in [v0.2.12 verification](../release/0.2.12-status.md). The optional `stable` channel contains only images promoted by the signed container release workflow.

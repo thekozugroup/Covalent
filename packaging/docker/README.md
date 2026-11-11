@@ -36,12 +36,40 @@ Docker socket access belongs only to the updater; Covalent never receives it.
 An update briefly restarts Covalent. Existing state, pairing, links, secrets,
 mounts and hourly schedules persist; interrupted transfers can retry.
 
+The updater is off unless you add that overlay. Nothing in `compose.yaml`
+replaces the image by itself.
+
 For manual updates, omit the updater overlay and use the two commands above.
 To hold a reviewed version, set `COVALENT_IMAGE` to its immutable GHCR digest.
 Watchtower follows the channel; it does not independently enforce signatures.
 Operators requiring client-side enforcement should verify a digest with
 `cosign` and deploy that digest manually. Keep state backups and the separate
 KEK escrow before upgrading; pinning an older image is not a state migration.
+
+### Update notices
+
+Covalent reports the version it is running and tells you when a newer release
+exists. It only tells you. It never downloads or installs anything; replacing
+the image stays with the updater above or with your own `pull` and `up -d`.
+
+- About a minute after it starts, and then once every 24 hours, the server
+  makes one HTTPS request to
+  `https://api.github.com/repos/thekozugroup/Covalent/releases/latest`.
+  The request carries the Covalent version as its user agent and nothing else:
+  no token, no device name, no identifier. GitHub sees the address it came from,
+  as it does when the image is pulled.
+- The server reports the result as `update` in `GET /api/v1/status`, next to
+  its own `version`, only to a request that carries the access token; anyone
+  else sees neither. It is kept in memory only.
+- If GitHub cannot be reached, the status says the check failed and why, and
+  the server tries again a day later. Transfers and everything else carry on.
+- To make no request at all, set `COVALENT_UPDATE_CHECK=false` in the
+  environment (for Compose, in `.env`) and recreate the container. The server
+  still reports its own version.
+
+The notice and the updater are independent. With the updater enabled, a notice
+normally clears by itself after the next scheduled update. A server on a pinned
+digest keeps showing the notice until you move the pin.
 
 ### Publishing updates
 

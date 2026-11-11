@@ -108,6 +108,11 @@ Neither turns a personal debug key into a publisher identity.
 
 ## Install or update
 
+The Android app never updates itself. To update, get the newer APK from the
+[releases page](https://github.com/thekozugroup/Covalent/releases/latest) and
+install it over the existing app; Android accepts it only when it is signed with
+the same certificate.
+
 The commands below build a new APK with this computer's debug key. They do not
 install the published download. For any update, preserve important data and
 confirm the installed and replacement packages use the same signer.

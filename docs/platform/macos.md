@@ -152,6 +152,15 @@ Nothing needs to be typed into **Service → Connect**. That form is a recovery
 tool, not the Atlas pairing path, and a managed Mac returns to its bundled node
 on refresh. Keep Covalent open and the Mac awake during the first transfer.
 
+Covalent on this Mac also asks GitHub once a day whether a newer release
+exists. It only reports the answer; it never downloads or installs anything. To
+update, download the new release and replace the app as in step 1. The
+[Docker guide](../../packaging/docker/README.md#update-notices) lists exactly
+what the request contains. To make no request, open Covalent with
+`COVALENT_UPDATE_CHECK=false` in its environment, for example by running
+`launchctl setenv COVALENT_UPDATE_CHECK false` in Terminal before opening the
+app. That setting lasts until you log out.
+
 ## 4. Pair a device and create a link
 
 Open **Devices**, choose **Find Devices**, then **Pair with This Device** for a

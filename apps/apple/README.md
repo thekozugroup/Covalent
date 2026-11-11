@@ -129,6 +129,6 @@ stop the write. Local staging reserves 256 MiB and enforces 200,000-entry,
 8 GiB compressed, and 64 GiB expanded limits.
 
 LAN and Tailnet discovery are untrusted hints. Network pairing requires exact
-roles and identities, a physical comparison code on both devices, both
+roles and identities, a confirmation code compared on both devices, both
 signatures, and a pinned transport certificate. Atlas is added through Devices
 as a provider; the managed Mac app stays connected to its automatic local node.

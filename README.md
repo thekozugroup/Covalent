@@ -65,9 +65,11 @@ state, mounted folders, the separate encryption-key file, and HTTPS management.
 The [Unraid guide][unraid-setup] uses the same container with an importable template.
 
 Mount only the folders you want Covalent to access. Keep keys and access tokens
-private, and use HTTPS for network management. Automatic image updates are
-documented in the Docker guide; keep persistent state and source/destination
-mounts intact when updating.
+private, and use HTTPS for network management. Covalent reports its version and
+checks GitHub once a day for a newer release; it tells you and never installs
+anything, and `COVALENT_UPDATE_CHECK=false` turns the check off. Automatic image
+updates are optional and documented in the Docker guide; keep persistent state
+and source/destination mounts intact when updating.
 
 </details>
 
@@ -160,13 +162,10 @@ project has not completed an external cryptographic audit.
 
 ## Development
 
-Current rclone development is on
-[`codex/production-readiness`](https://github.com/thekozugroup/Covalent/tree/codex/production-readiness)
-in [PR #32](https://github.com/thekozugroup/Covalent/pull/32). Use that branch
-for the implementation described here; the default branch's source is older.
+Development happens on `main`, which holds the implementation described here.
 
 ```sh
-git clone --branch codex/production-readiness https://github.com/thekozugroup/Covalent.git
+git clone https://github.com/thekozugroup/Covalent.git
 cd Covalent
 ./scripts/bootstrap.sh core
 ./scripts/check.sh core

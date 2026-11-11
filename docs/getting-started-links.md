@@ -70,6 +70,16 @@ A successful destination can finish while another is offline. An unfinished run
 becomes incomplete after 24 hours. Restarting the source interrupts its active
 run; review the status and use **Run Now** again. Existing files stay in place.
 
+A Manual or Scheduled link runs one transfer at a time for all of its
+recipients. While a run is waiting for an offline recipient, the link starts no
+new run, and **Run Now** reports the run that is still open. The recipients that
+are online keep what that run delivered, but they receive later source changes
+only after the offline device returns or the 24 hours pass. On an hourly
+schedule that can mean one delivery a day instead of one an hour. If a recipient
+will be away for a long time, remove it from the link so the others keep their
+schedule, and add it again when it is back. Removing a recipient keeps the files
+already in its destination folder.
+
 ## Choose deletion behavior
 
 The two controls are independent and apply to the whole link.
