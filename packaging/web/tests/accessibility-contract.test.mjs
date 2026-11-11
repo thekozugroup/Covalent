@@ -143,3 +143,90 @@ test("primary labels retain WCAG AA contrast in light and dark default and hover
   assert.doesNotMatch(css, /button\s*\{[^}]*color:white/);
   assert.match(css, /input,textarea,select\s*\{[^}]*min-height:44px/);
 });
+
+function themeBlocks(css) {
+  const light = /^:root\s*\{([^}]*)\}/.exec(css)?.[1];
+  const dark = /@media \(prefers-color-scheme:dark\)\s*\{\s*:root\s*\{([^}]*)\}/.exec(css)?.[1];
+  assert.ok(light && dark, "both theme token blocks must exist");
+  return [["light", light], ["dark", dark]];
+}
+
+function colourTokens(block) {
+  return new Map([...block.matchAll(/--([a-z-]+):\s*(#[^;]*);/g)].map((match) => [match[1], match[2].trim()]));
+}
+
+test("dark redefines every colour the light theme defines, as plain hex", async () => {
+  const css = await readFile(new URL("app.css", root), "utf8");
+  const [[, light], [, dark]] = themeBlocks(css);
+  const lightColours = colourTokens(light);
+  const darkColours = colourTokens(dark);
+  assert.ok(lightColours.size >= 12, "the token block lost its colours");
+  assert.deepEqual([...darkColours.keys()].sort(), [...lightColours.keys()].sort(),
+    "a colour defined for one theme only would show the other theme's value");
+  for (const [theme, colours] of [["light", lightColours], ["dark", darkColours]]) {
+    for (const [name, value] of colours) assert.match(value, /^#[0-9a-f]{6}$/i, `${theme} --${name}`);
+  }
+  // The page's own background and ink are set on :root beside the tokens.
+  for (const block of [light, dark]) {
+    assert.match(block, /background:#[0-9a-f]{6};/i);
+    assert.match(block, /[; ]color:#[0-9a-f]{6};/i);
+  }
+  // No colour is written outside the two token blocks except the code block,
+  // which is dark in both themes.
+  const rules = css.replace(/^:root\s*\{[^}]*\}/, "").replace(/@media \(prefers-color-scheme:dark\)\s*\{\s*:root\s*\{[^}]*\}\s*\}/, "");
+  const strays = [...rules.matchAll(/#[0-9a-f]{3,8}\b/gi)].map((match) => match[0].toUpperCase());
+  assert.deepEqual(strays.sort(), ["#151619", "#F5F6F8"]);
+  assert.match(css, /pre\s*\{[^}]*background:#151619; color:#F5F6F8;/);
+});
+
+test("text, status and control colours keep their contrast on every surface they sit on", async () => {
+  const css = await readFile(new URL("app.css", root), "utf8");
+  // [foreground, background, minimum]. 4.5:1 for text, 3:1 for the outline of a
+  // control and for the focus ring.
+  const pairs = [
+    ["ink", "canvas", 4.5], ["ink", "surface", 4.5], ["ink", "sidebar", 4.5], ["ink", "sidebar-selected", 4.5],
+    ["ink", "control-tone", 4.5], ["ink", "info-surface", 4.5], ["ink", "warning-surface", 4.5],
+    ["muted", "canvas", 4.5], ["muted", "surface", 4.5], ["muted", "sidebar", 4.5], ["muted", "control-tone", 4.5],
+    ["accent-text", "canvas", 4.5], ["accent-text", "surface", 4.5], ["accent-text", "sidebar-selected", 4.5],
+    ["accent-text", "info-surface", 4.5], ["muted", "info-surface", 4.5], ["accent", "info-surface", 3],
+    ["danger", "canvas", 4.5], ["danger", "surface", 4.5], ["danger", "danger-surface", 4.5],
+    ["success", "canvas", 4.5], ["success", "surface", 4.5], ["success", "success-surface", 4.5],
+    ["warning", "warning-surface", 4.5],
+    ["control-border", "surface", 3], ["control-border", "canvas", 3],
+    ["accent", "canvas", 3], ["accent", "surface", 3], ["accent", "sidebar", 3], ["accent", "sidebar-selected", 3],
+    ["accent", "control-tone", 3], ["accent", "warning-surface", 3],
+  ];
+  for (const [theme, block] of themeBlocks(css)) {
+    for (const [foreground, background, minimum] of pairs) {
+      const ratio = contrast(token(block, foreground), token(block, background));
+      assert.ok(ratio >= minimum, `${theme} ${foreground} on ${background} was ${ratio.toFixed(2)}:1, below ${minimum}:1`);
+    }
+  }
+  // The uses those pairs stand for.
+  assert.match(css, /button\.quiet \{[^}]*color:var\(--accent-text\)/);
+  assert.match(css, /button\.quiet:hover \{ background:var\(--sidebar-selected\); \}/);
+  assert.match(css, /button\.secondary \{ border-color:var\(--control-border\);/);
+  assert.match(css, /\.toast\.error \{ color:var\(--danger\); background:var\(--danger-surface\); \}/);
+  assert.match(css, /\.connection-banner strong \{[^}]*color:var\(--warning\)/);
+  assert.match(css, /\.update-notice \{[^}]*background:var\(--info-surface\); color:var\(--ink\);/);
+  assert.match(css, /(?:^|\n)a \{ color:var\(--accent-text\);/);
+});
+
+test("keyboard focus is visible everywhere, including the tab panels", async () => {
+  const [css, html] = await Promise.all([
+    readFile(new URL("app.css", root), "utf8"),
+    readFile(new URL("index.html", root), "utf8"),
+  ]);
+  assert.doesNotMatch(css, /outline\s*:\s*(?:none|0)\b/, "no rule may remove the focus indicator");
+  const ring = /([^{}]*:focus-visible[^{}]*)\{\s*outline:3px solid var\(--accent\); outline-offset:3px;\s*\}/.exec(css);
+  assert.ok(ring, "the focus ring is a 3px accent outline with a 3px offset");
+  const covered = ring[1].split(",").map((selector) => selector.trim());
+  for (const selector of ["button", "input", "textarea", "select", "summary", "a", '[role="tabpanel"]']) {
+    assert.ok(covered.includes(`${selector}:focus-visible`), `${selector} has no focus ring`);
+  }
+  // Everything the page makes focusable is one of those. The three panels are
+  // focusable so their content can be reached; nothing else carries a tabindex.
+  const focusable = [...html.matchAll(/<([a-z0-9]+)\b[^>]*\stabindex="(-?\d+)"/g)].map((match) => match[1]);
+  assert.deepEqual([...new Set(focusable)].sort(), ["button", "section"]);
+  assert.equal([...html.matchAll(/<section\b[^>]*role="tabpanel"[^>]*tabindex="0"/g)].length, 3);
+});

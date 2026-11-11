@@ -70,8 +70,15 @@ test("console access uses trusted claim output and never a server-state token pa
   const html = await source("index.html");
   assert.match(html, /data-access-state hidden>Console locked/);
   assert.match(html, /data-access-panel hidden>/);
-  assert.match(html, /owner-only output directory created by <code>covalent claim<\/code> on a trusted computer/);
-  assert.match(html, /This console accepts a token only; it does not accept a setup code\./);
+  // The step says what the token is and where it came from, in the words the
+  // Mac and Android apps use, and names the claim output only as something to
+  // look for.
+  assert.match(html, /Enter the access token for this server\. It was created on the computer where the server was set up\./);
+  assert.match(html, /<code>covalent claim<\/code> saved the token in a file named <code>local-api-token<\/code>/);
+  assert.match(html, /a setup code cannot unlock this console\./);
+  assert.match(html, /<label for="api-token">Server access token<\/label>/);
+  assert.match(html, /data-token-file-choose>Choose token file<\/button>/);
+  assert.doesNotMatch(html, /Local API token|local access token/i);
   assert.doesNotMatch(html, /\/data\/local-api-token/);
   assert.doesNotMatch(html, /token from <code>\/data\//);
 });
@@ -89,15 +96,18 @@ test("trusted access initializes Links and pairings before showing its state", a
     errorCopy: consoleRuntime,
     api: async (path, options) => { calls.push([path, options.method]); },
     initializeFolderSync: () => { assert.equal(context.accessReady, true); calls.push(["Links"]); },
+    // The version and update check may be reported only once unlocked.
+    recheckServerVersion: () => { assert.equal(context.accessReady, true); calls.push(["version"]); },
     refreshNetworkPairings: () => { assert.equal(context.accessReady, true); calls.push(["pairings"]); },
     clearFolderSyncAccess: assert.fail,
     renderFolderError: assert.fail,
     $: (selector) => elements.get(selector),
     fail: assert.fail,
+    failToConnect: assert.fail,
   };
   runInNewContext(body + "\nthis.tryTrustedAccess = tryTrustedAccess;", context);
   await context.tryTrustedAccess();
-  assert.deepEqual(calls, [["/api/v1/config/export", "POST"], ["Links"], ["pairings"]]);
+  assert.deepEqual(calls, [["/api/v1/config/export", "POST"], ["version"], ["Links"], ["pairings"]]);
   assert.equal(elements.get("[data-access-panel]").hidden, true);
   assert.equal(elements.get("[data-access-state]").textContent, "Trusted access");
 });
@@ -119,7 +129,10 @@ test("failed trusted access reveals token fallback and preserves network failure
     clearFolderSyncAccess() {},
     renderFolderError: assert.fail,
     $: (selector) => elements.get(selector),
-    fail: (error) => failures.push(error),
+    // Connecting reports through failToConnect, which keeps an unanswered
+    // attempt in the connection notice instead of adding a second message.
+    fail: assert.fail,
+    failToConnect: (error) => failures.push(error),
     NodeApiError: class extends Error { constructor(status) { super(); this.status = status; } },
   };
   runInNewContext(body + "\nthis.tryTrustedAccess = tryTrustedAccess;", context);
@@ -168,12 +181,13 @@ test("transient confirmation clears without discarding later instructions or err
   const app = await source("app.js");
   const saySource = app.slice(app.indexOf("function say("), app.indexOf("\n// The only path from a thrown value"));
   const timers = new Map();
-  const message = { textContent: "", classList: { toggle() {} } };
+  const message = { textContent: "", classList: { toggle() {} }, live: null, setAttribute(name, value) { if (name === "aria-live") this.live = value; } };
   const context = { message, messageDetail: {}, messageDetails: {}, messageTimer: null,
     setTimeout(callback) { timers.set(1, callback); return 1; },
     clearTimeout(id) { timers.delete(id); } };
   runInNewContext(saySource, context);
   context.say("Unlocked", false, null, true);
+  assert.equal(message.live, "polite");
   timers.get(1)();
   assert.equal(message.textContent, "");
   context.say("Unlocked", false, null, true);
@@ -181,6 +195,7 @@ test("transient confirmation clears without discarding later instructions or err
   assert.equal(timers.size, 0);
   assert.equal(message.textContent, "Compare the pairing code");
   context.say("Failed", true, "Retry after checking the address", true);
+  assert.equal(message.live, "assertive", "a failure is announced at once, not queued behind other speech");
   assert.equal(timers.size, 0);
   assert.equal(context.messageDetails.hidden, false);
   assert.equal(context.messageDetail.textContent, "Retry after checking the address");
@@ -344,7 +359,8 @@ test("service refresh updates node status without replacing shadcn sidebar conte
     const name = { textContent: "", dataset: {} };
     const status = { textContent: "" };
     const sidebar = { set textContent(value) { assert.fail(`Service refresh destroyed navigation: ${value}`); } };
-    const load = new Function("$", "api", "document", "PROTOCOL_VERSION", "ProtocolMismatchError", "errorCopy", "fail",
+    const versions = [];
+    const load = new Function("$", "api", "document", "PROTOCOL_VERSION", "ProtocolMismatchError", "errorCopy", "failToConnect", "renderServerVersion",
       `return async () => {${body}};`)(
       (selector) => ({ "[data-device-name]": name, "[data-node-state]": status, "[data-state]": sidebar })[selector],
       async () => {
@@ -352,10 +368,12 @@ test("service refresh updates node status without replacing shadcn sidebar conte
         return { protocolVersion: 1, deviceName: "Waypoint", state: "ready", lanDiscovery: false };
       },
       { querySelectorAll: () => [] }, 1, Error,
-      { describe: () => ({ summary: "Server unavailable" }) }, () => {},
+      { describe: () => ({ summary: "Server unavailable" }) }, () => {}, (status) => versions.push(status),
     );
     await load();
-    assert.equal(name.textContent, offline ? "Node unavailable" : "Waypoint");
+    // The version line is drawn from the same answer, and only from an answer.
+    assert.deepEqual(versions.map((status) => status.deviceName), offline ? [] : ["Waypoint"]);
+    assert.equal(name.textContent, offline ? "Unavailable" : "Waypoint");
     assert.equal(status.textContent, offline ? "Server unavailable" : "Waypoint · Connected");
   }
 });
@@ -437,6 +455,7 @@ test("transfer polling updates run details while retaining settings drafts, reci
     $: (selector) => { if (!nodes.has(selector)) nodes.set(selector, element()); return nodes.get(selector); },
     folderSync: { statusSummary: () => ({ kind: "ready", text: "Ready" }), groupShares: (shares) => [shares], shareRecipients: require("../folder-sync-flow.js").shareRecipients, shareView: () => ({ kind: "ready", text: "Ready" }) },
     folderController: { pendingLinkSettings: () => null, pendingRun: () => null },
+    runFailures: new Map(),
     renderFolderPeers() {}, renderPairedDevices() {}, renderFolderError: assert.fail,
     folderPeerName: () => "Waypoint", firstLinkMember: () => true, renderFolderActions() {},
     renderSharedFolderActions(container) {
@@ -510,7 +529,7 @@ test("transfer polling updates run details while retaining settings drafts, reci
       const local = ownId === "atmos" || ownId === roster.destinations[index].deviceId;
       const controls = row.children[1].children;
       if (!local) {
-        assert.equal(row.children[0].children[1].textContent, "Receives this share");
+        assert.equal(row.children[0].children[1].textContent, "Receives this link");
         assert.equal(row.children[0].children[1].dataset.kind, "info");
         assert.equal(controls.length, 0, "a receiver cannot control another recipient");
       } else {

@@ -29,9 +29,9 @@
     outgoing: "Outgoing pairing request",
   });
   const NETWORK_STATES = Object.freeze({
-    awaiting_local_confirmation: "Compare the code, then confirm it here.",
+    awaiting_local_confirmation: "Compare the confirmation code, then confirm it here.",
     awaiting_peer_confirmation: "Confirmed here. Waiting for the other device.",
-    complete: "Device paired with its signed certificate fingerprint.",
+    complete: "Device paired. You can now add it to a link.",
     failed: "Secure pairing failed. Nothing was trusted.",
   });
 
@@ -44,36 +44,36 @@
 
   function requireNetworkPairing(item) {
     if (!item || typeof item !== "object" || Array.isArray(item)) {
-      throw guidance("This node described a pairing request Covalent cannot read.");
+      throw guidance("This server described a pairing request Covalent cannot read.");
     }
     requireNetworkPairingId(item.pairingId);
     if (!Object.hasOwn(NETWORK_DIRECTIONS, item.direction)) {
-      throw guidance("This node described a pairing request Covalent cannot read.");
+      throw guidance("This server described a pairing request Covalent cannot read.");
     }
     if (!Object.hasOwn(NETWORK_STATES, item.state)) {
-      throw guidance("This node described a pairing request Covalent cannot read.");
+      throw guidance("This server described a pairing request Covalent cannot read.");
     }
     if (typeof item.peerName !== "string" || item.peerName.length === 0 || item.peerName.length > 80) {
-      throw guidance("This node described a pairing request Covalent cannot read.");
+      throw guidance("This server described a pairing request Covalent cannot read.");
     }
     if (typeof item.authenticationString !== "string" || !AUTHENTICATION_STRING.test(item.authenticationString)) {
       throw guidance("This pairing request arrived without a code Covalent can ask you to compare.");
     }
     if (!Number.isSafeInteger(item.expiresAtUnixMs) || item.expiresAtUnixMs < 1) {
-      throw guidance("This node described a pairing request Covalent cannot read.");
+      throw guidance("This server described a pairing request Covalent cannot read.");
     }
     return item;
   }
 
   function requireCandidate(candidate) {
     if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
-      throw guidance("This node described a nearby device Covalent cannot read.");
+      throw guidance("This server described a nearby device Covalent cannot read.");
     }
     if (!Object.hasOwn(DISCOVERY_SOURCES, candidate.source)) {
-      throw guidance("This node described a nearby device Covalent cannot read.");
+      throw guidance("This server described a nearby device Covalent cannot read.");
     }
     if (typeof candidate.endpoint !== "string" || candidate.endpoint.length === 0 || candidate.endpoint.length > 512) {
-      throw guidance("This node described a nearby device Covalent cannot read.");
+      throw guidance("This server described a nearby device Covalent cannot read.");
     }
     return candidate;
   }
@@ -86,7 +86,7 @@
   async function networkCandidates(api) {
     const found = requireList(
       await api("/api/v1/discovery"),
-      "This node returned a device list Covalent cannot read.",
+      "This server returned a device list Covalent cannot read.",
     );
     return found.map((candidate) => {
       const checked = requireCandidate(candidate);
@@ -122,7 +122,7 @@
   async function networkStart(api, candidateAddress) {
     const address = typeof candidateAddress === "string" ? candidateAddress.trim() : "";
     if (address.length === 0 || address.length > 512) {
-      throw guidance("Enter the other device's name or address, such as node-a.tailnet.ts.net:8787.");
+      throw guidance("Enter the other device's address or Tailscale name, such as atlas.tailnet.ts.net:8787.");
     }
     return requireNetworkPairing(await api("/api/v1/pair/network/start", {
       method: "POST",
@@ -133,7 +133,7 @@
   async function networkPending(api) {
     const pending = requireList(
       await api("/api/v1/pair/network/pending"),
-      "This node returned a pairing list Covalent cannot read.",
+      "This server returned a pairing list Covalent cannot read.",
     );
     return pending.map(requireNetworkPairing);
   }

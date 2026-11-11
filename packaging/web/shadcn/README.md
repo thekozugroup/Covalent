@@ -1,7 +1,7 @@
 # Console components
 
 The shared settings panel uses shadcn/ui's MIT-licensed Card source, adapted to
-semantic headings and Covalent's Apple-style system-font theme. The original
+semantic headings and Covalent's Kozu-valued theme. The original
 registry source is retained in `upstream-card.tsx`; `card.mjs` is its JSX-free
 React adaptation. Source: https://ui.shadcn.com/r/styles/new-york-v4/card.json
 
@@ -35,8 +35,13 @@ regeneration reproducible; the generated page includes the upstream ISC/MIT
 notices retained in `LUCIDE-LICENSE`. Icons are decorative inside named buttons.
 Source: https://lucide.dev/guide/react
 
-The console uses the Tailwind CSS v3.4.17 palette directly as CSS tokens:
-zinc neutrals, blue actions, emerald success and red errors. Light and dark
-variants use different shades to retain contrast. This adopts the requested
-colors without adding a framework or runtime stylesheet. Canonical values:
-https://github.com/tailwindlabs/tailwindcss/blob/v3.4.17/src/public/colors.js
+The console takes its values from Kozu UI 0.6-review (KozuUI `e5d1100`): the
+Cobalt accent, Graphite neutrals and the status ramps, written as hex literals
+into the token block at the top of `../app.css`. Covalent's token names are
+unchanged; only their values moved. Light and dark use different ramp steps to
+retain contrast, and `tests/accessibility-contract.test.mjs` checks the primary
+button pairs. Kozu's stylesheet, Tailwind theme and font files are not shipped:
+the font stacks name Source Serif 4 and Inter and fall back to the platform
+serif and sans. Radii follow Kozu: capsule buttons and navigation, 28px cards,
+16px fields, 12px blocks nested inside a card. Focus stays a 3px accent outline
+with a 3px offset rather than Kozu's fill-change focus.

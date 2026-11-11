@@ -37,7 +37,7 @@ test("idle batch links remain ready while their transfer worker is stopped", () 
     assert.equal(folders.statusSummary(snapshot).text,
       "No transfer is running. Each link shows its next action below.");
     assert.equal(folders.shareView(snapshot, item).text, cadence.mode === "manual"
-      ? "Ready for Run Now" : "Waiting for the next scheduled run");
+      ? "Ready for Run Now" : "Waiting for schedule");
     assert.equal(folders.shareView({ ...snapshot, issue: "folderAccess" }, item).kind, "attention");
     assert.equal(folders.shareView({ ...snapshot, availability: "unavailable" }, item).kind, "offline");
     const active = { ...item, linkRun: linkRun({ phase: "running" }) };
@@ -146,7 +146,7 @@ test("server-declared expiry blocks acceptance before a mutation", async () => {
   await controller.refresh();
   await assert.rejects(
     controller.accept(offerId, "/sync"),
-    (error) => error.covalentGuidance === "That folder invitation has expired and cannot be accepted.",
+    (error) => error.covalentGuidance === "That invitation has expired and cannot be accepted.",
   );
   assert.deepEqual(calls, ["/api/v1/sync/status"]);
 });
@@ -226,7 +226,7 @@ test("removal remains visible until the peer acknowledges and keeps old invitati
   assert.equal(removed.remoteRemovalPending, true);
   assert.match(folders.shareView(snapshot, removed).text, /Stopped here.*confirm removal/);
   assert.equal(folders.shareView(snapshot, { ...removed, remoteRemovalPending: false }).text,
-    "Sharing stopped. Files stay on both devices.");
+    "Removed from this link. Files stay on both devices.");
   assert.equal(folders.requireStatus(status({ shares: [share()] })).shares[0].remoteRemovalPending, false);
   for (const value of [null, 1, "true", []]) {
     assert.throws(() => folders.requireStatus(status({ shares: [share({ phase: "removed", remoteRemovalPending: value })] })));
@@ -340,7 +340,7 @@ test("a throwing sessionStorage getter does not prevent independent initializati
   assert.equal((await controller.refresh()).applied, true);
   await assert.rejects(
     controller.sendOffer({ peerId, folderId, label: "Plans", selectedRoot: "/sync", linkPolicy }),
-    (error) => /could not read its pending folder offer/i.test(error.covalentGuidance),
+    (error) => /could not read its saved invitation/i.test(error.covalentGuidance),
   );
   assert.equal(statusCalls, 1);
   assert.equal(mutationCalls, 0);
@@ -800,17 +800,19 @@ test("initial scanning reports local checking before offered or ready phases", (
   assert.equal(folders.shareView(decoded, decoded.shares[0]).text, "Checking folder");
 });
 
-test("the primary Shares tab uses server paths, confirmed names, and visible unlocked polling", async () => {
+test("the primary Links tab uses server paths, confirmed names, and visible unlocked polling", async () => {
   const root = new URL("../", import.meta.url);
   const [html, app] = await Promise.all([
     readFile(new URL("index.html", root), "utf8"),
     readFile(new URL("app.js", root), "utf8"),
   ]);
-  assert.match(html, /data-tab="folders"[^>]*>[\s\S]*?class="sidebar-label">Shares<\/span><\/button>/);
+  assert.match(html, /data-tab="folders"[^>]*>[\s\S]*?class="sidebar-label">Links<\/span><\/button>/);
   assert.ok(html.indexOf('data-tab="folders"') < html.indexOf('data-tab="pair"'));
   assert.ok(html.indexOf('data-tab="folders"') < html.indexOf('data-tab="settings"'));
   assert.doesNotMatch(html, /data-tool-panel|data-backup-form|data-restore-preview/);
-  assert.match(html, /Advanced server folder path/);
+  // The source folder is required, so its field is shown rather than tucked
+  // into a closed disclosure.
+  assert.match(html, /<details class="advanced" open>\s*<summary>Source folder<\/summary>\s*<label>Folder path on this server <input name="selectedRoot"/);
   assert.match(html, /name="selectedRoot" value="\/sync"/);
   assert.match(html, /data-paired-devices/);
   assert.match(html, /Paired devices/);

@@ -47,7 +47,7 @@
     return value;
   }
 
-  function uuid(value, message = "The node returned an invalid folder identifier.") {
+  function uuid(value, message = "This server returned an invalid folder identifier.") {
     if (typeof value !== "string" || !UUID.test(value)) throw guidance(message);
     return value.toLowerCase();
   }
@@ -70,7 +70,7 @@
 
   async function readJson(response) {
     const limit = response.ok ? MAX_RESPONSE_BYTES : 8192;
-    const invalid = () => guidance("The node returned a folder response this console cannot safely read.");
+    const invalid = () => guidance("This server returned a folder response this console cannot safely read.");
     const declared = response.headers.get("content-length");
     if (declared !== null && (!/^[0-9]+$/.test(declared) || Number(declared) > limit)) {
       await response.body?.cancel();
@@ -126,7 +126,7 @@
   }
 
   function linkPolicy(value) {
-    const policy = object(value, "Choose the deletion options for this one-way link. Old saved offers must be discarded and created again.");
+    const policy = object(value, "Choose the deletion options for this one-way link. An older saved invitation must be discarded and created again.");
     if (Object.keys(policy).length !== 2
       || typeof policy.propagateSourceDeletions !== "boolean"
       || typeof policy.restoreLocalDeletions !== "boolean") {
@@ -165,14 +165,14 @@
   }
 
   function folderLinkSettings(value) {
-    const settings = object(value, "The node returned invalid link settings.");
+    const settings = object(value, "This server returned invalid link settings.");
     const keys = Object.keys(settings);
     if (!(keys.length === 2 && ["deletionPolicy", "paused"].every((key) => Object.hasOwn(settings, key)))
       && !(keys.length === 4 && ["deletionPolicy", "paused", "cadence", "androidConditions"]
         .every((key) => Object.hasOwn(settings, key)))) {
-      throw guidance("The node returned invalid link settings.");
+      throw guidance("This server returned invalid link settings.");
     }
-    if (typeof settings.paused !== "boolean") throw guidance("The node returned invalid link settings.");
+    if (typeof settings.paused !== "boolean") throw guidance("This server returned invalid link settings.");
     return Object.freeze({
       deletionPolicy: linkPolicy(settings.deletionPolicy),
       paused: settings.paused,
@@ -182,32 +182,32 @@
   }
 
   function linkSettingsRequest(value, folderId) {
-    const request = object(value, "The node returned an invalid link-settings request.");
+    const request = object(value, "This server returned an invalid link-settings request.");
     exactKeys(request, ["folderId", "sourceId", "requesterId", "changeId", "expectedRevision", "settings"],
-      "The node returned an invalid link-settings request.");
+      "This server returned an invalid link-settings request.");
     const decoded = Object.freeze({
       folderId: uuid(request.folderId),
-      sourceId: uuid(request.sourceId, "The node returned an invalid link-settings source."),
-      requesterId: uuid(request.requesterId, "The node returned an invalid link-settings requester."),
-      changeId: uuid(request.changeId, "The node returned an invalid link-settings change."),
-      expectedRevision: unsigned(request.expectedRevision, "The node returned an invalid link-settings revision."),
+      sourceId: uuid(request.sourceId, "This server returned an invalid link-settings source."),
+      requesterId: uuid(request.requesterId, "This server returned an invalid link-settings requester."),
+      changeId: uuid(request.changeId, "This server returned an invalid link-settings change."),
+      expectedRevision: unsigned(request.expectedRevision, "This server returned an invalid link-settings revision."),
       settings: folderLinkSettings(request.settings),
     });
-    if (decoded.folderId !== folderId) throw guidance("The node returned a link-settings request for another folder.");
+    if (decoded.folderId !== folderId) throw guidance("This server returned a link-settings request for another folder.");
     return decoded;
   }
 
   function linkSettingsState(value, folderId, policy) {
-    const state = object(value, "The node returned invalid link settings.");
+    const state = object(value, "This server returned invalid link settings.");
     const hasAcceptedAt = Object.hasOwn(state, "acceptedAtUnixMs");
     exactKeys(state, ["revision", "settings", "changeId", "changedBy", "confirmed", "pendingChange", "conflictedChange",
       ...(hasAcceptedAt ? ["acceptedAtUnixMs"] : [])],
-      "The node returned invalid link settings.");
-    const revision = unsigned(state.revision, "The node returned an invalid link-settings revision.");
+      "This server returned invalid link settings.");
+    const revision = unsigned(state.revision, "This server returned an invalid link-settings revision.");
     const acceptedAtUnixMs = hasAcceptedAt
-      ? unsigned(state.acceptedAtUnixMs, "The node returned an invalid link-settings acceptance time.") : 0;
+      ? unsigned(state.acceptedAtUnixMs, "This server returned an invalid link-settings acceptance time.") : 0;
     const changeId = state.changeId === NIL_UUID ? NIL_UUID
-      : uuid(state.changeId, "The node returned an invalid link-settings change.");
+      : uuid(state.changeId, "This server returned an invalid link-settings change.");
     const settings = folderLinkSettings(state.settings);
     const pendingChange = state.pendingChange === null ? null : linkSettingsRequest(state.pendingChange, folderId);
     const conflictedChange = state.conflictedChange === null ? null : linkSettingsRequest(state.conflictedChange, folderId);
@@ -217,13 +217,13 @@
       || pendingChange?.expectedRevision > revision
       || conflictedChange?.expectedRevision > revision
       || JSON.stringify(settings.deletionPolicy) !== JSON.stringify(policy)) {
-      throw guidance("The node returned inconsistent link settings.");
+      throw guidance("This server returned inconsistent link settings.");
     }
     return Object.freeze({
       revision,
       settings,
       changeId,
-      changedBy: uuid(state.changedBy, "The node returned an invalid link-settings editor."),
+      changedBy: uuid(state.changedBy, "This server returned an invalid link-settings editor."),
       acceptedAtUnixMs,
       confirmed: state.confirmed,
       pendingChange,
@@ -241,11 +241,33 @@
         : "Files deleted at a destination stay deleted there, even after source edits.");
   }
 
+  // The browser's own confirmation is the last thing read before files can be
+  // removed, so it names what Covalent will delete, where, and what it never
+  // touches. `purpose` is "create" for a new link and "change" for an existing one.
+  function deletionConfirmation(policy, label, purpose) {
+    const value = linkPolicy(policy);
+    const name = typeof label === "string" && label.trim().length > 0 ? `“${label.trim()}”` : "this link";
+    const question = purpose === "create"
+      ? `Create ${name} with these deletion options?`
+      : `Change the deletion options for ${name}?`;
+    const sourceDeletions = value.propagateSourceDeletions
+      ? "When a file is deleted from the source folder, Covalent also deletes its copy from every recipient’s destination folder. Those copies are removed from disk."
+      : "When a file is deleted from the source folder, its destination copies are kept.";
+    const destinationDeletions = value.restoreLocalDeletions
+      ? "When a file is deleted from a destination folder, Covalent copies it there again from the source."
+      : "When a file is deleted from a destination folder, it stays deleted there.";
+    return [
+      question,
+      `• ${sourceDeletions}\n• ${destinationDeletions}`,
+      "Files in the source folder are never deleted by these options. They apply to every recipient of this link.",
+    ].join("\n\n");
+  }
+
   function settingsExplanation(settings) {
     const value = folderLinkSettings(settings);
-    const timing = value.cadence.mode === "manual" ? "Transfers run only when requested."
-      : value.cadence.mode === "continuous" ? "Transfers run continuously."
-        : `Transfers run every ${value.cadence.intervalMinutes} minutes.`;
+    const timing = value.cadence.mode === "manual" ? "Files are copied only when someone chooses Run Now."
+      : value.cadence.mode === "continuous" ? "Changes are copied continuously."
+        : `A run starts every ${value.cadence.intervalMinutes} minutes.`;
     const android = value.androidConditions.wifiOnly || value.androidConditions.chargingOnly
       ? ` Android devices wait for ${[
         value.androidConditions.wifiOnly ? "Wi-Fi" : null,
@@ -255,11 +277,11 @@
   }
 
   function offerBody(value) {
-    const body = object(value, "This folder offer is invalid.");
+    const body = object(value, "This invitation is invalid.");
     const decoded = {
       peerId: uuid(body.peerId, "Choose a currently paired device."),
       folderId: uuid(body.folderId),
-      label: string(body.label, 256, "Enter a folder name up to 256 characters.").trim(),
+      label: string(body.label, 256, "Enter a link name up to 256 characters.").trim(),
       ...(Object.hasOwn(body, "selectedRoot") ? { selectedRoot: selectedRoot(body.selectedRoot) } : {}),
       linkPolicy: linkPolicy(body.linkPolicy),
     };
@@ -272,48 +294,48 @@
 
   function linkRun(value) {
     if (value === null || value === undefined) return null;
-    const run = object(value, "The node returned invalid link run status.");
+    const run = object(value, "This server returned invalid link run status.");
     exactKeys(run, ["generation", "stateRevision", "settingsRevision", "phase", "startedAtUnixMs",
       "deadlineUnixMs", "endedAtUnixMs", "nextDueAtUnixMs", "pendingRequest", "rejectedRequest", "destinations"],
-    "The node returned invalid link run status.");
+    "This server returned invalid link run status.");
     const optionalTime = (time) => {
       if (time === null) return null;
-      const decoded = unsigned(time, "The node returned an invalid link run time.");
-      if (decoded === 0) throw guidance("The node returned an invalid link run time.");
+      const decoded = unsigned(time, "This server returned an invalid link run time.");
+      if (decoded === 0) throw guidance("This server returned an invalid link run time.");
       return decoded;
     };
     if (!(run.phase === null || RUN_PHASES.has(run.phase))) {
-      throw guidance("The node returned invalid link run status.");
+      throw guidance("This server returned invalid link run status.");
     }
     const pendingRequest = run.pendingRequest === null ? null : (() => {
-      const request = object(run.pendingRequest, "The node returned an invalid pending run request.");
-      exactKeys(request, ["requestId", "requesterId"], "The node returned an invalid pending run request.");
+      const request = object(run.pendingRequest, "This server returned an invalid pending run request.");
+      exactKeys(request, ["requestId", "requesterId"], "This server returned an invalid pending run request.");
       const requestId = uuid(request.requestId);
-      if (requestId === NIL_UUID) throw guidance("The node returned an invalid pending run request.");
+      if (requestId === NIL_UUID) throw guidance("This server returned an invalid pending run request.");
       return Object.freeze({ requestId, requesterId: uuid(request.requesterId) });
     })();
     const rejectedRequest = run.rejectedRequest === null ? null : (() => {
-      const request = object(run.rejectedRequest, "The node returned an invalid rejected run request.");
-      exactKeys(request, ["requesterId", "requestId", "reason"], "The node returned an invalid rejected run request.");
+      const request = object(run.rejectedRequest, "This server returned an invalid rejected run request.");
+      exactKeys(request, ["requesterId", "requestId", "reason"], "This server returned an invalid rejected run request.");
       if (!["generationChanged", "settingsChanged"].includes(request.reason)) {
-        throw guidance("The node returned an invalid rejected run request.");
+        throw guidance("This server returned an invalid rejected run request.");
       }
       const requestId = uuid(request.requestId);
-      if (requestId === NIL_UUID) throw guidance("The node returned an invalid rejected run request.");
+      if (requestId === NIL_UUID) throw guidance("This server returned an invalid rejected run request.");
       return Object.freeze({ requesterId: uuid(request.requesterId), requestId, reason: request.reason });
     })();
-    const destinations = boundedArray(run.destinations, "The node returned too many run destinations.").map((entry) => {
-      const destination = object(entry, "The node returned invalid destination run status.");
-      exactKeys(destination, ["peerId", "result", "endedAtUnixMs"], "The node returned invalid destination run status.");
-      if (!RUN_RESULTS.has(destination.result)) throw guidance("The node returned invalid destination run status.");
+    const destinations = boundedArray(run.destinations, "This server returned too many run destinations.").map((entry) => {
+      const destination = object(entry, "This server returned invalid destination run status.");
+      exactKeys(destination, ["peerId", "result", "endedAtUnixMs"], "This server returned invalid destination run status.");
+      if (!RUN_RESULTS.has(destination.result)) throw guidance("This server returned invalid destination run status.");
       return Object.freeze({
         peerId: uuid(destination.peerId), result: destination.result, endedAtUnixMs: optionalTime(destination.endedAtUnixMs),
       });
     });
     return Object.freeze({
-      generation: unsigned(run.generation, "The node returned an invalid link run generation."),
-      stateRevision: unsigned(run.stateRevision, "The node returned an invalid link run state."),
-      settingsRevision: unsigned(run.settingsRevision, "The node returned an invalid link run settings state."),
+      generation: unsigned(run.generation, "This server returned an invalid link run generation."),
+      stateRevision: unsigned(run.stateRevision, "This server returned an invalid link run state."),
+      settingsRevision: unsigned(run.settingsRevision, "This server returned an invalid link run settings state."),
       phase: run.phase,
       startedAtUnixMs: optionalTime(run.startedAtUnixMs),
       deadlineUnixMs: optionalTime(run.deadlineUnixMs),
@@ -327,7 +349,7 @@
 
   function endpointRoster(value) {
     if (value === undefined || value === null) return null;
-    const message = "The node returned an invalid share recipient list.";
+    const message = "This server returned an invalid recipient list.";
     const roster = object(value, message);
     const endpoint = (value) => {
       const item = object(value, message);
@@ -350,35 +372,35 @@
   }
 
   function requireStatus(value) {
-    const status = object(value, "The node returned an invalid folder status.");
+    const status = object(value, "This server returned an invalid folder status.");
     const connectionFreshness = Object.prototype.hasOwnProperty.call(status, "connectionFreshness")
       ? status.connectionFreshness : "neverObserved";
     if (status.schemaVersion !== 1 || !AVAILABILITY.has(status.availability)
       || !LIFECYCLES.has(status.lifecycle) || !FRESHNESS.has(status.healthFreshness)
       || !FRESHNESS.has(connectionFreshness)
       || !(status.issue === null || ISSUES.has(status.issue))) {
-      throw guidance("The node returned a folder status this console cannot safely read.");
+      throw guidance("This server returned a folder status this console cannot safely read.");
     }
-    const peers = boundedArray(status.peers, "The node returned too many paired devices.").map((value) => {
-      const peer = object(value, "The node returned an invalid paired device.");
+    const peers = boundedArray(status.peers, "This server returned too many paired devices.").map((value) => {
+      const peer = object(value, "This server returned an invalid paired device.");
       return Object.freeze({
-        peerId: uuid(peer.peerId, "The node returned an invalid paired device."),
-        displayName: string(peer.displayName, 120, "The node returned an invalid paired-device name."),
+        peerId: uuid(peer.peerId, "This server returned an invalid paired device."),
+        displayName: string(peer.displayName, 120, "This server returned an invalid paired-device name."),
         // Address was added to schema v1 after the first clients shipped.
         address: Object.hasOwn(peer, "address")
-          ? peerAddress(peer.address, "The node returned an invalid paired-device address.")
+          ? peerAddress(peer.address, "This server returned an invalid paired-device address.")
           : null,
       });
     });
-    const shares = boundedArray(status.shares, "The node returned too many shared folders.").map((value) => {
-      const share = object(value, "The node returned an invalid shared folder.");
+    const shares = boundedArray(status.shares, "This server returned too many links.").map((value) => {
+      const share = object(value, "This server returned an invalid link.");
       const peerConnection = Object.prototype.hasOwnProperty.call(share, "peerConnection")
         ? share.peerConnection : "unknown";
       const superseded = Object.hasOwn(share, "supersededOfferIds") ? share.supersededOfferIds : [];
       const remoteRemovalPending = Object.hasOwn(share, "remoteRemovalPending") ? share.remoteRemovalPending : false;
       const pairingUpgradeRequired = Object.hasOwn(share, "pairingUpgradeRequired") ? share.pairingUpgradeRequired : false;
       if (!Array.isArray(superseded) || superseded.length > 128) {
-        throw guidance("The node returned invalid replacement invitations.");
+        throw guidance("This server returned invalid replacement invitations.");
       }
       if (!Object.hasOwn(share, "linkPolicy") || !Object.hasOwn(share, "linkSettings")
         || !PHASES.has(share.phase) || !CONNECTION_STATES.has(peerConnection)
@@ -388,20 +410,20 @@
         || typeof remoteRemovalPending !== "boolean" || remoteRemovalPending && share.phase !== "removed"
         || !(share.expiresAtUnixMs === null || share.expiresAtUnixMs === undefined
           || Number.isSafeInteger(share.expiresAtUnixMs) && share.expiresAtUnixMs >= 0)) {
-        throw guidance("The node returned an invalid shared-folder state.");
+        throw guidance("This server returned an invalid link state.");
       }
       const policy = share.linkPolicy === null ? null : linkPolicy(share.linkPolicy);
       const settings = share.linkSettings === null ? null
         : linkSettingsState(share.linkSettings, uuid(share.folderId), policy);
       const run = linkRun(share.linkRun);
       if ((policy === null) !== (settings === null)) {
-        throw guidance("The node returned inconsistent one-way link settings.");
+        throw guidance("This server returned inconsistent one-way link settings.");
       }
       return Object.freeze({
         offerId: uuid(share.offerId),
         folderId: uuid(share.folderId),
-        label: string(share.label, 256, "The node returned an invalid folder name."),
-        peerId: uuid(share.peerId, "The node returned an invalid paired device."),
+        label: string(share.label, 256, "This server returned an invalid link name."),
+        peerId: uuid(share.peerId, "This server returned an invalid paired device."),
         incoming: share.incoming,
         linkPolicy: policy,
         linkSettings: settings,
@@ -418,11 +440,11 @@
       });
     });
     const retainedOfferIds = new Set(shares.map((share) => share.offerId));
-    if (retainedOfferIds.size !== shares.length) throw guidance("The node returned duplicate folder invitations.");
+    if (retainedOfferIds.size !== shares.length) throw guidance("This server returned duplicate invitations.");
     for (const share of shares) {
       for (const oldId of share.supersededOfferIds) {
         if (oldId === "00000000-0000-0000-0000-000000000000" || retainedOfferIds.has(oldId)) {
-          throw guidance("The node returned ambiguous replacement invitations.");
+          throw guidance("This server returned ambiguous replacement invitations.");
         }
         retainedOfferIds.add(oldId);
       }
@@ -431,23 +453,23 @@
     for (const share of shares.filter((item) => item.linkSettings !== null && item.phase !== "removed")) {
       const encoded = JSON.stringify([share.label, share.linkPolicy, share.linkSettings, share.linkRun, share.endpointRoster]);
       if (links.has(share.folderId) && links.get(share.folderId) !== encoded) {
-        throw guidance("The node returned different settings for members of one link.");
+        throw guidance("This server returned different settings for members of one link.");
       }
       links.set(share.folderId, encoded);
     }
-    const folders = boundedArray(status.folders, "The node returned too many folder health records.").map((value) => {
-      const folder = object(value, "The node returned invalid folder health.");
+    const folders = boundedArray(status.folders, "This server returned too many folder health records.").map((value) => {
+      const folder = object(value, "This server returned invalid folder health.");
       if (!HEALTH_STATES.has(folder.state) || typeof folder.statusError !== "boolean"
         || typeof folder.watchError !== "boolean") {
-        throw guidance("The node returned invalid folder health.");
+        throw guidance("This server returned invalid folder health.");
       }
       return Object.freeze({
         folderId: uuid(folder.folderId),
         state: folder.state,
-        remainingFiles: unsigned(folder.remainingFiles, "The node returned invalid folder health."),
-        remainingBytes: unsigned(folder.remainingBytes, "The node returned invalid folder health."),
-        scanPullErrorCount: unsigned(folder.scanPullErrorCount, "The node returned invalid folder health."),
-        reportedErrorRows: unsigned(folder.reportedErrorRows, "The node returned invalid folder health."),
+        remainingFiles: unsigned(folder.remainingFiles, "This server returned invalid folder health."),
+        remainingBytes: unsigned(folder.remainingBytes, "This server returned invalid folder health."),
+        scanPullErrorCount: unsigned(folder.scanPullErrorCount, "This server returned invalid folder health."),
+        reportedErrorRows: unsigned(folder.reportedErrorRows, "This server returned invalid folder health."),
         statusError: folder.statusError,
         watchError: folder.watchError,
       });
@@ -470,15 +492,15 @@
       const state = share.linkSettings;
       const sourceId = share.incoming ? share.peerId : localDeviceId;
       if (share.endpointRoster !== null && share.endpointRoster.source.deviceId !== sourceId) {
-        throw guidance("The node returned a recipient list for another source.");
+        throw guidance("This server returned a recipient list for another source.");
       }
       if (state === null) continue;
       if (!share.incoming && !state.confirmed) {
-        throw guidance("The node returned unconfirmed source link settings.");
+        throw guidance("This server returned unconfirmed source link settings.");
       }
       for (const request of [state.pendingChange, state.conflictedChange].filter(Boolean)) {
         if (!share.incoming || request.sourceId !== sourceId || request.requesterId !== localDeviceId) {
-          throw guidance("The node returned a link-settings request for another member.");
+          throw guidance("This server returned a link-settings request for another member.");
         }
       }
     }
@@ -499,11 +521,11 @@
   }
 
   function mutationResponse(value) {
-    const response = object(value, "The node returned an invalid folder change result.");
+    const response = object(value, "This server returned an invalid folder change result.");
     if (response.schemaVersion !== 1 || !LIFECYCLES.has(response.lifecycle)
       || !(response.issue === null || ISSUES.has(response.issue))
       || !(response.offerId === null || response.offerId === undefined || UUID.test(response.offerId))) {
-      throw guidance("The node returned a folder change result this console cannot safely read.");
+      throw guidance("This server returned a folder change result this console cannot safely read.");
     }
     return Object.freeze({
       schemaVersion: 1,
@@ -521,17 +543,17 @@
       || ["preparing", "running"].includes(run.phase)) return null;
     if (run.pendingRequest !== null) return Object.freeze({ kind: "waiting", text: "Run requested. Waiting for the source." });
     if (["incomplete", "interrupted", "cancelled"].includes(run.phase)) {
-      return Object.freeze({ kind: "attention", text: "The last run did not finish. Review its destinations below." });
+      return Object.freeze({ kind: "attention", text: "The last run did not finish. Check each recipient below." });
     }
     return settings.settings.cadence.mode === "manual"
       ? Object.freeze({ kind: "ready", text: "Ready for Run Now" })
-      : Object.freeze({ kind: "waiting", text: "Waiting for the next scheduled run" });
+      : Object.freeze({ kind: "waiting", text: "Waiting for schedule" });
   }
 
   function shareRecipients(status, members, localDeviceId, ownName) {
     const share = members.find((member) => member.phase !== "removed") ?? members[0];
     const name = (member) => member.incoming ? (ownName || "This server")
-      : status.peers.find((peer) => peer.peerId === member.peerId)?.displayName ?? "Confirmed paired device unavailable";
+      : status.peers.find((peer) => peer.peerId === member.peerId)?.displayName ?? "Paired device unavailable";
     const rows = (share.endpointRoster?.destinations ?? []).map((destination) => {
       const member = members.find((item) => share.incoming
         ? item.incoming && destination.deviceId === localDeviceId
@@ -568,7 +590,7 @@
     }
     if (status.lifecycle === "needsAttention" || status.issue !== null) {
       const text = status.issue === "initialScan"
-        ? "The initial local folder check did not complete. Try it again before sync starts."
+        ? "The first check of the folder did not finish. Try folder sync again before copying starts."
         : "Folder sync needs attention before it can continue.";
       return Object.freeze({ kind: "attention", text });
     }
@@ -580,16 +602,16 @@
       return Object.freeze({ kind: "offline", text: "Folder sync is stopped on this server." });
     }
     if (status.healthFreshness !== "fresh") {
-      return Object.freeze({ kind: "unknown", text: "Folder sync is running, but current folder health is not known yet." });
+      return Object.freeze({ kind: "unknown", text: "Folder sync is running. The folders have not been checked yet." });
     }
-    return Object.freeze({ kind: "ready", text: "Local folder health was checked recently." });
+    return Object.freeze({ kind: "ready", text: "Folder sync is running and the folders were checked recently." });
   }
 
   function shareView(status, share) {
     if (share.phase === "removed") return Object.freeze({
       kind: "removed", text: share.remoteRemovalPending
         ? "Stopped here. Waiting for the other device to confirm removal. Files stay on both devices."
-        : "Sharing stopped. Files stay on both devices.",
+        : "Removed from this link. Files stay on both devices.",
     });
     if (share.pairingUpgradeRequired) return Object.freeze({ kind: "attention", text: "Pairing needs an update before this connection can transfer. Files stay on both devices." });
     if (share.expired) return Object.freeze({ kind: "expired", text: "Invitation expired" });
@@ -599,7 +621,7 @@
       return Object.freeze({ kind: "attention", text: "Needs attention" });
     }
     if (share.phase === "offered" || share.phase === "awaitingCommit") {
-      return Object.freeze({ kind: "waiting", text: share.incoming ? "Waiting for your folder" : "Waiting for other device" });
+      return Object.freeze({ kind: "waiting", text: share.incoming ? "Waiting for you to accept" : "Waiting for other device" });
     }
     if (status.availability !== "available") return Object.freeze({ kind: "offline", text: "Folder sync offline" });
     const peer = status.peers.find((item) => item.peerId === share.peerId);
@@ -636,6 +658,54 @@
     return Object.freeze({ kind: "unknown", text: "Connection status unknown" });
   }
 
+  // Why a run failed on this device, from GET /api/v1/sync/run-failures. The
+  // route is optional (older servers answer 404) and only ever explains this
+  // device's own attempts, so anything it cannot read is dropped rather than
+  // reported: the page then shows "Failed" alone, as it always has. The
+  // server's own sentence is not kept. The console words each cause itself, in
+  // the same terms as the rest of the page.
+  const RUN_FAILURE_ROLES = new Set(["destination", "source"]);
+
+  function runFailures(value) {
+    const failures = new Map();
+    if (value === null || typeof value !== "object" || Array.isArray(value)
+      || value.schemaVersion !== 1 || !Array.isArray(value.failures)) return failures;
+    for (const entry of value.failures.slice(0, MAX_COLLECTION)) {
+      if (entry === null || typeof entry !== "object" || Array.isArray(entry)
+        || typeof entry.folderId !== "string" || !UUID.test(entry.folderId)
+        || !Number.isSafeInteger(entry.generation) || entry.generation < 1
+        || !RUN_FAILURE_ROLES.has(entry.role)
+        || typeof entry.code !== "string" || entry.code.length > 64) continue;
+      const folder = entry.folderId.toLowerCase();
+      failures.set(folder, Object.freeze({ folderId: folder, generation: entry.generation, role: entry.role, code: entry.code }));
+    }
+    return failures;
+  }
+
+  // [what happened and what to do, whether running the link again is the fix]
+  const RUN_FAILURE_CAUSES = Object.freeze({
+    noSpace: ["This server ran out of storage space for the copy. Free up space on it.", true],
+    permissionDenied: ["Covalent couldn't read or write some files or folders. Check the folder permissions on both devices. On Docker or Unraid, the container's user needs write access to the mounted folder.", true],
+    readOnly: ["The destination folder on this server is read-only. Make it writable (on Docker, check that it isn't mounted read-only) or choose another folder.", true],
+    integrityMismatch: ["A copied file didn't match the source. If this happens again, check this server's disk.", true],
+    notFound: ["A file or folder went missing during the copy. Check that the source and destination folders still exist.", true],
+    network: ["The connection between the devices dropped or couldn't be made. Check that both devices are online and can reach each other.", true],
+    timeout: ["The other device took too long to respond. Check the connection between the devices.", true],
+    sourceChanged: ["Files at the source changed while they were being copied. Nothing needs fixing: the next run copies the new versions.", false],
+    folderUnavailable: ["This server couldn't open the link's folder. Reconnect its drive or mount, or choose the folder again.", true],
+    recoveryRequired: ["An earlier copy on this server was interrupted and has to be resolved before Covalent copies more. This server's log has the details.", false],
+    workerUnavailable: ["Covalent's transfer engine on this server couldn't start, or it stopped. Restart Covalent on this server.", true],
+    unknown: ["The copy failed and Covalent couldn't tell why. This server's log has the details.", true],
+  });
+
+  // A code this console does not know yet reads as `unknown`. Continuous links
+  // have no Run Now, so they get the cause and its fix without a retry step.
+  function runFailureCopy(code, cadenceMode) {
+    const [cause, retry] = Object.hasOwn(RUN_FAILURE_CAUSES, code) ? RUN_FAILURE_CAUSES[code] : RUN_FAILURE_CAUSES.unknown;
+    if (!retry || cadenceMode === "continuous") return cause;
+    return `${cause} ${cadenceMode === "scheduled" ? "Then choose Run Now, or wait for the next scheduled run." : "Then choose Run Now."}`;
+  }
+
   function storageKey(deviceId) {
     return `${STORAGE_PREFIX}${uuid(deviceId, "The server identity is invalid.")}`;
   }
@@ -669,12 +739,12 @@
   function savePending(storage, deviceId, body) {
     const key = storageKey(deviceId);
     const encoded = JSON.stringify(pendingRecord(deviceId, body));
-    if (encoded.length > MAX_STORAGE_BYTES) throw guidance("This folder offer is too large to retain safely.");
+    if (encoded.length > MAX_STORAGE_BYTES) throw guidance("This invitation is too large to save safely.");
     try {
       storage.setItem(key, encoded);
       if (storage.getItem(key) !== encoded) throw new Error("storage did not retain exact value");
     } catch (_) {
-      throw guidance("This browser could not retain the folder offer, so no request was sent.");
+      throw guidance("This browser could not save the invitation, so no request was sent.");
     }
     return JSON.parse(encoded).body;
   }
@@ -682,16 +752,16 @@
   function loadPending(storage, deviceId) {
     let encoded;
     try { encoded = storage.getItem(storageKey(deviceId)); }
-    catch (_) { throw guidance("This browser could not read its pending folder offer. No request was sent."); }
+    catch (_) { throw guidance("This browser could not read its saved invitation. No request was sent."); }
     if (encoded === null) return null;
-    if (encoded.length > MAX_STORAGE_BYTES) throw guidance("The saved folder offer is invalid. No request was sent.");
+    if (encoded.length > MAX_STORAGE_BYTES) throw guidance("The saved invitation is invalid. No request was sent.");
     let decoded;
     try { decoded = JSON.parse(encoded); }
-    catch (_) { throw guidance("The saved folder offer is invalid. No request was sent."); }
-    const record = object(decoded, "The saved folder offer is invalid. No request was sent.");
+    catch (_) { throw guidance("The saved invitation is invalid. No request was sent."); }
+    const record = object(decoded, "The saved invitation is invalid. No request was sent.");
     if (Object.keys(record).length !== 3 || !["schemaVersion", "deviceId", "body"].every((key) => Object.hasOwn(record, key))
       || record.schemaVersion !== 1 || uuid(record.deviceId) !== uuid(deviceId)) {
-      throw guidance("The saved folder offer belongs to a different server. No request was sent.");
+      throw guidance("The saved invitation belongs to a different server. No request was sent.");
     }
     return offerBody(record.body);
   }
@@ -702,18 +772,18 @@
       storage.removeItem(key);
       if (storage.getItem(key) !== null) throw new Error("storage did not clear value");
     } catch (_) {
-      throw guidance("The server accepted this folder offer, but the browser could not clear its retry copy. Retry the same saved offer before creating another one.");
+      throw guidance("This server accepted the invitation, but the browser could not clear its saved copy. Send the same saved invitation again before creating another one.");
     }
   }
 
   function settingsBody(value) {
-    const body = object(value, "This link-settings request is invalid.");
+    const body = object(value, "This settings change is invalid.");
     exactKeys(body, ["folderId", "changeId", "expectedRevision", "settings"],
-      "This link-settings request is invalid.");
+      "This settings change is invalid.");
     return Object.freeze({
       folderId: uuid(body.folderId),
-      changeId: uuid(body.changeId, "This link-settings change identifier is invalid."),
-      expectedRevision: unsigned(body.expectedRevision, "This link-settings revision is invalid."),
+      changeId: uuid(body.changeId, "This settings change has an invalid identifier."),
+      expectedRevision: unsigned(body.expectedRevision, "This settings change is based on invalid settings."),
       settings: folderLinkSettings(body.settings),
     });
   }
@@ -722,12 +792,12 @@
     const key = settingsStorageKey(deviceId);
     const record = { schemaVersion: 1, deviceId: uuid(deviceId), body: settingsBody(body) };
     const encoded = JSON.stringify(record);
-    if (encoded.length > MAX_STORAGE_BYTES) throw guidance("This link-settings request is too large to retain safely.");
+    if (encoded.length > MAX_STORAGE_BYTES) throw guidance("This settings change is too large to save safely.");
     try {
       storage.setItem(key, encoded);
       if (storage.getItem(key) !== encoded) throw new Error("storage did not retain exact value");
     } catch (_) {
-      throw guidance("This browser could not retain the exact link-settings request, so no request was sent.");
+      throw guidance("This browser could not save the settings change, so no request was sent.");
     }
     return JSON.parse(encoded).body;
   }
@@ -735,17 +805,17 @@
   function loadPendingSettings(storage, deviceId) {
     let encoded;
     try { encoded = storage.getItem(settingsStorageKey(deviceId)); }
-    catch (_) { throw guidance("This browser could not read its pending link-settings request. No request was sent."); }
+    catch (_) { throw guidance("This browser could not read its saved settings change. No request was sent."); }
     if (encoded === null) return null;
-    if (encoded.length > MAX_STORAGE_BYTES) throw guidance("The saved link-settings request is invalid. No request was sent.");
+    if (encoded.length > MAX_STORAGE_BYTES) throw guidance("The saved settings change is invalid. No request was sent.");
     let decoded;
     try { decoded = JSON.parse(encoded); }
-    catch (_) { throw guidance("The saved link-settings request is invalid. No request was sent."); }
-    const record = object(decoded, "The saved link-settings request is invalid. No request was sent.");
+    catch (_) { throw guidance("The saved settings change is invalid. No request was sent."); }
+    const record = object(decoded, "The saved settings change is invalid. No request was sent.");
     exactKeys(record, ["schemaVersion", "deviceId", "body"],
-      "The saved link-settings request is invalid. No request was sent.");
+      "The saved settings change is invalid. No request was sent.");
     if (record.schemaVersion !== 1 || uuid(record.deviceId) !== uuid(deviceId)) {
-      throw guidance("The saved link-settings request belongs to a different server. No request was sent.");
+      throw guidance("The saved settings change belongs to a different server. No request was sent.");
     }
     return settingsBody(record.body);
   }
@@ -756,21 +826,21 @@
       storage.removeItem(key);
       if (storage.getItem(key) !== null) throw new Error("storage did not clear value");
     } catch (_) {
-      throw guidance("The server retained this link-settings request, but the browser could not clear its retry copy.");
+      throw guidance("This server has the settings change, but the browser could not clear its saved copy.");
     }
   }
 
   function runBody(value) {
-    const body = object(value, "This run request is invalid.");
+    const body = object(value, "This Run Now request is invalid.");
     exactKeys(body, ["folderId", "requestId", "expectedGeneration", "settingsRevision"],
-      "This run request is invalid.");
-    const requestId = uuid(body.requestId, "This run request identifier is invalid.");
-    if (requestId === NIL_UUID) throw guidance("This run request identifier is invalid.");
+      "This Run Now request is invalid.");
+    const requestId = uuid(body.requestId, "This Run Now request has an invalid identifier.");
+    if (requestId === NIL_UUID) throw guidance("This Run Now request has an invalid identifier.");
     return Object.freeze({
       folderId: uuid(body.folderId),
       requestId,
-      expectedGeneration: unsigned(body.expectedGeneration, "This run request is based on invalid status."),
-      settingsRevision: unsigned(body.settingsRevision, "This run request is based on invalid settings."),
+      expectedGeneration: unsigned(body.expectedGeneration, "This Run Now request is based on invalid link status."),
+      settingsRevision: unsigned(body.settingsRevision, "This Run Now request is based on invalid settings."),
     });
   }
 
@@ -778,12 +848,12 @@
     const key = runStorageKey(deviceId);
     const record = { schemaVersion: 1, deviceId: uuid(deviceId), body: runBody(body) };
     const encoded = JSON.stringify(record);
-    if (encoded.length > MAX_STORAGE_BYTES) throw guidance("This run request is too large to retain safely.");
+    if (encoded.length > MAX_STORAGE_BYTES) throw guidance("This Run Now request is too large to save safely.");
     try {
       storage.setItem(key, encoded);
       if (storage.getItem(key) !== encoded) throw new Error("storage did not retain exact value");
     } catch (_) {
-      throw guidance("This browser could not retain the exact Run Now request, so no request was sent.");
+      throw guidance("This browser could not save the Run Now request, so no request was sent.");
     }
     return JSON.parse(encoded).body;
   }
@@ -791,7 +861,7 @@
   function loadPendingRun(storage, deviceId) {
     let encoded;
     try { encoded = storage.getItem(runStorageKey(deviceId)); }
-    catch (_) { throw guidance("This browser could not read its pending Run Now request. No request was sent."); }
+    catch (_) { throw guidance("This browser could not read its saved Run Now request. No request was sent."); }
     if (encoded === null) return null;
     if (encoded.length > MAX_STORAGE_BYTES) throw guidance("The saved Run Now request is invalid. No request was sent.");
     let decoded;
@@ -811,7 +881,7 @@
       storage.removeItem(key);
       if (storage.getItem(key) !== null) throw new Error("storage did not clear value");
     } catch (_) {
-      throw guidance("The server accepted this Run Now request, but the browser could not clear its retry copy.");
+      throw guidance("This server accepted the Run Now request, but the browser could not clear its saved copy.");
     }
   }
 
@@ -849,8 +919,8 @@
     }
 
     function requireMutationAvailable() {
-      if (!unlocked || deviceId === null) throw guidance("Unlock this console before changing folder sync.");
-      if (mutationLocked) throw guidance("Another folder change is still in progress.");
+      if (!unlocked || deviceId === null) throw guidance("Unlock this console before changing a link.");
+      if (mutationLocked) throw guidance("Another change is still in progress.");
     }
 
     async function refresh() {
@@ -886,14 +956,14 @@
       path,
       body,
       expectedDeviceId = deviceId,
-      staleMessage = "This folder change finished for a previous server. Its result was not applied; refresh the current server before continuing.",
+      staleMessage = "This change finished for a previous server. Its result was not applied; refresh before continuing.",
       confirm = null,
     ) {
       requireMutationAvailable();
       if (expectedDeviceId === null || deviceId !== expectedDeviceId) {
-        throw guidance("The folder server changed before this request started. Refresh folders before trying again.");
+        throw guidance("The server changed before this request started. Refresh before trying again.");
       }
-      if (mutationLocked) throw guidance("Another folder change is still in progress.");
+      if (mutationLocked) throw guidance("Another change is still in progress.");
       mutationLocked = true;
       generation += 1;
       onLockChange(true);
@@ -911,27 +981,27 @@
     }
 
     async function sendOffer(body) {
-      if (!unlocked || deviceId === null) throw guidance("Unlock this console before sharing a folder.");
+      if (!unlocked || deviceId === null) throw guidance("Unlock this console before creating a link.");
       const offerDeviceId = deviceId;
       const existing = loadPending(options.storage, offerDeviceId);
       const candidate = offerBody(body);
       if (existing !== null && JSON.stringify(existing) !== JSON.stringify(candidate)) {
-        throw guidance("Retry or clear the saved folder offer before creating another one.");
+        throw guidance("Send or discard the saved invitation before creating another one.");
       }
       const retained = existing ?? savePending(options.storage, offerDeviceId, candidate);
-      const staleMessage = "This offer finished for a previous server. Its exact retry copy was retained.";
+      const staleMessage = "This invitation finished for a previous server. Its exact retry copy was retained.";
       const result = await mutate("/api/v1/sync/folders", retained, offerDeviceId, staleMessage);
       if (!unlocked || deviceId !== offerDeviceId) {
-        throw guidance("This offer finished for a previous server. Its exact retry copy was retained.");
+        throw guidance("This invitation finished for a previous server. Its exact retry copy was retained.");
       }
       clearPending(options.storage, offerDeviceId);
       return result;
     }
 
     async function retryPendingOffer() {
-      if (!unlocked || deviceId === null) throw guidance("Unlock this console before retrying a folder offer.");
+      if (!unlocked || deviceId === null) throw guidance("Unlock this console before sending an invitation again.");
       const pending = loadPending(options.storage, deviceId);
-      if (pending === null) throw guidance("There is no saved folder offer to retry.");
+      if (pending === null) throw guidance("There is no saved invitation to send again.");
       return sendOffer(pending);
     }
 
@@ -939,9 +1009,9 @@
       const id = uuid(offerId);
       const share = currentStatus?.shares.find((item) => item.offerId === id);
       if (!share || !share.incoming || share.phase !== "offered") {
-        throw guidance("That incoming folder offer is no longer available. Refresh folders first.");
+        throw guidance("That invitation is no longer available. Refresh first.");
       }
-      if (share.expired) throw guidance("That folder invitation has expired and cannot be accepted.");
+      if (share.expired) throw guidance("That invitation has expired and cannot be accepted.");
       return mutate("/api/v1/sync/accept", { offerId: id, selectedRoot: selectedRoot(rootPath) });
     }
 
@@ -950,22 +1020,22 @@
       const share = currentStatus?.shares.find((item) => item.offerId === id);
       if (!share || share.incoming || !share.expired
         || !["offered", "paused"].includes(share.phase)) {
-        throw guidance("Only an expired invitation you sent can be renewed. Refresh folders first.");
+        throw guidance("Only an expired invitation you sent can be sent again. Refresh first.");
       }
       // Retrying the expired ID returns the same durable replacement. Keep any
       // unrelated new-folder draft intact, including after a lost response.
       const result = await mutate("/api/v1/sync/renew", { offerId: id });
       if (result.offerId === null || result.offerId === id) {
-        throw guidance("The server did not identify the new invitation. Refresh folders before trying again.");
+        throw guidance("This server did not identify the new invitation. Refresh before trying again.");
       }
       return result;
     }
 
     function pause(offerId, paused) {
-      if (typeof paused !== "boolean") throw guidance("The folder pause request is invalid.");
+      if (typeof paused !== "boolean") throw guidance("The pause request is invalid.");
       const id = uuid(offerId);
       const share = currentStatus?.shares.find((item) => item.offerId === id);
-      if (!share) throw guidance("That link is no longer available. Refresh links first.");
+      if (!share) throw guidance("That link is no longer available. Refresh first.");
       if (share.linkSettings === null) return mutate("/api/v1/sync/pause", { offerId: id, paused });
       return requestLinkSettings(share.folderId, {
         deletionPolicy: share.linkSettings.settings.deletionPolicy,
@@ -979,7 +1049,7 @@
       const id = uuid(folderId);
       const shares = currentStatus?.shares.filter((item) => item.folderId === id
         && item.linkSettings !== null && item.phase !== "removed") ?? [];
-      if (shares.length === 0) throw guidance("That one-way link is no longer available. Refresh links first.");
+      if (shares.length === 0) throw guidance("That one-way link is no longer available. Refresh first.");
       if (!shares[0].linkSettings.confirmed) {
         throw guidance("Wait for the source to confirm this link before changing its settings.");
       }
@@ -1005,7 +1075,7 @@
       }
       if (observed === "conflict" || observed === "stale") {
         if (observed === "conflict") clearPendingSettings(options.storage, deviceId);
-        throw guidance("This saved link-settings request is outdated. Review the current and attempted settings before submitting again.");
+        throw guidance("This saved settings change is outdated. Check the current settings before saving again.");
       }
       try {
         const mutation = await mutate("/api/v1/sync/settings", retained);
@@ -1013,8 +1083,8 @@
         return Object.freeze({ outcome: "submitted", mutation });
       } catch (error) {
         throw guidance(error?.code === "link_settings_conflict"
-          ? "Link settings changed on another device. Refresh and review the current settings before submitting again."
-          : "The link-settings result is uncertain. Retry the exact saved request before making another settings change.");
+          ? "Link settings changed on another device. Refresh, then check the current settings before saving again."
+          : "The result of this settings change is uncertain. Send the same saved change again before making a different one.");
       }
     }
 
@@ -1025,14 +1095,14 @@
       const saved = loadPendingSettings(options.storage, deviceId);
       if (saved !== null) {
         if (saved.folderId !== share.folderId || !sameSettings(saved.settings, candidate)) {
-          throw guidance("Retry or review the saved link-settings request before making another settings change.");
+          throw guidance("Send or discard the saved settings change before making a different one.");
         }
         return sendLinkSettings(saved);
       }
       const state = share.linkSettings;
       if (state.pendingChange !== null) {
         if (!sameSettings(state.pendingChange.settings, candidate)) {
-          throw guidance("A link-settings change is already waiting for the source. Review it before making another change.");
+          throw guidance("A settings change is already waiting for the source. Wait for it before making another change.");
         }
         return sendLinkSettings(requestFromState(state.pendingChange));
       }
@@ -1073,10 +1143,10 @@
         if (["link_run_conflict", "link_run_pending"].includes(error?.code)) {
           clearPendingRun(options.storage, expectedDeviceId);
           throw guidance(error.code === "link_run_pending"
-            ? "Another Run Now request is waiting for the source. Refresh link status before trying again."
-            : "The link changed before Run Now started. Refresh link status and try again.");
+            ? "Another Run Now request is waiting for the source. Refresh before trying again."
+            : "The link changed before Run Now started. Refresh, then choose Run Now again.");
         }
-        throw guidance("The Run Now result is uncertain. Retry the exact saved request before starting another run.");
+        throw guidance("The result of this Run Now is uncertain. Send the same saved request again before starting another run.");
       }
     }
 
@@ -1086,7 +1156,7 @@
       const saved = loadPendingRun(options.storage, deviceId);
       if (saved !== null) {
         if (saved.folderId !== share.folderId) {
-          throw guidance("Retry or discard the saved Run Now request before starting a different link.");
+          throw guidance("Send or discard the saved Run Now request before running a different link.");
         }
         return sendRunNow(saved);
       }
@@ -1109,7 +1179,7 @@
     function retryPendingRun() {
       requireMutationAvailable();
       const saved = loadPendingRun(options.storage, deviceId);
-      if (saved === null) throw guidance("There is no saved Run Now request to retry.");
+      if (saved === null) throw guidance("There is no saved Run Now request to send again.");
       return sendRunNow(saved);
     }
 
@@ -1121,7 +1191,7 @@
     function retryPendingLinkSettings() {
       requireMutationAvailable();
       const saved = loadPendingSettings(options.storage, deviceId);
-      if (saved === null) throw guidance("There is no saved link-settings request to retry.");
+      if (saved === null) throw guidance("There is no saved settings change to send again.");
       return sendLinkSettings(saved);
     }
 
@@ -1141,7 +1211,7 @@
     async function sendPeerAddressRefresh(request) {
       const expectedDeviceId = deviceId;
       const expectedAccessEpoch = accessEpoch;
-      const staleMessage = "Console access changed while this address update was running. Refresh paired devices before continuing.";
+      const staleMessage = "Console access changed while this address update was running. Refresh before continuing.";
       try {
         const result = await mutate(
           "/api/v1/sync/peers/refresh-address",
@@ -1158,7 +1228,7 @@
             onStatus(decoded);
             const peer = decoded.peers.find((item) => item.peerId === request.peerId);
             if (!peer || peer.address !== request.candidateAddress) {
-              throw guidance("The address request finished, but its saved address is not confirmed yet. Retry the exact request or cancel it.");
+              throw guidance("The address update finished, but the saved address is not confirmed yet. Try the same address again, or cancel it.");
             }
           },
         );
@@ -1185,7 +1255,7 @@
           // reload the current address without exposing transport diagnostics.
         }
         if (accessEpoch !== expectedAccessEpoch) throw guidance(staleMessage);
-        throw guidance("That paired device's saved address changed. Review its current address and submit a new update.");
+        throw guidance("That paired device's saved address changed. Review its current address, then enter a new update.");
       }
     }
 
@@ -1195,12 +1265,12 @@
       if (pendingAddressRefresh !== null) {
         if (pendingAddressRefresh.peerId !== id
           || pendingAddressRefresh.candidateAddress !== candidate) {
-          throw guidance("Retry or cancel the saved address update before entering a different address.");
+          throw guidance("Try the saved address again, or cancel it, before entering a different address.");
         }
         return sendPeerAddressRefresh(pendingAddressRefresh);
       }
       const peer = currentStatus?.peers.find((item) => item.peerId === id);
-      if (!peer) throw guidance("That paired device is no longer available. Refresh devices first.");
+      if (!peer) throw guidance("That paired device is no longer available. Refresh first.");
       if (peer.address === null) {
         throw guidance("This server version cannot safely update that paired device's address.");
       }
@@ -1217,7 +1287,7 @@
     function retryPeerAddressRefresh(peerId) {
       const id = uuid(peerId, "Choose a currently paired device.");
       if (pendingAddressRefresh === null || pendingAddressRefresh.peerId !== id) {
-        throw guidance("There is no saved address update to retry for that device.");
+        throw guidance("There is no saved address update to try again for that device.");
       }
       return sendPeerAddressRefresh(pendingAddressRefresh);
     }
@@ -1228,7 +1298,7 @@
     }
 
     function discardPendingOffer() {
-      if (!unlocked || deviceId === null) throw guidance("Unlock this console before clearing a saved folder offer.");
+      if (!unlocked || deviceId === null) throw guidance("Unlock this console before discarding a saved invitation.");
       clearPending(options.storage, deviceId);
     }
 
@@ -1273,6 +1343,7 @@
     cadence,
     androidConditions,
     policyExplanation,
+    deletionConfirmation,
     settingsExplanation,
     peerAddress,
     pending: Object.freeze({ clear: clearPending, load: loadPending, save: savePending, storageKey }),
@@ -1290,6 +1361,8 @@
     }),
     requireStatus,
     readJson,
+    runFailureCopy,
+    runFailures,
     shareView,
     statusSummary,
     groupShares,

@@ -81,16 +81,16 @@ test("every error code the node can emit has console copy with a recovery action
 
 test("mapped engine codes produce their intended sentence and next step", () => {
   const cases = [
-    ["authentication_required", 401, "This console is no longer unlocked. Enter the local access token again to continue.", "reconnect"],
-    ["insufficient_storage", 507, "Your backup server is out of space. Free some up, or choose a different device to keep this copy.", "freeUpSpace"],
+    ["authentication_required", 401, "This console is no longer unlocked. Enter the server access token again to continue.", "reconnect"],
+    ["insufficient_storage", 507, "This server is out of space. Free some up, or choose a different device to keep this copy.", "freeUpSpace"],
     ["source_unreadable", 422, "Covalent couldn't read part of the folder you chose. Choose the folder again.", "chooseFolderAgain"],
     ["restore_plan_mismatch", 409, "This restore changed after you previewed it. Preview it again before restoring.", "previewRestoreAgain"],
     ["pairing_rejected", 409, "That device turned down the pairing request. Nothing was trusted.", "chooseAnotherDevice"],
-    ["node_busy", 503, "Your backup server is busy with something else. Try again in a moment.", "retry"],
+    ["node_busy", 503, "This server is busy with something else. Try again in a moment.", "retry"],
     ["backup_corrupt", 422, "Some of this backup's encrypted data is damaged. Verify the backup to see what can still be restored.", "none"],
     ["invalid_peer_address", 400, "Enter the device address as a numeric IP address and port, such as 192.168.1.20:8787, then try again.", "none"],
     ["peer_address_changed", 409, "The saved device address changed before this update finished. Refresh the saved device, then try again.", "retry"],
-    ["peer_address_unreachable", 502, "Covalent could not authenticate the trusted device at the new address. Check the address and network connection, then try again.", "retry"],
+    ["peer_address_unreachable", 502, "Covalent could not confirm the paired device at the new address. Check the address and network connection, then try again.", "retry"],
     ["folder_sync_unavailable", 409, "Folder sync is unavailable on this server. Check its folder-sync package and mounted folder, then try again.", "retry"],
     ["folder_sync_busy", 503, "Another folder change is still in progress. Try again shortly.", "retry"],
     ["folder_sync_needs_attention", 409, "Folder sync needs attention before it can continue. Check the folder status, then try again.", "retry"],
@@ -126,24 +126,24 @@ test("first-run setup and endpoint codes read as instructions, never as diagnost
     assert.equal(failure.detail, `HTTP ${status} \u00b7 ${code} \u00b7 engine text nobody should read`);
     // The specific regression this guards: `claim_code_incorrect` arrives as a
     // 401, and the unrecognised-401 fallback tells the reader to unlock the
-    // console with a local access token -- advice that is exactly backwards for
+    // console with an access token -- advice that is exactly backwards for
     // someone who has no token and is trying to obtain one.
-    assert.ok(!failure.summary.includes("local access token"), code);
+    assert.ok(!failure.summary.includes("access token"), code);
     assert.ok(!failure.summary.includes("engine text"), code);
   }
 });
 
 test("an unrecognised code still falls back on its status, never on server text", () => {
   const cases = [
-    [401, "Your backup server refused this request. Unlock the console again with a current local access token.", "reconnect"],
-    [403, "Your backup server refused this request. Unlock the console again with a current local access token.", "reconnect"],
-    [404, "Covalent couldn't find that on your backup server.", "none"],
-    [409, "Something else changed on your backup server first. Reload the page, then try again.", "retry"],
-    [413, "That's larger than your backup server accepts in one go. Try a smaller folder.", "none"],
-    [422, "Your backup server wouldn't accept what this console sent. Check the values in the form, then try again.", "none"],
-    [500, "Something went wrong on your backup server. Try again; if it keeps happening, check its logs.", "retry"],
-    [503, "Your backup server isn't ready to answer yet. Wait for it to finish starting, then try again.", "retry"],
-    [507, "Your backup server is out of space.", "freeUpSpace"],
+    [401, "This server refused this request. Unlock the console again with a current access token.", "reconnect"],
+    [403, "This server refused this request. Unlock the console again with a current access token.", "reconnect"],
+    [404, "Covalent couldn't find that on this server.", "none"],
+    [409, "Something else changed on this server first. Reload the page, then try again.", "retry"],
+    [413, "That's larger than this server accepts in one go. Try a smaller folder.", "none"],
+    [422, "This server wouldn't accept what this console sent. Check the values in the form, then try again.", "none"],
+    [500, "Something went wrong on this server. Try again; if it keeps happening, check its logs.", "retry"],
+    [503, "This server isn't ready to answer yet. Wait for it to finish starting, then try again.", "retry"],
+    [507, "This server is out of space.", "freeUpSpace"],
   ];
   for (const [status, summary, recovery] of cases) {
     const failure = copy.describeApi(status, "a_code_from_a_newer_node", "/srv/covalent/keys/identity.key is unreadable", false);
@@ -153,23 +153,23 @@ test("an unrecognised code still falls back on its status, never on server text"
   }
   assert.equal(
     copy.describeApi(418, "a_code_from_a_newer_node", "", true).summary,
-    "Your backup server couldn't complete that request. Try again in a moment.",
+    "This server couldn't complete that request. Try again in a moment.",
   );
   assert.equal(
     copy.describeApi(418, "a_code_from_a_newer_node", "", false).summary,
-    "Your backup server couldn't complete that request.",
+    "This server couldn't complete that request.",
   );
 });
 
 test("transport failures are classified rather than shown raw", () => {
   const offline = copy.describe(new TypeError("Failed to fetch"), { online: false });
-  assert.equal(offline.summary, "This computer isn't connected to a network, so Covalent can't reach your backup server.");
+  assert.equal(offline.summary, "This computer isn't connected to a network, so Covalent can't reach this server.");
   assert.equal(offline.recovery, "checkNetworkSettings");
 
-  // The browser reports a stopped node and an untrusted certificate as the same
+  // The browser reports a stopped server and an untrusted certificate as the same
   // opaque TypeError, so one honest sentence has to cover both.
   const unreachable = copy.describe(new TypeError("Failed to fetch"), { online: true });
-  assert.match(unreachable.summary, /couldn't reach your backup server/);
+  assert.match(unreachable.summary, /couldn't reach this server/);
   assert.match(unreachable.summary, /certificate authority/);
   assert.equal(unreachable.recovery, "reconnect");
   assert.equal(copy.describe(new TypeError("Load failed"), { online: true }).summary, unreachable.summary);
@@ -182,7 +182,7 @@ test("transport failures are classified rather than shown raw", () => {
   abort.name = "AbortError";
   assert.equal(
     copy.describe(abort).summary,
-    "Your backup server didn't answer in time. Make sure it's turned on and awake, then try again.",
+    "This server didn't answer in time. Make sure it's turned on and awake, then try again.",
   );
   assert.equal(copy.describe(abort).recovery, "retry");
 
@@ -199,7 +199,7 @@ test("a protocol mismatch is copy, not a version dump", () => {
   const failure = copy.describeProtocol(9);
   assert.equal(
     failure.summary,
-    "This console and your backup server don't agree on how to talk to each other. Update both to the same version.",
+    "This page and this server don't agree on how to talk to each other. Reload the page; if it keeps happening, update the server.",
   );
   assert.equal(failure.detail, "node protocol 9 · this console speaks 1");
 });

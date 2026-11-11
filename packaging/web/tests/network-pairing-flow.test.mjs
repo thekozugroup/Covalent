@@ -53,7 +53,7 @@ test("starting pairing sends only the chosen address and returns a checked reque
   assert.equal(started.pairingId, "pair-42");
 
   const empty = recorder(() => pendingItem());
-  await assert.rejects(network.start(empty.api, "   "), /Enter the other device's name or address/);
+  await assert.rejects(network.start(empty.api, "   "), /Enter the other device's address or Tailscale name/);
   assert.deepEqual(empty.calls, [], "an empty address must not reach the node");
 });
 
@@ -164,7 +164,7 @@ test("pending requests are listed and each one is checked", async () => {
 test("the pairing summary is display copy with the code spoken group by group", () => {
   const details = network.summary(pendingItem({ direction: "incoming" }));
   assert.equal(details.direction, "Incoming pairing request");
-  assert.equal(details.stateCopy, "Compare the code, then confirm it here.");
+  assert.equal(details.stateCopy, "Compare the confirmation code, then confirm it here.");
   assert.equal(details.awaitingLocalConfirmation, true);
   assert.equal(details.settled, false);
   assert.equal(details.code, "1234-5678-9012-3456");
@@ -178,7 +178,7 @@ test("the pairing summary is display copy with the code spoken group by group", 
   assert.equal(waiting.settled, false);
 
   const done = network.summary(pendingItem({ state: "complete" }));
-  assert.equal(done.stateCopy, "Device paired with its signed certificate fingerprint.");
+  assert.equal(done.stateCopy, "Device paired. You can now add it to a link.");
   assert.equal(done.settled, true);
 
   // A failure keeps the engine's code for the console to map, and holds the
