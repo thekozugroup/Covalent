@@ -68,6 +68,7 @@ import life.michaelwong.covalent.model.FolderLinkRunResult
 import life.michaelwong.covalent.model.FolderLinkSettings
 import life.michaelwong.covalent.model.FolderLinkSettingsState
 import life.michaelwong.covalent.model.FolderSyncAvailability
+import life.michaelwong.covalent.model.FolderSyncLifecycle
 import life.michaelwong.covalent.model.NetworkPairingDirection
 import life.michaelwong.covalent.model.NetworkPairingState
 import life.michaelwong.covalent.model.NodeConnection
@@ -287,7 +288,7 @@ class SafFolderSyncJourneyInstrumentedTest {
                     .single { it.peerId == identityB.deviceId }.address,
             )
             writeSafFile(sourceGrant, "restart.txt", SAF_RESTART_CONTENT)
-            val restartedShare = sourceShare(restartedA)
+            val restartedShare = awaitSettledSourceShare("restarted SAF service before Run Now", restartedA)
             client.runFolderLinkNow(
                 restartedA.baseUrl,
                 restartedA.token,
@@ -794,6 +795,41 @@ class SafFolderSyncJourneyInstrumentedTest {
         client.folderSyncStatus(connection.baseUrl, connection.token).shares.single {
             !it.incoming && it.offerId == offerId
         }
+
+    /**
+     * A re-registered service briefly holds its folder-sync lock while it rescans
+     * and starts its worker; requests made meanwhile are answered with the
+     * retryable `folder_sync_busy`. Wait, within the normal deadline, until a
+     * status read is answered and reports a settled lifecycle, then return the
+     * share for exactly one Run Now request. Any other refusal, or a lifecycle
+     * that needs attention, fails at once; Run Now itself is never retried.
+     */
+    private fun awaitSettledSourceShare(label: String, connection: NodeConnection): FolderShare {
+        val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(DEFAULT_TIMEOUT_MILLIS)
+        var lastObserved = "no status answer"
+        while (System.nanoTime() < deadline) {
+            val status = try {
+                client.folderSyncStatus(connection.baseUrl, connection.token)
+            } catch (error: NodeApiException) {
+                if (error.code != "folder_sync_busy") throw error
+                lastObserved = "status answered folder_sync_busy"
+                null
+            }
+            if (status != null) {
+                lastObserved = "lifecycle ${status.lifecycle}"
+                if (status.lifecycle == FolderSyncLifecycle.NEEDS_ATTENTION) {
+                    throw AssertionError("$label: folder sync needs attention (${status.issue}).")
+                }
+                if (status.lifecycle == FolderSyncLifecycle.STOPPED ||
+                    status.lifecycle == FolderSyncLifecycle.RUNNING
+                ) {
+                    return status.shares.single { !it.incoming && it.offerId == offerId }
+                }
+            }
+            Thread.sleep(POLL_MILLIS)
+        }
+        throw AssertionError("$label: folder sync stayed busy until the deadline ($lastObserved).")
+    }
 
     private fun recoveryDiagnostic(label: String, connection: NodeConnection, requestId: String): String =
         runCatching {
