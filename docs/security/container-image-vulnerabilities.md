@@ -6,6 +6,17 @@ sees in `packaging/docker/Dockerfile`, and what is left to decide.
 Current CI scans the immutable local image ID separately on native amd64 and
 arm64 runners. Historical measurements below retain their original scope.
 
+## 2026-11-11 compression remediation
+
+The November 11 database added GO-2026-6865 (High) for
+`github.com/klauspost/compress` v1.18.7 in the Caddy consumer. The consumer
+selects the lowest fixed release, v1.20.2, through ordinary minimal version
+selection; no other module moves and nothing is excluded or waived. The build
+drift check and container contract now require v1.20.2, and the Caddy
+distribution evidence was regenerated as recorded in the
+[Caddy inventory](caddy-target-license-inventory.md). The rclone worker does not
+include this module.
+
 ## 2026-11-01 JOSE and HTML remediation
 
 The Caddy consumer now pins JOSE v3 to the official upstream security backport

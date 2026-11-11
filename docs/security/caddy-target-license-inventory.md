@@ -4,6 +4,19 @@ This is an engineering inventory, not legal advice or release approval. It
 records the exact texts observed in the pinned Caddy consumer's compiled Linux
 graphs and identifies separately retained source material.
 
+## November 11 compression refresh
+
+GO-2026-6865 affects `github.com/klauspost/compress` v1.18.7; the lowest fixed
+release is v1.20.2. Only that module moves. Both Linux target graphs keep 148
+modules (952 packages on amd64 and 950 on arm64, one more from the new
+compress release), unchanged license-family counts, zero unclassified texts and the same
+MPL source member manifest. The readable notice SHA-256 is now
+`f2344f023a93ddeda6fb3ec3c8abf7199677ff70f2bff0d9a6dc3958ee4e5eaf`. The
+collector and verifier bind the new consumer checksums, inventories and ELF
+hashes. The same local procedure (exact Go 1.26.10, `-trimpath` CGO-free Linux
+builds, `go list -deps` and the unchanged collector) first reproduced every
+previous pin byte for byte, including both ELF hashes, before the update.
+
 ## November 1 source reference
 
 Go1.26.10 now selects the official JOSE v3 security backport0e502b87c7aa,

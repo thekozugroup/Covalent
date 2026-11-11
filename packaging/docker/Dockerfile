@@ -133,8 +133,8 @@ RUN set -eu; \
       awk -v module="$otel_module" '$1 == "dep" && $2 == module && $3 == "v1.45.0" { found = 1 } END { exit !found }' /tmp/buildinfo \
         || { echo 'OTel trace exporter drifted from reviewed v1.45.0 (GHSA-8wmf-6v46-5gfg)' >&2; exit 1; }; \
     done; \
-    grep -q 'github.com/klauspost/compress[[:space:]]\+v1\.18\.7' /tmp/buildinfo \
-      || { echo 'klauspost/compress drifted from reviewed v1.18.7 (GO-2026-5841)' >&2; exit 1; }; \
+    grep -q 'github.com/klauspost/compress[[:space:]]\+v1\.20\.2' /tmp/buildinfo \
+      || { echo 'klauspost/compress drifted from reviewed v1.20.2 (GO-2026-5841, GO-2026-6865)' >&2; exit 1; }; \
     /caddy.unprivileged version
 # The Caddyfile that ships in this image must be valid against the binary that
 # ships with it. Proving that here means a config/binary mismatch cannot reach
