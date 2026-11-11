@@ -1,4 +1,4 @@
-FROM golang:1.26.7-alpine3.23@sha256:b17af760035fc2f338eed92d448a6c67f2d45438844fc6c60678fa5f99e44b57 AS sync-engine-worker
+FROM golang:1.27.0-alpine3.23@sha256:3747dcba41c8b0db3211fda4db61638b980e17ac5bb3c94460a975a9cfe19395 AS sync-engine-worker
 ARG TARGETARCH
 ENV CGO_ENABLED=0 \
     GOTOOLCHAIN=local \
@@ -31,7 +31,7 @@ RUN apk add --no-cache \
     && install -m 0444 /engine-evidence/target-license-inventory.json \
       /engine-worker/target-license-inventory.json
 
-FROM rust:1.97.1-alpine3.23@sha256:c4a364ddbf684fe038e6fa6a4f25b30c8dc85247423e0e660676ece0d17be4a2 AS builder
+FROM rust:1.99.1-alpine3.23@sha256:51e1b72c7f236093c084f6e3051239f033fba9e4c0c1430cc2ed479d0a3bd14c AS builder
 ARG TARGETARCH
 WORKDIR /source
 ENV CARGO_INCREMENTAL=0
@@ -71,7 +71,7 @@ RUN build-linux-sync-engine package \
 #   - GOTOOLCHAIN=local, so the `go 1.26.7` directive in that go.mod is enforced
 #     by the image's own compiler instead of being papered over by an automatic
 #     toolchain download from the network.
-FROM golang:1.26.7-alpine3.23@sha256:b17af760035fc2f338eed92d448a6c67f2d45438844fc6c60678fa5f99e44b57 AS caddy
+FROM golang:1.27.0-alpine3.23@sha256:3747dcba41c8b0db3211fda4db61638b980e17ac5bb3c94460a975a9cfe19395 AS caddy
 ENV CGO_ENABLED=0 \
     GOTOOLCHAIN=local \
     GOFLAGS=-mod=readonly
