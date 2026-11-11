@@ -7,6 +7,8 @@ import life.michaelwong.covalent.model.FolderLinkPolicy
 import life.michaelwong.covalent.model.FolderLinkSettings
 import life.michaelwong.covalent.model.FolderLinkCadence
 import life.michaelwong.covalent.model.AndroidLinkConditions
+import life.michaelwong.covalent.model.FolderLinkRunFailure
+import life.michaelwong.covalent.model.FolderLinkRunFailureRole
 import life.michaelwong.covalent.model.FolderLinkRunPhase
 import life.michaelwong.covalent.model.FolderSyncIssue
 import life.michaelwong.covalent.model.FolderSyncLifecycle
@@ -510,6 +512,57 @@ class FolderSyncClientTest {
             server.shutdown()
         }
     }
+
+    @Test
+    fun runFailuresAreReadFromTheirOwnRouteAndAnOlderNodeMeansNone() {
+        val server = MockWebServer()
+        server.enqueue(MockResponse().setBody(
+            JSONObject()
+                .put("schemaVersion", 1)
+                .put("failures", JSONArray()
+                    .put(runFailure("destination", "noSpace", generation = 4))
+                    // A code this client does not know yet is kept, so the screen can call it unknown.
+                    .put(runFailure("source", "somethingNewer", generation = 2, folderId = OFFER))
+                    // A role this client does not know is skipped rather than failing the list.
+                    .put(runFailure("observer", "network", generation = 3)))
+                .toString(),
+        ))
+        server.enqueue(MockResponse().setResponseCode(404).setBody("""{"code":"route_not_found"}"""))
+        server.enqueue(MockResponse().setBody("""{"schemaVersion":2,"failures":[]}"""))
+        server.enqueue(MockResponse().setResponseCode(401).setBody("""{"code":"unauthorized"}"""))
+        server.start()
+        try {
+            val base = server.url("/").toString().removeSuffix("/")
+            val client = CovalentNodeClient()
+            assertEquals(
+                listOf(
+                    FolderLinkRunFailure(FOLDER, 4, FolderLinkRunFailureRole.DESTINATION, "noSpace"),
+                    FolderLinkRunFailure(OFFER, 2, FolderLinkRunFailureRole.SOURCE, "somethingNewer"),
+                ),
+                client.folderLinkRunFailures(base, "token"),
+            )
+            val request = server.takeRequest()
+            assertEquals("/api/v1/sync/run-failures", request.path)
+            assertEquals("GET", request.method)
+            assertEquals("Bearer token", request.getHeader("Authorization"))
+            // v0.2.12 and earlier do not have the route: no explanations, and no error.
+            assertEquals(emptyList<FolderLinkRunFailure>(), client.folderLinkRunFailures(base, "token"))
+            // Anything else stays an error for the caller, which then keeps the plain result.
+            assertTrue(runCatching { client.folderLinkRunFailures(base, "token") }.isFailure)
+            assertTrue(runCatching { client.folderLinkRunFailures(base, "token") }.isFailure)
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    private fun runFailure(role: String, code: String, generation: Long, folderId: String = FOLDER) =
+        JSONObject()
+            .put("folderId", folderId)
+            .put("generation", generation)
+            .put("role", role)
+            .put("code", code)
+            .put("message", "Node-side sentence the app does not show.")
+            .put("endedAtUnixMs", 1_700_000_000_000L)
 
     private companion object {
         const val PEER = "22222222-2222-4222-8222-222222222222"

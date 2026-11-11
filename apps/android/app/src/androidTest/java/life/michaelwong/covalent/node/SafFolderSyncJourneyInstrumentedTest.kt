@@ -372,7 +372,13 @@ class SafFolderSyncJourneyInstrumentedTest {
                     val restoredRecord = SafFolderGrantStore(context).records().singleOrNull {
                         it.id == sourceGrant.id && it.treeUri == sourceGrant.treeUri
                     }
-                    restoredRecord?.selectedRoot == sourceGrant.selectedRoot &&
+                    // A repair that was still pending when the service restarted is replayed on a
+                    // recovery-only runtime. That runtime lists the share from its journal and
+                    // reports no folders at all, so the checks below pass on it, yet it refuses
+                    // every run with folder_sync_unavailable until the service replaces it.
+                    // Only an available runtime has finished the repair.
+                    status.availability == FolderSyncAvailability.AVAILABLE &&
+                        restoredRecord?.selectedRoot == sourceGrant.selectedRoot &&
                         status.shares.singleOrNull { it.offerId == offerId }
                             ?.let { it.folderId == folderId.toString() && it.phase == FolderSharePhase.READY } == true &&
                         status.folders.none {

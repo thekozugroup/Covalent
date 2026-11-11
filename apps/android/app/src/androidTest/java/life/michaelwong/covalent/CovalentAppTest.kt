@@ -22,8 +22,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsToggleable
+import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
@@ -144,19 +146,26 @@ class CovalentAppTest {
             }
         }
 
-        compose.onNodeWithText("Outgoing backup-device request").assertIsDisplayed()
-        compose.onNodeWithText("Codes match — use as backup device").assertIsDisplayed()
-        compose.onNodeWithText(
-            "Compare this code on both physical devices. Continue only if every group matches. " +
-                "Pairing copies nothing now; you choose this device separately when creating a backup.",
-        ).assertIsDisplayed()
+        // Both modes name the request the same way. What differs is what confirming does,
+        // so the confirm label and the explanation carry the distinction.
+        val backupConfirm = "Codes match — use this device for backups"
+        val backupExplanation =
+            "Compare this confirmation code with the one on the other device. Confirm on both " +
+                "only if every group matches. Pairing copies nothing now; you choose this device " +
+                "separately when creating a backup."
+        compose.onNodeWithText("Outgoing pairing request").assertIsDisplayed()
+        compose.onNodeWithText(backupConfirm).assertIsDisplayed()
+        compose.onNodeWithText(backupExplanation).assertIsDisplayed()
+        compose.onNodeWithText("Codes match — pair device").assertDoesNotExist()
         compose.runOnIdle { folderMode.value = true }
-        compose.onNodeWithText("Outgoing folder sync device request").assertIsDisplayed()
-        compose.onNodeWithText("Outgoing backup-device request").assertDoesNotExist()
+        compose.onNodeWithText("Outgoing pairing request").assertIsDisplayed()
+        compose.onNodeWithText(backupConfirm).assertDoesNotExist()
+        compose.onNodeWithText(backupExplanation).assertDoesNotExist()
         compose.onNodeWithText("Codes match — pair device").assertIsDisplayed()
         compose.onNodeWithText(
-            "Compare this code on both physical devices. Continue only if every group matches. " +
-                "Pairing copies nothing now; choose a folder separately after pairing.",
+            "Compare this confirmation code with the one on the other device. Confirm on both " +
+                "only if every group matches. Pairing copies nothing now; you choose a folder " +
+                "separately after pairing.",
         ).assertIsDisplayed()
     }
 
@@ -260,6 +269,23 @@ class CovalentAppTest {
     }
 
     @Test
+    fun settingsShowsThisAppsVersionAndWhereNewVersionsComeFrom() {
+        val store = isolatedStore("version_line")
+        val state = readyState(store, Screen.SETTINGS)
+        compose.setContent { CovalentTheme { CovalentApp(store, state) } }
+
+        compose.onNodeWithTag("settings.version")
+            .performScrollTo()
+            .assertIsDisplayed()
+            .assertTextEquals("Covalent ${BuildConfig.VERSION_NAME} for Android")
+        compose.onNodeWithTag("settings.releases")
+            .performScrollTo()
+            .assertIsDisplayed()
+            .assertHasClickAction()
+        compose.onNodeWithText("Get new versions on GitHub").assertIsDisplayed()
+    }
+
+    @Test
     fun eachPartyReplicaRoleRowExposesOneToggleTarget() {
         // The per-party role selectors only exist under advanced pairing, and only once a
         // controller connection is resolvable, because the roles are negotiated with a server.
@@ -360,7 +386,7 @@ class CovalentAppTest {
         compose.setContent { CovalentTheme { CovalentApp(store, state) } }
 
         compose.onNodeWithText("Review settings changes").performScrollTo().assertIsDisplayed()
-        compose.onNodeWithText("This import removes remembered backups from your backup server.")
+        compose.onNodeWithText("This import removes remembered backups from your Covalent server.")
             .performScrollTo()
             .assertIsDisplayed()
         compose.onNodeWithText("Confirm import").performScrollTo().assertIsDisplayed()

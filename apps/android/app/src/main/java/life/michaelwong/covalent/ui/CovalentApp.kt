@@ -35,6 +35,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.AddLink
 import androidx.compose.material.icons.rounded.Backup
 import androidx.compose.material.icons.rounded.Cancel
@@ -95,6 +96,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalResources
+import androidx.compose.ui.platform.LocalUriHandler
+import life.michaelwong.covalent.BuildConfig
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.res.painterResource
@@ -364,6 +367,8 @@ private fun isPrivateIpv4(host: String): Boolean {
 private fun isLoopbackHost(host: String): Boolean =
     host == "localhost" || host == "127.0.0.1" || host == "::1" || host == "[::1]"
 
+/** Where new Android builds are published. The app only opens this page; it never checks or downloads. */
+internal const val COVALENT_RELEASES_URL = "https://github.com/thekozugroup/Covalent/releases"
 private const val LOCAL_NETWORK_PERMISSION = "android.permission.ACCESS_LOCAL_NETWORK"
 private const val STATUS_POLL_MILLIS = 4_000L
 private const val TRANSFER_POLL_MILLIS = 750L
@@ -2281,7 +2286,7 @@ private fun InviterPairing(
                     title = stringResource(R.string.pair_mutual_session_ready),
                     detail = stringResource(R.string.pair_return_session_detail),
                     json = session,
-                    shareLabel = stringResource(R.string.action_share_signed_session),
+                    shareLabel = stringResource(R.string.action_share_final_file),
                 )
                 FilledTonalButton(enabled = !state.busy && !isExpired(session), onClick = {
                     api(context, state, scope, pairingError = true) {
@@ -2332,7 +2337,7 @@ private fun ResponderPairing(
             value = state.pairingInput,
             onValueChange = { state.pairingInput = it; state.pairingError = "" },
             label = stringResource(R.string.field_pairing_invitation),
-            actionLabel = stringResource(R.string.action_accept_invitation),
+            actionLabel = stringResource(R.string.action_open_pairing_file),
             enabled = state.pairingDisplayName.isNotBlank() && !state.busy,
         ) {
             focusManager.clearFocus()
@@ -3385,6 +3390,25 @@ private fun Settings(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         HorizontalDivider()
+        SectionTitle(stringResource(R.string.app_version_title))
+        Text(
+            stringResource(R.string.app_version, BuildConfig.VERSION_NAME),
+            modifier = Modifier.testTag("settings.version"),
+        )
+        Text(
+            stringResource(R.string.app_releases_detail),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        val uriHandler = LocalUriHandler.current
+        OutlinedButton(
+            modifier = Modifier.testTag("settings.releases"),
+            // A phone without a browser simply stays on this screen.
+            onClick = { runCatching { uriHandler.openUri(COVALENT_RELEASES_URL) } },
+        ) {
+            Icon(Icons.AutoMirrored.Rounded.OpenInNew, contentDescription = null)
+            Text(stringResource(R.string.action_open_releases), Modifier.padding(start = 8.dp))
+        }
         SectionTitle(stringResource(R.string.open_source_notices_title))
         Text(
             stringResource(R.string.open_source_notices_detail),
@@ -3768,8 +3792,9 @@ private fun EmptyState(title: String, detail: String) {
     }
 }
 
+/** An error carries an icon as well as colour, so it never depends on colour alone. */
 @Composable
-private fun InlineError(message: String) {
+internal fun InlineError(message: String) {
     Row(
         Modifier.fillMaxWidth().semantics { contentDescription = message },
         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -3804,7 +3829,8 @@ fun PrimaryActionToolbar(
                 .padding(horizontal = 12.dp),
             shape = MaterialTheme.shapes.extraLarge,
             color = MaterialTheme.colorScheme.surfaceContainerHigh,
-            tonalElevation = 6.dp,
+            // No tonal elevation: in light this role equals `surface`, and Material would then
+            // wash the bar with the accent. The shadow alone lifts it off the canvas.
             shadowElevation = 3.dp,
         ) {
             Row(

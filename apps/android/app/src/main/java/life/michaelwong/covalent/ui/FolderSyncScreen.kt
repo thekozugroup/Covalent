@@ -45,6 +45,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -64,6 +66,8 @@ import life.michaelwong.covalent.model.FolderShare
 import life.michaelwong.covalent.model.FolderLinkPolicy
 import life.michaelwong.covalent.model.AndroidLinkConditions
 import life.michaelwong.covalent.model.FolderLinkCadence
+import life.michaelwong.covalent.model.FolderLinkRunFailure
+import life.michaelwong.covalent.model.FolderLinkRunFailureRole
 import life.michaelwong.covalent.model.FolderLinkRunPhase
 import life.michaelwong.covalent.model.FolderLinkRunResult
 import life.michaelwong.covalent.model.FolderLinkSettings
@@ -95,6 +99,7 @@ private data class LoadedFolderSyncStatus(
     val savedSettingsChanges: List<SavedFolderLinkSettingsChange>,
     val savedRunRequests: List<SavedFolderLinkRunRequest>,
     val localFolderNames: Map<String, String>,
+    val runFailures: List<FolderLinkRunFailure> = emptyList(),
 )
 
 private data class LinkSettingsEditor(
@@ -156,6 +161,7 @@ internal fun FolderSyncScreen(
     var savedSettingsChanges by remember { mutableStateOf<List<SavedFolderLinkSettingsChange>>(emptyList()) }
     var savedRunRequests by remember { mutableStateOf<List<SavedFolderLinkRunRequest>>(emptyList()) }
     var localFolderNames by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
+    var runFailures by remember { mutableStateOf<List<FolderLinkRunFailure>>(emptyList()) }
     var settingsEditor by remember { mutableStateOf<LinkSettingsEditor?>(null) }
     var settingsConfirmation by remember { mutableStateOf<LinkSettingsEditor?>(null) }
     var addressEditor by remember { mutableStateOf<PeerAddressUpdateDraft?>(null) }
@@ -184,6 +190,13 @@ internal fun FolderSyncScreen(
                     share.offerId in previousChoices || share.supersededOfferIds.any { it in previousChoices }
                 } else share.incoming && share.supersededOfferIds.any { it in previousChoices }
             }
+            // Asked only when a run here failed or was interrupted. Any failure, including an
+            // older node without the route, leaves the plain result exactly as it was.
+            val explainedFailures = if (snapshot.shares.any { it.linkRun.hasLocalFailure() }) {
+                runCatching { api.runFailures(ready) }.getOrDefault(emptyList())
+            } else {
+                emptyList()
+            }
             LoadedFolderSyncStatus(
                 snapshot,
                 grants.records()
@@ -199,6 +212,7 @@ internal fun FolderSyncScreen(
                     val name = uri?.let { runCatching { DocumentFile.fromTreeUri(context, it)?.name }.getOrNull() }
                     name?.let { offerId to it }
                 }.toMap(),
+                explainedFailures,
             )
         }
     }
@@ -209,6 +223,7 @@ internal fun FolderSyncScreen(
         savedSettingsChanges = loaded.savedSettingsChanges
         savedRunRequests = loaded.savedRunRequests
         localFolderNames = loaded.localFolderNames
+        runFailures = loaded.runFailures
         if (loaded.retiredFolderChoice) selectedFolder = null
         if (
             addressUpdateNotice == addressSavedRefreshNeededMessage ||
@@ -520,7 +535,7 @@ internal fun FolderSyncScreen(
                         keyboardActions = KeyboardActions(onDone = { submitAddressUpdate() }),
                         modifier = Modifier.fillMaxWidth().testTag("folder-peer-address-input"),
                     )
-                    addressEditorError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                    addressEditorError?.let { InlineError(it) }
                 }
             },
             confirmButton = {
@@ -605,12 +620,13 @@ internal fun FolderSyncScreen(
                 stringResource(R.string.folder_sync_title),
                 style = MaterialTheme.typography.headlineMedium,
                 fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.semantics { heading() },
             )
             Spacer(Modifier.height(6.dp))
             Text(stringResource(R.string.folder_sync_subtitle))
             error?.let { message ->
                 Spacer(Modifier.height(14.dp))
-                Text(message, color = MaterialTheme.colorScheme.error)
+                InlineError(message)
                 if (hostRequested && status == null) {
                     OutlinedButton(onClick = {
                         error = null
@@ -903,6 +919,7 @@ internal fun FolderSyncScreen(
                     savedSettingsChange = savedSettingsChanges.singleOrNull { it.folderId == share.folderId },
                     savedRunRequest = savedRunRequests.singleOrNull { it.folderId == share.folderId },
                     localFolderName = localFolderNames[share.offerId],
+                    runFailure = runFailures.causeFor(share),
                     editSettings = { state, policy ->
                         settingsEditor = LinkSettingsEditor(
                             share.folderId,
@@ -1109,6 +1126,7 @@ internal fun FolderShareCard(
     updateAddress: (() -> Unit)? = null,
     localFolderName: String? = null,
     settingsApplyToAllDestinations: Boolean = false,
+    runFailure: FolderLinkRunFailure? = null,
 ) {
     var showingRemovalConfirmation by remember(share.offerId) { mutableStateOf(false) }
     var showingDetails by remember(share.offerId) { mutableStateOf(false) }
@@ -1192,6 +1210,7 @@ internal fun FolderShareCard(
                     runNow,
                     reviewRun,
                     showDetails = showingDetails,
+                    runFailure = runFailure,
                 )
             }
             val folderAccessUnavailable = status.issue == FolderSyncIssue.FOLDER_ACCESS ||
@@ -1312,6 +1331,7 @@ private fun FolderLinkRunSummary(
     runNow: (SavedFolderLinkRunRequest?) -> Unit,
     review: () -> Unit,
     showDetails: Boolean = false,
+    runFailure: FolderLinkRunFailure? = null,
 ) {
     val settings = share.linkSettings ?: return
     if (!settings.confirmed) return
@@ -1359,6 +1379,15 @@ private fun FolderLinkRunSummary(
                 FolderLinkRunResult.CANCELLED -> stringResource(R.string.folder_link_run_result_cancelled)
             },
         ))
+    }
+    runFailure?.let { failure ->
+        val cause = stringResource(runFailureCauseRes(failure.code))
+        // A source that changed mid-copy is not something to fix, so it is not shown as an error.
+        if (failure.code == "sourceChanged") {
+            Text(cause, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        } else {
+            InlineError(cause)
+        }
     }
     if (showDetails && run?.destinations?.any { it.result == FolderLinkRunResult.FAILED } == true) {
         if (!settings.settings.deletionPolicy.restoreLocalDeletions) {
@@ -1699,4 +1728,44 @@ private fun folderSyncErrorText(error: Throwable): String = when (error) {
     is SecurityException -> "Android denied access to that folder."
     is IllegalArgumentException -> "That folder or request is not valid for sync."
     else -> "Folder sync needs attention. Refresh to check the latest status."
+}
+
+/** True when this device has a failed part in the run that an explanation could cover. */
+internal fun life.michaelwong.covalent.model.FolderLinkRunSummary?.hasLocalFailure(): Boolean =
+    this != null && (
+        phase == FolderLinkRunPhase.INTERRUPTED ||
+            destinations.any { it.result == FolderLinkRunResult.FAILED }
+        )
+
+/**
+ * The explanation for this share's current run, if this device has one. An entry about an
+ * earlier run, or one that no longer matches what the run shows, is not used: the person then
+ * sees the plain result exactly as before.
+ */
+internal fun List<FolderLinkRunFailure>.causeFor(share: FolderShare): FolderLinkRunFailure? {
+    val run = share.linkRun ?: return null
+    return firstOrNull { it.folderId == share.folderId && it.generation == run.generation }?.takeIf { failure ->
+        when (failure.role) {
+            FolderLinkRunFailureRole.DESTINATION ->
+                share.incoming && run.destinations.any { it.result == FolderLinkRunResult.FAILED }
+            FolderLinkRunFailureRole.SOURCE ->
+                !share.incoming && run.phase == FolderLinkRunPhase.INTERRUPTED
+        }
+    }
+}
+
+/** Covalent's own words for each cause. A code this app does not know reads as unknown. */
+internal fun runFailureCauseRes(code: String): Int = when (code) {
+    "noSpace" -> R.string.folder_link_run_cause_no_space
+    "permissionDenied" -> R.string.folder_link_run_cause_permission_denied
+    "readOnly" -> R.string.folder_link_run_cause_read_only
+    "integrityMismatch" -> R.string.folder_link_run_cause_integrity_mismatch
+    "notFound" -> R.string.folder_link_run_cause_not_found
+    "network" -> R.string.folder_link_run_cause_network
+    "timeout" -> R.string.folder_link_run_cause_timeout
+    "sourceChanged" -> R.string.folder_link_run_cause_source_changed
+    "folderUnavailable" -> R.string.folder_link_run_cause_folder_unavailable
+    "recoveryRequired" -> R.string.folder_link_run_cause_recovery_required
+    "workerUnavailable" -> R.string.folder_link_run_cause_worker_unavailable
+    else -> R.string.folder_link_run_cause_unknown
 }

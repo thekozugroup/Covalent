@@ -9,6 +9,7 @@ import javax.net.ssl.SSLHandshakeException
 import life.michaelwong.covalent.data.NodeApiException
 import life.michaelwong.covalent.data.NodeProtocolException
 import life.michaelwong.covalent.ui.AddressIssue
+import life.michaelwong.covalent.ui.COVALENT_RELEASES_URL
 import life.michaelwong.covalent.ui.DestructiveAction
 import life.michaelwong.covalent.ui.NodeFailure
 import life.michaelwong.covalent.ui.SetupLinkOutcome
@@ -232,9 +233,53 @@ class AndroidCopyAndConfirmationTest {
     fun folderSyncPairingDirectionsDoNotCallTheDeviceABackup() {
         for (name in listOf("folder_sync_pair_incoming", "folder_sync_pair_outgoing")) {
             val message = requireString(name)
-            assertTrue(message.contains("folder sync"))
+            assertTrue(message.contains("pairing request"))
             assertFalse(message.contains("backup", ignoreCase = true))
         }
+    }
+
+    /**
+     * The app shows its version and points at where new versions come from. It never checks for
+     * or downloads an update itself, so the copy must not suggest that it does.
+     */
+    @Test
+    fun versionCopyNamesWhereNewVersionsComeFromWithoutPromisingAnUpdateCheck() {
+        assertEquals("https://github.com/thekozugroup/Covalent/releases", COVALENT_RELEASES_URL)
+        assertTrue(requireString("app_version").contains("%1\$s"))
+        val releases = requireString("action_open_releases") + " " + requireString("app_releases_detail")
+        assertTrue(releases.contains("GitHub"))
+        assertTrue(releases.contains("does not check for updates", ignoreCase = true))
+        listOf("update available", "checking for updates", "up to date").forEach { claim ->
+            assertFalse("Version copy must not claim \"$claim\"", releases.contains(claim, ignoreCase = true))
+        }
+    }
+
+    @Test
+    fun pairingRequestsAreNamedTheSameWayOnEveryPairingSurface() {
+        assertEquals("Incoming pairing request", requireString("folder_sync_pair_incoming"))
+        assertEquals("Outgoing pairing request", requireString("folder_sync_pair_outgoing"))
+        assertEquals(requireString("folder_sync_pair_incoming"), requireString("network_pairing_incoming"))
+        assertEquals(requireString("folder_sync_pair_outgoing"), requireString("network_pairing_outgoing"))
+    }
+
+    /**
+     * Pairing by file is a sequence of steps a person follows on two devices. The protocol's
+     * own names for the two sides and for the last step must never be what they read.
+     */
+    @Test
+    fun pairingCopyDescribesStepsInsteadOfProtocolRoles() {
+        val protocolWords = Regex("\\b(inviter|responder|finali[sz]e[sd]?|finali[sz]ation|session)\\b", RegexOption.IGNORE_CASE)
+        val offenders = userFacingCopy().filter { (_, value) -> protocolWords.containsMatchIn(value) }
+        assertTrue(
+            "Pairing copy still exposes protocol roles: " +
+                offenders.entries.joinToString("; ") { "${it.key} = ${it.value}" },
+            offenders.isEmpty(),
+        )
+        assertEquals("Open pairing file", requireString("action_open_pairing_file"))
+        assertEquals("Open reply file", requireString("action_load_session"))
+        assertEquals("Open final file", requireString("action_load_updated_session"))
+        assertEquals("Finish pairing", requireString("action_finalize_inviter"))
+        assertEquals("Finish pairing", requireString("action_finalize_responder"))
     }
 
     @Test

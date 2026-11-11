@@ -3,6 +3,7 @@ package life.michaelwong.covalent.sync
 import java.util.UUID
 import life.michaelwong.covalent.data.CovalentNodeClient
 import life.michaelwong.covalent.model.FolderSyncMutation
+import life.michaelwong.covalent.model.FolderLinkRunFailure
 import life.michaelwong.covalent.model.FolderLinkSettings
 import life.michaelwong.covalent.model.FolderSyncStatus
 import life.michaelwong.covalent.model.NodeConnection
@@ -39,11 +40,17 @@ internal interface FolderSyncApi {
     fun repair(connection: NodeConnection, offerId: String, selectedRoot: String): FolderSyncMutation
     fun retry(connection: NodeConnection): FolderSyncMutation
     fun refreshPeerAddress(connection: NodeConnection, request: PeerAddressRefreshRequest): FolderSyncMutation
+
+    /** Optional explanations for this device's own failed runs; none by default. */
+    fun runFailures(connection: NodeConnection): List<FolderLinkRunFailure> = emptyList()
 }
 
 internal class NodeFolderSyncApi(private val client: CovalentNodeClient) : FolderSyncApi {
     override fun status(connection: NodeConnection) =
         client.folderSyncStatus(connection.baseUrl, connection.token)
+
+    override fun runFailures(connection: NodeConnection) =
+        client.folderLinkRunFailures(connection.baseUrl, connection.token)
 
     override fun offer(
         connection: NodeConnection,

@@ -9,7 +9,6 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -204,7 +203,7 @@ internal fun FolderSyncPairing(manager: EmbeddedNodeManager, onPeersChanged: () 
                 onClick = { start(address) },
                 modifier = Modifier.testTag("folder-pair.start"),
             ) { Text(stringResource(R.string.folder_sync_pair_start)) }
-            error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+            error?.let { InlineError(it) }
             pending.forEach { pairing ->
                 NetworkPairingCard(
                     pairing = pairing,

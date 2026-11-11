@@ -220,7 +220,7 @@ class EmbeddedNodeManager(context: Context) {
             preferences.getBoolean(KEY_ENABLED, false) || preferences.getBoolean(KEY_RUNNING, false) ||
             folderSyncRequested()
         ) {
-            return@synchronized reject("Stop this phone's on-phone node before recovering another identity.")
+            return@synchronized reject("Stop Covalent on this phone before recovering another identity.")
         }
         capacityValidationMessage(maxBytes, keepFreeBytes)?.let {
             return@synchronized reject(it)
@@ -280,7 +280,7 @@ class EmbeddedNodeManager(context: Context) {
             publish(
                 enabled = false,
                 running = false,
-                message = "Storing backups on this phone is off. External node connections remain unchanged.",
+                message = "Storing backups on this phone is off. Your separate server connection is unchanged.",
                 reservedBytes = 0L,
                 availableBytes = availableBytes(),
             )
@@ -358,7 +358,7 @@ class EmbeddedNodeManager(context: Context) {
         publish(
             enabled = enabled,
             running = preferences.getBoolean(KEY_RUNNING, false),
-            message = "A separate backup server is selected. Storing backups on this phone stays a separate choice.",
+            message = "A separate Covalent server is selected. Storing backups on this phone stays a separate choice.",
             reservedBytes = if (enabled) preferences.getLong(KEY_MAX_BYTES, DEFAULT_MAX_BYTES) else 0L,
             availableBytes = availableBytes(),
         )
@@ -372,7 +372,7 @@ class EmbeddedNodeManager(context: Context) {
             publish(
                 enabled = enabled,
                 running = running,
-                message = "This phone is not ready to act as your backup server.",
+                message = "This phone is not ready to act as your Covalent server.",
                 reservedBytes = if (enabled) preferences.getLong(KEY_MAX_BYTES, DEFAULT_MAX_BYTES) else 0L,
                 availableBytes = availableBytes(),
             )
@@ -382,7 +382,7 @@ class EmbeddedNodeManager(context: Context) {
         publish(
             enabled = true,
             running = true,
-            message = "This phone is selected as your backup server.",
+            message = "This phone is selected as your Covalent server.",
             reservedBytes = preferences.getLong(KEY_MAX_BYTES, DEFAULT_MAX_BYTES),
             availableBytes = availableBytes(),
         )
@@ -500,7 +500,7 @@ class EmbeddedNodeManager(context: Context) {
                     AndroidSafGrantCoordinator.close(response.handle)
                     CovalentNative.stop(response.handle)
                     releaseMulticastLock()
-                    unavailable("The identity was recovered, but Android could not save its provider settings. Try recovery again with the same files.")
+                    unavailable("The identity was recovered, but Android could not save its storage settings. Try recovery again with the same files.")
                 } else {
                     response
                 }
@@ -534,11 +534,11 @@ class EmbeddedNodeManager(context: Context) {
             capacityValidationMessage(maxBytes, keepFreeBytes)?.let { return unavailable(it) }
         }
         if (!hasPeerNetworkPermission()) {
-            return unavailable("Allow local network access before the on-phone node can start.")
+            return unavailable("Allow local network access before Covalent can start on this phone.")
         }
         val protection = keyProtectionLevel()
         if (protection == KeyProtectionLevel.UNAVAILABLE) {
-            return unavailable("This phone cannot protect its Covalent identity, so the on-phone node stayed stopped.")
+            return unavailable("This phone cannot protect its Covalent identity, so Covalent stayed stopped on this phone.")
         }
         val token = protectedTokenBytes()
             ?: return unavailable("Covalent could not open this phone's protected server credential, so it stayed locked.")

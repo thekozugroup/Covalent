@@ -96,6 +96,20 @@ data class FolderLinkRunSummary(
     val destinations: List<FolderLinkRunDestinationSummary>,
 )
 
+enum class FolderLinkRunFailureRole { SOURCE, DESTINATION }
+
+/**
+ * Why this device's own part of one run failed. Only this device knows it: the reason is
+ * never sent between devices, so a failed remote recipient has no entry here. `code` stays a
+ * string because the node may add codes; an unrecognised one reads as "unknown".
+ */
+data class FolderLinkRunFailure(
+    val folderId: String,
+    val generation: Long,
+    val role: FolderLinkRunFailureRole,
+    val code: String,
+)
+
 data class FolderLinkSettingsChange(
     val folderId: String,
     val sourceId: String,

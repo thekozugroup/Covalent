@@ -34,6 +34,8 @@ import life.michaelwong.covalent.model.FolderLinkPolicy
 import life.michaelwong.covalent.model.AndroidLinkConditions
 import life.michaelwong.covalent.model.FolderLinkCadence
 import life.michaelwong.covalent.model.FolderLinkRunDestinationSummary
+import life.michaelwong.covalent.model.FolderLinkRunFailure
+import life.michaelwong.covalent.model.FolderLinkRunFailureRole
 import life.michaelwong.covalent.model.FolderLinkRunPhase
 import life.michaelwong.covalent.model.FolderLinkRunRejection
 import life.michaelwong.covalent.model.FolderLinkRunRejectionReason
@@ -178,6 +180,18 @@ class CovalentNodeClient(
     /** Reads only the redacted folder-sync projection from the authenticated node. */
     fun folderSyncStatus(baseUrl: String, token: String): FolderSyncStatus =
         request(baseUrl, "GET", "/api/v1/sync/status", token, null).body.toFolderSyncStatus()
+
+    /**
+     * This device's own reasons for failed runs, from a route separate from the sync status
+     * document. Nodes from v0.2.12 and earlier answer 404, which means no reasons are available,
+     * not that something went wrong.
+     */
+    fun folderLinkRunFailures(baseUrl: String, token: String): List<FolderLinkRunFailure> =
+        try {
+            request(baseUrl, "GET", "/api/v1/sync/run-failures", token, null).body.toFolderLinkRunFailures()
+        } catch (error: NodeApiException) {
+            if (error.statusCode == 404) emptyList() else throw error
+        }
 
     fun offerFolder(
         baseUrl: String,
@@ -1344,6 +1358,30 @@ private fun JSONObject.optionalRunRequest(name: String): FolderLinkRunRequestSum
             requireUuid(value.getString("requesterId"), "run requester ID"),
         )
     }
+
+/**
+ * Lenient about extra keys and about roles this client does not know (that entry is skipped),
+ * because the explanation is optional: a node that adds to it must not cost the person the
+ * plain run result they already see.
+ */
+internal fun JSONObject.toFolderLinkRunFailures(): List<FolderLinkRunFailure> {
+    check(getInt("schemaVersion") == 1) { "The node returned an unsupported run-failure format." }
+    val values = getJSONArray("failures")
+    check(values.length() <= MAX_FOLDER_SYNC_SHARES)
+    return List(values.length()) { index -> values.getJSONObject(index) }.mapNotNull { value ->
+        val role = when (value.getString("role")) {
+            "source" -> FolderLinkRunFailureRole.SOURCE
+            "destination" -> FolderLinkRunFailureRole.DESTINATION
+            else -> return@mapNotNull null
+        }
+        FolderLinkRunFailure(
+            folderId = requireUuid(value.getString("folderId"), "run failure folder ID"),
+            generation = value.getLong("generation").also { check(it >= 1) },
+            role = role,
+            code = value.getString("code").also { check(it.length in 1..64) },
+        )
+    }
+}
 
 private fun JSONObject.toFolderLinkSettingsChange(): FolderLinkSettingsChange {
     requireJsonKeys(

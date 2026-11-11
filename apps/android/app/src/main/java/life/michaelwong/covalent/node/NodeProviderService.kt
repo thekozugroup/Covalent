@@ -149,7 +149,7 @@ class NodeProviderService : Service() {
         if (action != ACTION_STOP) {
             startAsConnectedDeviceForeground(
                 if (action == ACTION_RECOVER) "Recovering this phone's Covalent identity"
-                else "Covalent's on-phone node is starting",
+                else "Covalent is starting on this phone",
             )
         }
         actor.post { handleCommand(action, startId) }
@@ -226,7 +226,7 @@ class NodeProviderService : Service() {
             ACTION_REFRESH_ACCESS -> {
                 if (handle > 0L) beginRestartForAccessChange() else startNode(command.startId)
             }
-            else -> startOrRefresh(command.startId, "Covalent's on-phone node is running")
+            else -> startOrRefresh(command.startId, "Covalent is running on this phone")
         }
     }
 
@@ -239,7 +239,7 @@ class NodeProviderService : Service() {
                 NativeNodeResponse(
                     ok = true,
                     code = "node_already_running",
-                    message = "Stop the on-phone node before recovering an identity.",
+                    message = "Stop Covalent on this phone before recovering an identity.",
                     handle = null,
                     apiBaseUrl = null,
                     peerAddress = null,
@@ -347,7 +347,7 @@ class NodeProviderService : Service() {
             conditionFeed.start()
             scheduleAccessCheck()
             updateNotification(
-                if (demandAtLaunch.backupEnabled) "Android provider is available"
+                if (demandAtLaunch.backupEnabled) "This phone is ready to store backups"
                 else if (accessUnavailableAtLaunch) "Shared folders need attention"
                 else "Shared folders are available",
             )
