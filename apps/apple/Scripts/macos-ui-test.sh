@@ -1,6 +1,12 @@
 #!/bin/zsh
 set -euo pipefail
 
+# Every node this script starts inherits this: tests never ask GitHub for the
+# latest release (the node's check would otherwise run 60 s after `serve`).
+# The managed app's helper gets the same value from the XCUITest launch
+# environment in RealFolderLinkUITests.
+export COVALENT_UPDATE_CHECK=false
+
 case $# in
   0)
     ;;

@@ -32,7 +32,18 @@ paths:
     get:
       summary: Read coarse public node status
       operationId: status
-      security: []
+      security:
+        - {}
+        - localToken: []
+      description: >-
+        The token is optional. Without it, or with a wrong one, the answer has
+        only the five public fields that v0.2.12 sent. With the valid bearer
+        token it also includes the node's software version and the in-memory
+        result of its notify-only release check. The check is one HTTPS GET to
+        https://api.github.com/repos/thekozugroup/Covalent/releases/latest about a
+        minute after start and then every 24 hours; `COVALENT_UPDATE_CHECK=false`
+        turns it off. Nothing is downloaded or installed, and reading this route
+        never waits on the network.
       responses:
         "200":
           description: Coarse non-secret node status.
@@ -76,6 +87,28 @@ paths:
           $ref: "#/components/responses/Conflict"
         "503":
           $ref: "#/components/responses/Conflict"
+  /api/v1/sync/run-failures:
+    get:
+      summary: Read why this device's latest attempt at each link failed
+      operationId: folderSyncRunFailures
+      description: >-
+        Explains this device's own failed attempts only: a recipient's failed
+        copy, or a source that could not prepare a run. The reason is never sent
+        to other devices, so the source of a link cannot say why a remote
+        recipient failed; read this route on that recipient. Held in memory:
+        an entry disappears when a later run of the same link succeeds on this
+        device or when the node restarts. Match an entry to a link by folderId
+        and to its run by generation. Paths, peer addresses and raw worker output
+        are excluded. Reading never waits on a running transfer.
+      responses:
+        "200":
+          description: Zero or more explained failures, oldest first.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SyncRunFailures"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
   /api/v1/sync/folders:
     post:
       summary: Offer a one-way source folder to a paired destination
@@ -2431,6 +2464,117 @@ components:
           enum: [tier1, tier2]
         state:
           const: ready
+        version:
+          type: string
+          description: >-
+            Software version of this node without a leading v, for example 0.2.12.
+            Present only when the request carries the valid bearer token.
+          pattern: "^[0-9]+\\.[0-9]+\\.[0-9]+([-+][0-9A-Za-z.+-]+)?$"
+        update:
+          description: Present only when the request carries the valid bearer token.
+          $ref: "#/components/schemas/UpdateStatus"
+    UpdateStatus:
+      type: object
+      additionalProperties: false
+      required: [state, latestVersion, releaseUrl, checkedAtUnixMs, failure]
+      description: >-
+        What a client can show about updates. Held in memory only and reset when
+        the node restarts. A failed check never replaces an updateAvailable result
+        that an earlier check in the same run already found.
+      properties:
+        state:
+          description: >-
+            disabled: the operator turned the check off. unsupported: this
+            platform's node cannot make the check (the Android app's in-process
+            node). pending: the check is on and has not finished since start.
+            upToDate: this node runs the latest published release or a newer build.
+            updateAvailable: a newer release is published. checkFailed: the latest
+            attempt produced no answer; see failure.
+          enum: [disabled, unsupported, pending, upToDate, updateAvailable, checkFailed]
+        latestVersion:
+          description: Latest published release without a leading v. Set in upToDate and updateAvailable.
+          type: [string, "null"]
+          pattern: "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+        releaseUrl:
+          description: >-
+            GitHub release page for latestVersion. Set only in updateAvailable. The
+            node builds it from the validated version; it is always under
+            https://github.com/thekozugroup/Covalent/releases/tag/.
+          type: [string, "null"]
+        checkedAtUnixMs:
+          description: When the check behind this state finished. Null in disabled, unsupported and pending.
+          type: [integer, "null"]
+          minimum: 0
+        failure:
+          oneOf:
+            - $ref: "#/components/schemas/UpdateCheckFailure"
+            - type: "null"
+    UpdateCheckFailure:
+      type: object
+      additionalProperties: false
+      required: [code, message]
+      description: Present only in the checkFailed state. The node tries again at its next daily check.
+      properties:
+        code:
+          description: >-
+            network: GitHub could not be reached. timeout: GitHub did not answer
+            within 20 seconds. secureConnection: no trusted certificate list was
+            found on this device, or GitHub's certificate was not accepted.
+            rateLimited: GitHub refused the request because of its request limit.
+            unexpectedResponse: GitHub answered with something this node does not
+            understand. Clients must treat an unknown code like unexpectedResponse.
+          enum: [network, timeout, secureConnection, rateLimited, unexpectedResponse]
+        message:
+          description: The same reason as one plain-language English sentence.
+          type: string
+    SyncRunFailures:
+      type: object
+      additionalProperties: false
+      required: [schemaVersion, failures]
+      properties:
+        schemaVersion:
+          const: 1
+        failures:
+          type: array
+          items:
+            $ref: "#/components/schemas/SyncRunFailure"
+    SyncRunFailure:
+      type: object
+      additionalProperties: false
+      required: [folderId, generation, role, code, message, endedAtUnixMs]
+      properties:
+        folderId:
+          type: string
+          format: uuid
+        generation:
+          description: Run generation of the failed attempt; equals linkRun.generation while that run is the latest.
+          type: integer
+          minimum: 1
+        role:
+          description: >-
+            destination: this device was receiving and its copy failed.
+            source: this device holds the source folder and could not prepare the run.
+          enum: [source, destination]
+        code:
+          description: >-
+            noSpace: this device ran out of storage space. permissionDenied: a file
+            or folder could not be read or written. readOnly: the destination folder
+            is read-only. integrityMismatch: a copied file did not match its source.
+            notFound: a file or folder was missing. network: the connection between
+            the devices failed. timeout: the other device or the transfer took too
+            long. sourceChanged: source files changed during the copy; the next run
+            picks them up. folderUnavailable: this device could not open the link's
+            folder. recoveryRequired: an earlier interrupted copy must be reviewed
+            first. workerUnavailable: the transfer engine could not start or stopped.
+            unknown: no specific cause was recognized. Clients must treat an
+            unrecognized code like unknown.
+          enum: [noSpace, permissionDenied, readOnly, integrityMismatch, notFound, network, timeout, sourceChanged, folderUnavailable, recoveryRequired, workerUnavailable, unknown]
+        message:
+          description: What happened and what to do, in plain English.
+          type: string
+        endedAtUnixMs:
+          type: integer
+          minimum: 1
     TransportIdentity:
       type: object
       additionalProperties: false

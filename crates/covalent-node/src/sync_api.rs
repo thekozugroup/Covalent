@@ -1226,6 +1226,83 @@ impl SyncStatusResponse {
     }
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RunFailuresResponse {
+    schema_version: u8,
+    failures: Vec<RunFailureResponse>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RunFailureResponse {
+    folder_id: uuid::Uuid,
+    generation: u64,
+    role: &'static str,
+    code: &'static str,
+    message: &'static str,
+    ended_at_unix_ms: u64,
+}
+
+/// Explains this device's own latest failed attempt per share.
+///
+/// A separate route on purpose: every client validates the exact keys of the
+/// sync status document, so an addition there would break clients that have
+/// not been updated. The answer is in memory only and never includes a path,
+/// a peer address or raw worker output.
+pub(crate) async fn run_failures(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<axum::Json<RunFailuresResponse>, ApiError> {
+    authorize(&state, &headers)?;
+    #[cfg(unix)]
+    let failures = match &state.folder_sync {
+        crate::sync_engine::FolderSyncRuntimeState::Ready(service) => service
+            .run_failures()
+            .into_iter()
+            .map(run_failure_response)
+            .collect(),
+        _ => Vec::new(),
+    };
+    #[cfg(not(unix))]
+    let failures = Vec::new();
+    Ok(axum::Json(RunFailuresResponse {
+        schema_version: 1,
+        failures,
+    }))
+}
+
+#[cfg(unix)]
+pub(crate) fn run_failure_response(
+    failure: crate::sync_engine::LocalRunFailure,
+) -> RunFailureResponse {
+    use crate::sync_engine::{RunFailureCode, RunFailureRole};
+    RunFailureResponse {
+        folder_id: failure.folder_id,
+        generation: failure.generation,
+        role: match failure.role {
+            RunFailureRole::Source => "source",
+            RunFailureRole::Destination => "destination",
+        },
+        code: match failure.code {
+            RunFailureCode::NoSpace => "noSpace",
+            RunFailureCode::PermissionDenied => "permissionDenied",
+            RunFailureCode::ReadOnly => "readOnly",
+            RunFailureCode::IntegrityMismatch => "integrityMismatch",
+            RunFailureCode::NotFound => "notFound",
+            RunFailureCode::Network => "network",
+            RunFailureCode::Timeout => "timeout",
+            RunFailureCode::SourceChanged => "sourceChanged",
+            RunFailureCode::FolderUnavailable => "folderUnavailable",
+            RunFailureCode::RecoveryRequired => "recoveryRequired",
+            RunFailureCode::WorkerUnavailable => "workerUnavailable",
+            RunFailureCode::Unknown => "unknown",
+        },
+        message: failure.code.message(),
+        ended_at_unix_ms: failure.ended_at_unix_ms,
+    }
+}
+
 /// Sets a presentation-only name on this node; no network consent or identity changes.
 pub(crate) async fn display_name(
     State(state): State<AppState>,

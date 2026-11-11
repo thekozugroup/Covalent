@@ -196,6 +196,7 @@ docker run --rm -d \
   --mount "type=volume,source=$config_volume,target=/config" \
   --mount "type=bind,source=$kek_directory/correct.kek,target=/run/secrets/covalent-kek,readonly" \
   --mount "type=bind,source=$server_token_file,target=/run/secrets/covalent-api-token,readonly" \
+  --env COVALENT_UPDATE_CHECK=false \
   --publish 127.0.0.1::8443/tcp \
   "$image" serve --api-token-file /run/secrets/covalent-api-token \
   >/dev/null

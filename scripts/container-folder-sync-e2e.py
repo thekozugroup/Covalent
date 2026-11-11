@@ -149,6 +149,7 @@ class Fixture:
                    "--env", "COVALENT_HTTPS_HOST=" + name,
                    "--env", "COVALENT_DEVICE_NAME=Folder gate " + key,
                    "--env", "COVALENT_LAN_DISCOVERY=false",
+                   "--env", "COVALENT_UPDATE_CHECK=false",
                    self.image, "serve", "--api-token-file", "/run/secrets/token")
             self.nodes[key] = {"name": name, "token": token}
             self.refresh_endpoint(key)

@@ -84,6 +84,7 @@ start_node() {
     --security-opt=no-new-privileges \
     --tmpfs /tmp:rw,noexec,nosuid,size=64m \
     --env COVALENT_HTTPS_HOST=claim-node \
+    --env COVALENT_UPDATE_CHECK=false \
     --mount "type=volume,source=$config_volume,target=/config" \
     --mount "type=volume,source=$data_volume,target=/data" \
     --mount "type=bind,source=$kek_directory/claim.kek,target=/run/secrets/covalent-kek,readonly" \

@@ -17,6 +17,7 @@ use covalent_node::runtime::{
     LocalApiTokenSource, NodeRuntime, NodeRuntimeConfig, RecoveryBootstrap,
     load_recovery_bootstrap_files,
 };
+use covalent_node::update_check::UpdateCheckPolicy;
 use covalent_protocol::PlatformTier;
 use rand_core::{OsRng, RngCore};
 use tracing::info;
@@ -95,6 +96,23 @@ enum Command {
         /// CA certificate a claiming client should pin, when a proxy terminates TLS.
         #[arg(long, env = "COVALENT_TLS_CA_FILE")]
         tls_ca_file: Option<PathBuf>,
+        /// Ask GitHub once a day whether a newer Covalent release exists.
+        ///
+        /// Notify-only: Covalent reports the result in its status and never
+        /// downloads or installs anything. Set to `false` to make no request.
+        ///
+        /// `false`, `0`, `no`, `off` and an empty value turn it off. Anything
+        /// else leaves it on, so a mistyped value can never stop the node from
+        /// starting.
+        #[arg(
+            long,
+            env = "COVALENT_UPDATE_CHECK",
+            value_name = "BOOL",
+            default_value_t = true,
+            action = clap::ArgAction::Set,
+            value_parser = clap::builder::FalseyValueParser::new()
+        )]
+        update_check: bool,
         /// Key protection source and version.
         #[command(flatten)]
         key_protection: Box<KeyProtectionArguments>,
@@ -261,6 +279,14 @@ impl From<Tier> for PlatformTier {
     }
 }
 
+const fn update_check_policy(enabled: bool) -> UpdateCheckPolicy {
+    if enabled {
+        UpdateCheckPolicy::Enabled
+    } else {
+        UpdateCheckPolicy::Disabled
+    }
+}
+
 struct ServeConfiguration {
     listen: SocketAddr,
     peer_listen: SocketAddr,
@@ -271,6 +297,7 @@ struct ServeConfiguration {
     platform_tier: PlatformTier,
     ready_file: Option<PathBuf>,
     tls_ca_file: Option<PathBuf>,
+    update_check: UpdateCheckPolicy,
     key_encryption_key_file: Option<PathBuf>,
     key_encryption_key_version: u32,
     key_encryption_key_stdin: bool,
@@ -300,6 +327,9 @@ async fn main() -> Result<()> {
         platform_tier: Tier::Tier1,
         ready_file: None,
         tls_ca_file: None,
+        // A bare `covalent-node` reads no environment, so the documented off
+        // switch could not reach it. It therefore makes no outbound request.
+        update_check: false,
         key_protection: Box::new(KeyProtectionArguments {
             key_encryption_key_file: None,
             key_encryption_key_version: 1,
@@ -327,6 +357,7 @@ async fn main() -> Result<()> {
             platform_tier,
             ready_file,
             tls_ca_file,
+            update_check,
             key_protection,
             archive_limits,
         } => {
@@ -346,6 +377,7 @@ async fn main() -> Result<()> {
                 platform_tier: platform_tier.into(),
                 ready_file,
                 tls_ca_file,
+                update_check: update_check_policy(update_check),
                 key_encryption_key_file,
                 key_encryption_key_version,
                 key_encryption_key_stdin,
@@ -394,6 +426,8 @@ async fn main() -> Result<()> {
                 platform_tier: platform_tier.into(),
                 ready_file,
                 tls_ca_file,
+                // Recovery is a short supervised step, not the long-running service.
+                update_check: UpdateCheckPolicy::Disabled,
                 key_encryption_key_file,
                 key_encryption_key_version,
                 key_encryption_key_stdin,
@@ -423,6 +457,7 @@ async fn serve(configuration: ServeConfiguration) -> Result<()> {
         platform_tier,
         ready_file,
         tls_ca_file,
+        update_check,
         key_encryption_key_file,
         key_encryption_key_version,
         key_encryption_key_stdin,
@@ -432,6 +467,7 @@ async fn serve(configuration: ServeConfiguration) -> Result<()> {
         recovery_files,
     } = configuration;
     let mut runtime_configuration = NodeRuntimeConfig::new(data_dir, listen, peer_listen);
+    runtime_configuration.update_check = update_check;
     runtime_configuration.advertised_peer_address = advertised_peer_address;
     runtime_configuration.device_name = device_name;
     runtime_configuration.lan_discovery_enabled = lan_discovery;
@@ -966,7 +1002,8 @@ mod tests {
     use super::{
         Arguments, Command, PIPE_KEY_V1_MAGIC, PIPE_RECOVERY_KIT_MAXIMUM_LENGTH,
         PIPE_SECRET_V2_MAGIC, PIPE_SECRET_V3_MAGIC, PROVISION_KEY_FAILPOINT, PipeSecrets,
-        ProvisionedKeyProtector, provision_key, read_kek_file, select_recovery_bootstrap,
+        ProvisionedKeyProtector, UpdateCheckPolicy, provision_key, read_kek_file,
+        select_recovery_bootstrap, update_check_policy,
     };
     use clap::Parser as _;
 
@@ -1228,6 +1265,63 @@ mod tests {
         assert!(key_protection.key_encryption_key_stdin);
         assert!(key_protection.key_encryption_key_file.is_none());
         assert!(key_protection.api_token_file.is_none());
+    }
+
+    #[test]
+    fn update_check_is_on_for_the_service_and_has_one_off_switch() {
+        use clap::CommandFactory as _;
+
+        let serve = |extra: &[&str]| {
+            let mut arguments = vec!["covalent-node", "serve"];
+            arguments.extend_from_slice(extra);
+            match Arguments::try_parse_from(arguments)
+                .expect("parse serve")
+                .command
+            {
+                Some(Command::Serve { update_check, .. }) => update_check_policy(update_check),
+                _ => panic!("serve command"),
+            }
+        };
+        // The default is read from the environment, so only assert it when the
+        // person running the tests has not set the switch themselves.
+        if std::env::var_os("COVALENT_UPDATE_CHECK").is_none() {
+            assert_eq!(serve(&[]), UpdateCheckPolicy::Enabled);
+        }
+        for on in ["true", "1", "yes", "on"] {
+            assert_eq!(serve(&["--update-check", on]), UpdateCheckPolicy::Enabled);
+        }
+        for off in ["false", "FALSE", "0", "no", "off", ""] {
+            assert_eq!(
+                serve(&["--update-check", off]),
+                UpdateCheckPolicy::Disabled,
+                "{off:?}"
+            );
+        }
+        // A typo must not keep the node from starting; the check just stays on.
+        assert_eq!(
+            serve(&["--update-check", "flase"]),
+            UpdateCheckPolicy::Enabled
+        );
+
+        let command = Arguments::command();
+        let switch = command
+            .find_subcommand("serve")
+            .expect("serve subcommand")
+            .get_arguments()
+            .find(|argument| argument.get_id() == "update_check")
+            .expect("update check argument");
+        assert_eq!(
+            switch.get_env(),
+            Some(std::ffi::OsStr::new("COVALENT_UPDATE_CHECK"))
+        );
+        // Recovery never asks: it has no such switch to forget.
+        assert!(
+            command
+                .find_subcommand("recover")
+                .expect("recover subcommand")
+                .get_arguments()
+                .all(|argument| argument.get_id() != "update_check")
+        );
     }
 
     #[test]

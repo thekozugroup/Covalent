@@ -29,6 +29,7 @@ fn known_destination_failure_is_reportable_for_the_admitted_index() {
         local_index: None,
         completions: BTreeMap::new(),
         failures: BTreeSet::from([source.clone()]),
+        failure_codes: BTreeMap::new(),
     };
     assert_eq!(
         super::service::destination_observation_result(&observed, &source, &expected),
@@ -371,6 +372,7 @@ async fn unavailable_source_folder_interrupts_only_its_active_run() {
             }),
             completions: BTreeMap::new(),
             failures: BTreeSet::new(),
+            failure_codes: BTreeMap::new(),
         }],
     );
     source.advance_runs_for_test().await;
@@ -394,6 +396,16 @@ async fn unavailable_source_folder_interrupts_only_its_active_run() {
             .destinations
             .iter()
             .all(|destination| destination.result == LinkRunDestinationResult::Interrupted)
+    );
+    // The source can say why its own run stopped; the healthy folder has no entry.
+    let explained = source.run_failures();
+    assert_eq!(explained.len(), 1);
+    assert_eq!(explained[0].folder_id, folders[0]);
+    assert_eq!(explained[0].role, RunFailureRole::Source);
+    assert_eq!(explained[0].code, RunFailureCode::FolderUnavailable);
+    assert_eq!(
+        explained[0].generation,
+        inaccessible.link_run.as_ref().unwrap().generation
     );
     assert!(status.folder_health().iter().any(|health| {
         health.folder == folders[0]
@@ -586,6 +598,7 @@ async fn pending_copy_recovery_fails_only_its_destination_run() {
                 local_index: Some(proof.clone()),
                 completions: BTreeMap::new(),
                 failures: BTreeSet::new(),
+                failure_codes: BTreeMap::new(),
             }],
         );
     }
@@ -637,6 +650,18 @@ async fn pending_copy_recovery_fails_only_its_destination_run() {
         first_reports[&folders[0]].result,
         LinkRunDestinationResult::Failed
     );
+    // The report still says only "failed". The reason stays on the device
+    // whose attempt it was, and the source is told nothing more than before.
+    let explained = target.run_failures();
+    assert_eq!(explained.len(), 1);
+    assert_eq!(explained[0].folder_id, folders[0]);
+    assert_eq!(explained[0].role, RunFailureRole::Destination);
+    assert_eq!(explained[0].code, RunFailureCode::RecoveryRequired);
+    assert_eq!(
+        explained[0].generation,
+        first_reports[&folders[0]].generation
+    );
+    assert!(source.run_failures().is_empty());
     let waiting = target.status().await.unwrap();
     assert_eq!(
         waiting
@@ -660,6 +685,7 @@ async fn pending_copy_recovery_fails_only_its_destination_run() {
                 proofs[1].clone(),
             )]),
             failures: BTreeSet::new(),
+            failure_codes: BTreeMap::new(),
         }],
     );
     target.advance_runs_for_test().await;
@@ -712,6 +738,236 @@ async fn pending_copy_recovery_fails_only_its_destination_run() {
     };
     assert_eq!(phase(folders[0]), Some(LinkRunPhase::Incomplete));
     assert_eq!(phase(folders[1]), Some(LinkRunPhase::Succeeded));
+    // Another folder finishing neither adds to nor clears the explanation.
+    assert_eq!(target.run_failures(), explained);
+    assert!(source.run_failures().is_empty());
+}
+
+#[tokio::test]
+async fn a_failed_copy_is_explained_on_its_own_device_until_a_later_run_succeeds() {
+    let first = Device::new("Source", 44321);
+    let second = Device::new("Target", 44322);
+    pair(&first, &second);
+    let source_backend = Arc::new(TestBackend::default());
+    let target_backend = Arc::new(TestBackend::default());
+    let source = first.service(first.journal(), Arc::clone(&source_backend));
+    let target = second.service(second.journal(), Arc::clone(&target_backend));
+    let folder = Uuid::new_v4();
+    let offer = source
+        .offer_with_settings(
+            second.engine.device_id(),
+            folder,
+            "Documents",
+            Some(&first.files()),
+            2000,
+            FolderLinkSettings {
+                deletion_policy: covalent_protocol::FolderLinkPolicy::default(),
+                paused: false,
+                cadence: LinkCadence::Manual,
+                android_conditions: AndroidLinkConditions::default(),
+            },
+        )
+        .await
+        .unwrap()
+        .into_value();
+    target.receive_offer(offer.clone(), 2001).await.unwrap();
+    let acceptance = target
+        .accept(offer.offer_id, &second.files(), 2002)
+        .await
+        .unwrap()
+        .into_value();
+    let commit = source
+        .receive_acceptance(offer.offer_id, acceptance, 2003)
+        .await
+        .unwrap()
+        .into_value();
+    target.receive_commit(offer.offer_id, commit).await.unwrap();
+    let settings = source
+        .outbound_records()
+        .await
+        .unwrap()
+        .into_value()
+        .into_iter()
+        .find_map(|delivery| match delivery.record {
+            FolderShareRecord::SettingsCommit(commit) => Some(commit),
+            _ => None,
+        })
+        .unwrap();
+    target
+        .receive_link_settings_commit(&settings)
+        .await
+        .unwrap();
+    let health = vec![FolderHealth {
+        folder,
+        lifecycle: FolderLifecycle::Idle,
+        access_unavailable: false,
+        state_changed: OffsetDateTime::UNIX_EPOCH,
+        remaining_files: 0,
+        remaining_bytes: 0,
+        scan_pull_error_count: 0,
+        reported_error_rows: 0,
+        status_error: false,
+        watch_error: false,
+    }];
+    let source_engine = first.installation.device_id().clone();
+
+    // Starts one run from the source and hands the target its running state.
+    let start_run = async |generation: u64, sequence: u64| {
+        assert!(matches!(
+            source
+                .request_link_run(folder, Uuid::new_v4(), generation, settings.revision)
+                .await
+                .unwrap()
+                .into_value(),
+            LinkRunAdmission::Accepted(_)
+        ));
+        let proof = EngineIndexSnapshot {
+            index_id: "0x0123456789ABCDEF".into(),
+            sequence,
+        };
+        source_backend.set_health_observation(health.clone());
+        source_backend.set_run_observations(
+            folder,
+            vec![EngineRunObservation {
+                local_index: Some(proof.clone()),
+                ..Default::default()
+            }],
+        );
+        source.advance_runs_for_test().await;
+        source.advance_runs_for_test().await;
+        let running = source
+            .outbound_records()
+            .await
+            .unwrap()
+            .into_value()
+            .into_iter()
+            .find_map(|delivery| match delivery.record {
+                FolderShareRecord::RunCommit(commit)
+                    if commit.state.as_ref().is_some_and(|state| {
+                        state.phase == LinkRunPhase::Running && state.generation > generation
+                    }) =>
+                {
+                    Some(commit)
+                }
+                _ => None,
+            })
+            .expect("source reaches the running phase");
+        target.receive_link_run_commit(&running).await.unwrap();
+        target_backend.set_health_observation(health.clone());
+        proof
+    };
+    // Returns the target's own report for the run and settles it on both ends.
+    let finish_run = async |generation: u64| {
+        let report = target
+            .outbound_records()
+            .await
+            .unwrap()
+            .into_value()
+            .into_iter()
+            .find_map(|delivery| match delivery.record {
+                FolderShareRecord::RunReport(report) if report.generation > generation => {
+                    Some(report)
+                }
+                _ => None,
+            })
+            .expect("target reports its result");
+        source.receive_link_run_report(&report).await.unwrap();
+        let done = source
+            .outbound_records()
+            .await
+            .unwrap()
+            .into_value()
+            .into_iter()
+            .find_map(|delivery| match delivery.record {
+                FolderShareRecord::RunCommit(commit)
+                    if commit
+                        .state
+                        .as_ref()
+                        .is_some_and(|state| state.generation == report.generation) =>
+                {
+                    Some(commit)
+                }
+                _ => None,
+            })
+            .expect("source settles the run");
+        target.receive_link_run_commit(&done).await.unwrap();
+        report
+    };
+
+    // First run: the worker reports a full disk on the target.
+    start_run(0, 1).await;
+    target_backend.set_run_observations(
+        folder,
+        vec![EngineRunObservation {
+            failures: BTreeSet::from([source_engine.clone()]),
+            failure_codes: BTreeMap::from([(source_engine.clone(), RunFailureCode::NoSpace)]),
+            ..Default::default()
+        }],
+    );
+    target.advance_runs_for_test().await;
+    let failed = finish_run(0).await;
+    assert_eq!(failed.result, LinkRunDestinationResult::Failed);
+    let explained = target.run_failures();
+    assert_eq!(explained.len(), 1);
+    assert_eq!(explained[0].folder_id, folder);
+    assert_eq!(explained[0].generation, failed.generation);
+    assert_eq!(explained[0].role, RunFailureRole::Destination);
+    assert_eq!(explained[0].code, RunFailureCode::NoSpace);
+    assert!(explained[0].ended_at_unix_ms > 0);
+    // What crossed to the source is the unchanged report: a result, no reason.
+    assert!(source.run_failures().is_empty());
+    assert_eq!(
+        serde_json::to_value(&failed)
+            .unwrap()
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        [
+            "endedAtUnixMs",
+            "folderId",
+            "generation",
+            "reporterId",
+            "result",
+            "settingsRevision",
+            "sourceId",
+            "sourceIndex"
+        ]
+    );
+
+    // A failure the worker did not explain is still reported, as unknown.
+    let proof = start_run(failed.generation, 2).await;
+    target_backend.set_run_observations(
+        folder,
+        vec![EngineRunObservation {
+            failures: BTreeSet::from([source_engine.clone()]),
+            ..Default::default()
+        }],
+    );
+    target.advance_runs_for_test().await;
+    let unexplained = finish_run(failed.generation).await;
+    assert_eq!(unexplained.result, LinkRunDestinationResult::Failed);
+    let explained = target.run_failures();
+    assert_eq!(explained.len(), 1);
+    assert_eq!(explained[0].generation, unexplained.generation);
+    assert_eq!(explained[0].code, RunFailureCode::Unknown);
+    drop(proof);
+
+    // The next run succeeds, and the stale explanation goes away with it.
+    let proof = start_run(unexplained.generation, 3).await;
+    target_backend.set_run_observations(
+        folder,
+        vec![EngineRunObservation {
+            completions: BTreeMap::from([(source_engine, proof)]),
+            ..Default::default()
+        }],
+    );
+    target.advance_runs_for_test().await;
+    let succeeded = finish_run(unexplained.generation).await;
+    assert_eq!(succeeded.result, LinkRunDestinationResult::Succeeded);
+    assert!(target.run_failures().is_empty());
+    assert!(source.run_failures().is_empty());
 }
 
 #[tokio::test]
@@ -2784,6 +3040,7 @@ async fn manual_batch_waits_for_fresh_scan_and_exact_completion_then_reaps_worke
             local_index: Some(proof.clone()),
             completions: BTreeMap::new(),
             failures: BTreeSet::new(),
+            failure_codes: BTreeMap::new(),
         }],
     );
     source.advance_runs_for_test().await;
@@ -2806,6 +3063,7 @@ async fn manual_batch_waits_for_fresh_scan_and_exact_completion_then_reaps_worke
                 local_index: Some(proof.clone()),
                 completions: BTreeMap::new(),
                 failures: BTreeSet::new(),
+                failure_codes: BTreeMap::new(),
             },
             EngineRunObservation::default(),
         ],
@@ -2853,6 +3111,7 @@ async fn manual_batch_waits_for_fresh_scan_and_exact_completion_then_reaps_worke
             local_index: None,
             completions: BTreeMap::from([(first.installation.device_id().clone(), wrong_index)]),
             failures: BTreeSet::new(),
+            failure_codes: BTreeMap::new(),
         }],
     );
     target.advance_runs_for_test().await;
@@ -2863,6 +3122,7 @@ async fn manual_batch_waits_for_fresh_scan_and_exact_completion_then_reaps_worke
             local_index: None,
             completions: BTreeMap::from([(first.installation.device_id().clone(), proof.clone())]),
             failures: BTreeSet::new(),
+            failure_codes: BTreeMap::new(),
         }],
     );
     target_backend.set_connection_states(vec![EnginePeerConnectionState::Disconnected]);

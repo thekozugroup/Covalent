@@ -42,6 +42,7 @@ services:
       COVALENT_KEY_ENCRYPTION_KEY_VERSION: "1"
       COVALENT_DEVICE_NAME: Node A
       COVALENT_LAN_DISCOVERY: "false"
+      COVALENT_UPDATE_CHECK: "false"
       UMASK: "027"
     ports: ["18781:8443/tcp", "18781:8787/udp"]
     tmpfs: ["/tmp:size=64m,mode=1777"]
@@ -79,6 +80,7 @@ services:
       COVALENT_KEY_ENCRYPTION_KEY_VERSION: "1"
       COVALENT_DEVICE_NAME: Node B
       COVALENT_LAN_DISCOVERY: "false"
+      COVALENT_UPDATE_CHECK: "false"
       UMASK: "027"
     ports: ["18782:8443/tcp", "18782:8787/udp"]
     tmpfs: ["/tmp:size=64m,mode=1777"]
@@ -115,6 +117,7 @@ services:
       COVALENT_KEY_ENCRYPTION_KEY_VERSION: "1"
       COVALENT_DEVICE_NAME: Node C
       COVALENT_LAN_DISCOVERY: "false"
+      COVALENT_UPDATE_CHECK: "false"
       UMASK: "027"
     ports: ["18783:8443/tcp", "18783:8787/udp"]
     tmpfs: ["/tmp:size=64m,mode=1777"]

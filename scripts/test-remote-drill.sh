@@ -398,7 +398,7 @@ stop_tunnel() {
 
 start_local_serve() {
   local_log="$local_root/node.log"
-  COVALENT_SYNC_RUNTIME_DIR="$runtime_dir" "$node_bin" serve \
+  COVALENT_SYNC_RUNTIME_DIR="$runtime_dir" COVALENT_UPDATE_CHECK=false "$node_bin" serve \
     --listen "127.0.0.1:$local_api" --peer-listen "$local_ip:$local_peer" \
     --advertised-peer-address "$local_ip:$local_peer" --data-dir "$state_dir" --device-name 'Mac remote drill' \
     --key-encryption-key-file "$local_root/local-kek" --api-token-file "$local_token" > "$local_log" 2>&1 &
@@ -674,6 +674,7 @@ docker run -d --name "$container" --user "$uid:$gid" --read-only --cap-drop ALL 
   --env COVALENT_SYNC_ADVERTISED_ADDRESS="$ip:$sync" \
   --env COVALENT_DATA_DIR=/data --env COVALENT_KEY_ENCRYPTION_KEY_FILE=/run/secrets/covalent-kek \
   --env COVALENT_KEY_ENCRYPTION_KEY_VERSION=1 --env COVALENT_LAN_DISCOVERY=false \
+  --env COVALENT_UPDATE_CHECK=false \
   "$image" serve --api-token-file /run/secrets/covalent-api-token >/dev/null
 [ "$(docker container inspect --format '{{index .Config.Labels "life.michaelwong.covalent.remote-drill"}}' "$container")" = "$nonce" ]
 printf '%s\n' "$nonce" > "$root/container-owned"

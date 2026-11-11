@@ -404,6 +404,7 @@ docker run --detach \
   --env COVALENT_KEY_ENCRYPTION_KEY_VERSION=1 \
   --env 'COVALENT_DEVICE_NAME=Android TLS node' \
   --env COVALENT_LAN_DISCOVERY=false \
+  --env COVALENT_UPDATE_CHECK=false \
   --publish 127.0.0.1::8443/tcp \
   "$tls_image" serve --api-token-file /run/secrets/covalent-api-token >/dev/null
 
@@ -428,6 +429,7 @@ docker run --detach \
   --env COVALENT_KEY_ENCRYPTION_KEY_VERSION=1 \
   --env 'COVALENT_DEVICE_NAME=Wrong TLS node' \
   --env COVALENT_LAN_DISCOVERY=false \
+  --env COVALENT_UPDATE_CHECK=false \
   "$tls_image" serve --api-token-file /run/secrets/covalent-api-token >/dev/null
 
 tls_directory=$(mktemp -d "${TMPDIR:-/tmp}/covalent-android-tls.XXXXXX")

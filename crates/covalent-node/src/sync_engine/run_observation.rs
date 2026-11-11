@@ -38,6 +38,8 @@ pub(super) struct EngineRunObservation {
     pub local_index: Option<EngineIndexSnapshot>,
     pub completions: BTreeMap<EngineDeviceId, EngineIndexSnapshot>,
     pub failures: BTreeSet<EngineDeviceId>,
+    /// Why an entry of `failures` failed, when the worker said. Never persisted.
+    pub failure_codes: BTreeMap<EngineDeviceId, super::run_failure::RunFailureCode>,
 }
 
 #[cfg(test)]

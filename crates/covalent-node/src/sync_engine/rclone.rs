@@ -7,7 +7,7 @@ use std::io::{Read as _, Write as _};
 use std::net::SocketAddr;
 use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _, symlink};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, OnceLock, Weak};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -20,6 +20,7 @@ use super::android_saf::{AndroidSafGrantError, AndroidSafGrantRegistry};
 use super::config::{EngineDeviceId, EngineFolderRole};
 use super::controller::{EngineSessionSettings, FolderRootLease};
 use super::installation::{EngineInstallation, EngineWorkerLease};
+use super::run_failure::RunFailureCode;
 use super::supervisor::OwnedRcloneCommand;
 use super::{EngineIndexSnapshot, EngineSessionError, VerifiedEngineExecutable};
 
@@ -45,7 +46,10 @@ fn emit_transfer_diagnostic(
     exit_code: Option<i32>,
     stderr: &[u8],
 ) {
-    let message = transfer_diagnostic_message(operation, category, exit_code, stderr);
+    let causes = classified_transfer_causes(stderr);
+    // The same fixed causes feed the in-memory explanation of a failed run.
+    super::run_failure::note(operation, category, &causes);
+    let message = transfer_diagnostic_line(operation, category, exit_code, causes);
     if let Some(sink) = TRANSFER_DIAGNOSTIC_SINK.get() {
         sink(&message);
     } else {
@@ -53,11 +57,26 @@ fn emit_transfer_diagnostic(
     }
 }
 
+#[cfg(test)]
 fn transfer_diagnostic_message(
     operation: &str,
     category: &str,
     exit_code: Option<i32>,
     stderr: &[u8],
+) -> String {
+    transfer_diagnostic_line(
+        operation,
+        category,
+        exit_code,
+        classified_transfer_causes(stderr),
+    )
+}
+
+fn transfer_diagnostic_line(
+    operation: &str,
+    category: &str,
+    exit_code: Option<i32>,
+    causes: BTreeSet<&'static str>,
 ) -> String {
     let operation = match operation {
         "lsjson" | "copy" | "sync" | "check" | "destination" | "source-index"
@@ -79,6 +98,18 @@ fn transfer_diagnostic_message(
         | "WaitFailed" => category,
         _ => "Unknown",
     };
+    let causes = if causes.is_empty() {
+        "unclassified".to_owned()
+    } else {
+        causes.into_iter().collect::<Vec<_>>().join(",")
+    };
+    let exit_code = exit_code.map_or_else(|| "none".to_owned(), |value| value.to_string());
+    format!(
+        "COVALENT_SYNC_DIAGNOSTIC operation={operation} category={category} exitCode={exit_code} causes={causes}"
+    )
+}
+
+fn classified_transfer_causes(stderr: &[u8]) -> BTreeSet<&'static str> {
     let mut causes = BTreeSet::new();
     // Inspect only a bounded stderr tail. JSON object/path fields are never
     // emitted. Plain-text check/list errors use the same fixed classifier.
@@ -106,15 +137,7 @@ fn transfer_diagnostic_message(
             classify_transfer_cause(message, &mut causes);
         }
     }
-    let causes = if causes.is_empty() {
-        "unclassified".to_owned()
-    } else {
-        causes.into_iter().collect::<Vec<_>>().join(",")
-    };
-    let exit_code = exit_code.map_or_else(|| "none".to_owned(), |value| value.to_string());
-    format!(
-        "COVALENT_SYNC_DIAGNOSTIC operation={operation} category={category} exitCode={exit_code} causes={causes}"
-    )
+    causes
 }
 
 fn classify_transfer_cause(message: &str, causes: &mut BTreeSet<&'static str>) {
@@ -270,6 +293,8 @@ pub(super) struct RcloneRuntime {
     worker_lease: Weak<EngineWorkerLease>,
     grants: AndroidSafGrantRegistry,
     active_grants: BTreeSet<Uuid>,
+    /// Why the latest destination attempt per folder failed. Memory only.
+    failure_codes: Mutex<BTreeMap<Uuid, RunFailureCode>>,
 }
 
 impl std::fmt::Debug for RcloneRuntime {
@@ -495,6 +520,7 @@ impl RcloneRuntime {
             worker_lease,
             grants,
             active_grants,
+            failure_codes: Mutex::new(BTreeMap::new()),
         })
     }
 
@@ -556,7 +582,36 @@ impl RcloneRuntime {
         ))
     }
 
+    /// Copies one destination folder. The attempt itself is untouched; on
+    /// failure the cause the worker reported is kept for [`Self::take_failure_code`].
     pub(super) async fn transfer_destination(
+        &self,
+        folder_id: Uuid,
+        expected: &EngineIndexSnapshot,
+    ) -> Result<EngineIndexSnapshot, EngineSessionError> {
+        self.failure_codes().remove(&folder_id);
+        let attempt = self.transfer_destination_attempt(folder_id, expected);
+        match super::run_failure::observed(attempt).await {
+            Ok(index) => Ok(index),
+            Err((error, code)) => {
+                self.failure_codes().insert(folder_id, code);
+                Err(error)
+            }
+        }
+    }
+
+    /// Cause of the latest failed destination attempt for this folder, once.
+    pub(super) fn take_failure_code(&self, folder_id: Uuid) -> Option<RunFailureCode> {
+        self.failure_codes().remove(&folder_id)
+    }
+
+    fn failure_codes(&self) -> MutexGuard<'_, BTreeMap<Uuid, RunFailureCode>> {
+        self.failure_codes
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
+    async fn transfer_destination_attempt(
         &self,
         folder_id: Uuid,
         expected: &EngineIndexSnapshot,
@@ -1512,6 +1567,50 @@ mod tests {
             "COVALENT_SYNC_DIAGNOSTIC operation=lsjson category=NonzeroExit exitCode=2 causes=http401"
         );
         assert!(output.len() < 160);
+    }
+
+    #[tokio::test]
+    async fn a_failed_attempt_keeps_the_cause_the_worker_reported_and_nothing_else() {
+        use crate::sync_engine::run_failure::{RunFailureCode, observed};
+
+        // The same calls a real attempt makes: the worker's stderr at the
+        // command that failed, then the redacted error where the job ends.
+        let failed = |stderr: &'static [u8]| async move {
+            observed(async {
+                emit_transfer_diagnostic("copy", "NonzeroExit", Some(3), stderr);
+                report_transfer_error("destination", EngineSessionError::TransferFailed);
+                Err::<EngineIndexSnapshot, _>(EngineSessionError::TransferFailed)
+            })
+            .await
+            .unwrap_err()
+        };
+        assert_eq!(
+            failed(
+                br#"{"level":"error","msg":"/private/album/a.jpg: write: no space left on device"}"#
+            )
+            .await,
+            (EngineSessionError::TransferFailed, RunFailureCode::NoSpace)
+        );
+        assert_eq!(
+            failed(b"open /mnt/user/photos/b.jpg: permission denied\n")
+                .await
+                .1,
+            RunFailureCode::PermissionDenied
+        );
+        assert_eq!(
+            failed(b"ssh: dial tcp 100.64.0.9:8789: connection refused")
+                .await
+                .1,
+            RunFailureCode::Network
+        );
+        // Informational worker output is not a cause.
+        assert_eq!(
+            failed(br#"{"level":"info","msg":"no space left on device"}"#)
+                .await
+                .1,
+            RunFailureCode::Unknown
+        );
+        assert_eq!(failed(b"").await.1, RunFailureCode::Unknown);
     }
 
     #[test]

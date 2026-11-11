@@ -948,6 +948,69 @@ fn replacing_selected_directory_refuses_new_worker_settings() {
 }
 
 #[test]
+fn folder_selected_through_a_symlink_is_shared_from_its_real_location() {
+    // People hand over such paths all the time: on macOS `/tmp` and `/var`
+    // are links into `/private`, and a media folder is often a link to
+    // another volume. The selection must be admitted and pinned to the real
+    // directory instead of being rejected as unavailable.
+    let a = Device::new("Mac", 43266);
+    let b = Device::new("Docker", 43267);
+    pair(&a, &b);
+    let mut first = a.journal();
+    let mut second = b.journal();
+    let source_link = a.root.join("files-link");
+    let destination_link = b.root.join("files-link");
+    std::os::unix::fs::symlink(a.files(), &source_link).unwrap();
+    std::os::unix::fs::symlink(b.files(), &destination_link).unwrap();
+
+    let captured = capture_root(&source_link, &a.installation).unwrap();
+    assert_eq!(captured.path, a.files());
+    validate_current_root(&captured).unwrap();
+
+    let offer = first
+        .offer(
+            b.engine.device_id(),
+            Uuid::new_v4(),
+            "Documents",
+            &source_link,
+            2000,
+        )
+        .unwrap();
+    second.receive_offer(offer.clone(), 2001).unwrap();
+    let accepted = second
+        .accept(offer.offer_id, &destination_link, 2002)
+        .unwrap();
+    let committed = first
+        .receive_acceptance(offer.offer_id, accepted, 2003)
+        .unwrap();
+    second.receive_commit(offer.offer_id, committed).unwrap();
+    deliver_link_settings(&mut first, &mut second);
+    for settings in [
+        first.desired_settings().unwrap(),
+        second.desired_settings().unwrap(),
+    ] {
+        assert_eq!(settings.folders.len(), 1);
+    }
+    assert_eq!(
+        first.desired_settings().unwrap().folders[0].root(),
+        a.files()
+    );
+    assert_eq!(
+        second.desired_settings().unwrap().folders[0].root(),
+        b.files()
+    );
+
+    // Retargeting the link afterwards must not silently move the share.
+    std::fs::remove_file(&source_link).unwrap();
+    std::fs::create_dir(a.root.join("elsewhere")).unwrap();
+    std::os::unix::fs::symlink(a.root.join("elsewhere"), &source_link).unwrap();
+    assert_eq!(
+        first.desired_settings().unwrap().folders[0].root(),
+        a.files()
+    );
+}
+
+#[test]
 fn stale_journal_cannot_return_a_signature_for_unpersisted_selection() {
     let a = Device::new("Mac", 43271);
     let b = Device::new("Docker", 43272);
@@ -1628,6 +1691,158 @@ fn deadline_finishes_offline_destinations_without_claiming_success() {
         summary.destinations[0].result,
         LinkRunDestinationResult::TimedOut
     );
+}
+
+/// KNOWN GAP, pinned so that it is not mistaken for a guarantee and so that a
+/// fix has a failing assertion to start from.
+///
+/// "An offline recipient does not stop transfers to the others" holds inside
+/// one run: the online recipient below finishes within a minute. It does not
+/// hold for the runs after it. A link has one run at a time, that run stays
+/// open while any recipient is still pending, and nothing is admitted while it
+/// is open. On an hourly link the online recipient therefore receives one
+/// delivery per 25 hours for as long as the other recipient stays away.
+///
+/// The source has no record of whether a pending recipient is unreachable or
+/// in the middle of a long copy, so ending the run early here would also cut
+/// off slow recipients. Telling the two apart needs new state.
+#[test]
+fn offline_recipient_holds_back_later_runs_for_every_recipient_until_the_deadline() {
+    const HOUR: u64 = 60 * 60 * 1_000;
+    let a = Device::new("Source", 43371);
+    let b = Device::new("Online target", 43372);
+    let c = Device::new("Offline target", 43373);
+    pair(&a, &b);
+    pair(&a, &c);
+    let mut source = a.journal();
+    let mut online = b.journal();
+    let mut offline = c.journal();
+    let folder = Uuid::new_v4();
+    let hourly = batch_settings(LinkCadence::Scheduled {
+        interval_minutes: 60,
+    });
+    establish_batch_link(&a, &b, &mut source, &mut online, folder, hourly);
+    establish_batch_link(&a, &c, &mut source, &mut offline, folder, hourly);
+    // The second recipient accepted the link and then went away for good.
+    drop(offline);
+    let online_id = b.engine.device_id();
+    let offline_id = c.engine.device_id();
+    let link = source.summaries().unwrap()[0].clone();
+    let settings_revision = link.link_settings.unwrap().revision;
+    let first_due = link.link_run.unwrap().next_due_at_unix_ms.unwrap();
+
+    let admitted = source.admit_due_link_runs(first_due).unwrap();
+    assert_eq!(admitted.len(), 1);
+    assert_eq!(admitted[0].destinations.len(), 2);
+    source
+        .start_link_run(folder, 1, index_snapshot(2), first_due + 1)
+        .unwrap();
+    let running = source
+        .outbound_records()
+        .unwrap()
+        .into_iter()
+        .find_map(|delivery| match delivery.record {
+            FolderShareRecord::RunCommit(commit) if commit.target_id == online_id => Some(commit),
+            _ => None,
+        })
+        .unwrap();
+    online.receive_link_run_commit(&running).unwrap();
+    let report = online
+        .complete_link_run(
+            folder,
+            1,
+            index_snapshot(2),
+            LinkRunDestinationResult::Succeeded,
+            first_due + 60_000,
+        )
+        .unwrap();
+    let state = source
+        .receive_link_run_report(&report, first_due + 60_001)
+        .unwrap();
+    // Within the run the promise holds: the online recipient is done.
+    assert_eq!(
+        state.destinations[&online_id].result,
+        LinkRunDestinationResult::Succeeded
+    );
+    assert_eq!(
+        state.destinations[&offline_id].result,
+        LinkRunDestinationResult::Pending
+    );
+    assert_eq!(state.phase, LinkRunPhase::Running);
+
+    // Every later hourly slot passes with nothing admitted for anyone.
+    for slot in 1..24 {
+        let now = first_due + slot * HOUR;
+        assert!(!source.expire_link_runs(now).unwrap(), "hour {slot}");
+        assert!(
+            source.admit_due_link_runs(now).unwrap().is_empty(),
+            "hour {slot}"
+        );
+    }
+    // Run Now on the source is answered with the run that is still open.
+    assert!(matches!(
+        source
+            .request_link_run(folder, Uuid::new_v4(), 1, settings_revision, first_due + 2 * HOUR)
+            .unwrap(),
+        LinkRunAdmission::AlreadyRunning(state) if state.generation == 1
+    ));
+    // So is Run Now from the recipient that is online and already up to date.
+    let acknowledged = source
+        .outbound_records()
+        .unwrap()
+        .into_iter()
+        .find_map(|delivery| match delivery.record {
+            FolderShareRecord::RunCommit(commit) if commit.target_id == online_id => Some(commit),
+            _ => None,
+        })
+        .unwrap();
+    online.receive_link_run_commit(&acknowledged).unwrap();
+    let request_id = Uuid::new_v4();
+    assert!(matches!(
+        online
+            .request_link_run(
+                folder,
+                request_id,
+                1,
+                settings_revision,
+                first_due + 3 * HOUR
+            )
+            .unwrap(),
+        LinkRunAdmission::Pending(_)
+    ));
+    let request = online
+        .outbound_records()
+        .unwrap()
+        .into_iter()
+        .find_map(|delivery| match delivery.record {
+            FolderShareRecord::RunRequest(request) => Some(request),
+            _ => None,
+        })
+        .unwrap();
+    let answer = source
+        .receive_link_run_request(&request, first_due + 3 * HOUR + 1)
+        .unwrap();
+    assert_eq!(answer.state.as_ref().unwrap().generation, 1);
+    assert_eq!(answer.state.as_ref().unwrap().phase, LinkRunPhase::Running);
+
+    // Only the 24-hour deadline releases the link, and the next scheduled run
+    // then waits one more interval.
+    let deadline = first_due + LINK_RUN_DEADLINE_MS;
+    assert!(!source.expire_link_runs(deadline - 1).unwrap());
+    assert!(source.expire_link_runs(deadline).unwrap());
+    let summary = source.summaries().unwrap()[0].link_run.clone().unwrap();
+    assert_eq!(summary.phase, Some(LinkRunPhase::Incomplete));
+    assert_eq!(summary.next_due_at_unix_ms, Some(deadline + HOUR));
+    assert!(
+        source
+            .admit_due_link_runs(deadline + HOUR - 1)
+            .unwrap()
+            .is_empty()
+    );
+    let next = source.admit_due_link_runs(deadline + HOUR).unwrap();
+    assert_eq!(next.len(), 1);
+    assert_eq!(next[0].generation, 2);
+    assert_eq!(deadline + HOUR - first_due, 25 * HOUR);
 }
 
 #[test]

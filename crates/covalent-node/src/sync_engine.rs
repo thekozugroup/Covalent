@@ -20,6 +20,7 @@ mod linux_host;
 #[cfg(target_os = "macos")]
 mod mac_host;
 mod rclone;
+mod run_failure;
 mod run_observation;
 mod service;
 #[cfg(test)]
@@ -47,6 +48,7 @@ pub use installation::{EngineInstallation, EngineInstallationError};
 pub use linux_host::{LinuxHostError, discover_packaged_engine as discover_packaged_linux_engine};
 #[cfg(target_os = "macos")]
 pub use mac_host::{MacHostError, discover_packaged_engine};
+pub use run_failure::{LocalRunFailure, RunFailureCode, RunFailureRole};
 pub use run_observation::EngineIndexSnapshot;
 pub use service::{
     CommittedMutation, FolderHealthFreshness, FolderSyncIssue, FolderSyncLifecycle,

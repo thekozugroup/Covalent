@@ -210,6 +210,13 @@ pub struct NodeRuntimeConfig {
     /// is the container deployment. Without it a claim still succeeds and simply
     /// carries no certificate, which is correct for a loopback-only node.
     pub tls_ca_certificate_file: Option<PathBuf>,
+    /// Whether this node may ask GitHub once a day if a newer release exists.
+    ///
+    /// Off unless a host turns it on, so an embedding app or a test that never
+    /// mentions this field makes no outbound request. The standalone daemon
+    /// turns it on and exposes `COVALENT_UPDATE_CHECK=false` as the off switch.
+    /// The check only ever notifies; see [`crate::update_check`].
+    pub update_check: crate::update_check::UpdateCheckPolicy,
     /// Optional host-verified maintained sync engine package. Backup/recovery
     /// stays available if its separate installation needs repair.
     #[cfg(unix)]
@@ -252,6 +259,7 @@ impl NodeRuntimeConfig {
             ready_file: None,
             first_run_claim_enabled: false,
             tls_ca_certificate_file: None,
+            update_check: crate::update_check::UpdateCheckPolicy::Disabled,
             #[cfg(unix)]
             folder_sync: None,
             #[cfg(unix)]
@@ -333,6 +341,7 @@ impl NodeRuntime {
             ready_file,
             first_run_claim_enabled,
             tls_ca_certificate_file,
+            update_check,
             #[cfg(unix)]
             folder_sync,
             #[cfg(unix)]
@@ -482,10 +491,12 @@ impl NodeRuntime {
             )
             .context("start LAN discovery controller")?,
         );
+        let update_check = Arc::new(crate::update_check::UpdateCheck::new(update_check));
         let mut state = AppState::new(Arc::clone(&engine), platform_tier, api_token.to_string())
             .context("create local API state")?
             .with_archive_limits(archive_limits)
             .context("validate archive resource limits")?
+            .with_update_check(Arc::clone(&update_check))
             .with_transport_certificate(tls_identity.certificate_der().to_vec())
             .with_discovery_controller(Arc::clone(&discovery))
             .with_provider_state(data_directory.join("provider-connections.json"))
@@ -670,6 +681,9 @@ async fn supervise_runtime(
         }
         _ => None,
     };
+    // Notify-only and detached from everything else: it holds no lock the API
+    // or the transfer engine uses, and it is aborted, never awaited, on exit.
+    let update_check_task = state.update_check.spawn(shutdown.clone());
     let mut http_task = tokio::spawn(async move {
         axum::serve(listener, router(state))
             .with_graceful_shutdown(wait_for_shutdown(shutdown))
@@ -698,6 +712,9 @@ async fn supervise_runtime(
             quic_result.and(http_result)
         }
     };
+    if let Some(task) = update_check_task {
+        task.abort();
+    }
     // The serving task can also finish because it was cancelled or panicked.
     // Close is idempotent and must precede wait_idle in every exit path.
     quic_shutdown.close();
@@ -948,6 +965,44 @@ mod tests {
         #[cfg(unix)]
         assert_eq!(sync_status(&runtime).await["schemaVersion"], 1);
         runtime.stop().await.unwrap();
+    }
+
+    async fn update_state(runtime: &NodeRuntime) -> serde_json::Value {
+        let ready = runtime.ready_info();
+        let response = request(
+            ready.api_address(),
+            &format!(
+                "GET /api/v1/status HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {}\r\nConnection: close\r\n\r\n",
+                ready.api_token().expose(),
+            ),
+        )
+        .await;
+        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+        let body = response.split("\r\n\r\n").nth(1).expect("status body");
+        let status: serde_json::Value = serde_json::from_str(body).expect("status JSON");
+        assert_eq!(status["version"], env!("CARGO_PKG_VERSION"));
+        status["update"]["state"].clone()
+    }
+
+    #[tokio::test]
+    async fn update_check_is_off_unless_the_host_asks_and_never_delays_shutdown() {
+        // A host that does not mention the check gets none.
+        let directory = tempfile::tempdir().unwrap();
+        let runtime = start_runtime(&directory).await;
+        assert_eq!(update_state(&runtime).await, "disabled");
+        runtime.stop().await.unwrap();
+
+        // Turned on, it is still waiting out its start delay here, so this test
+        // contacts nothing; the pending check must not hold the runtime open.
+        let directory = tempfile::tempdir().unwrap();
+        let mut configuration = test_configuration(&directory);
+        configuration.update_check = crate::update_check::UpdateCheckPolicy::Enabled;
+        let runtime = NodeRuntime::start(configuration).await.unwrap();
+        assert_eq!(update_state(&runtime).await, "pending");
+        tokio::time::timeout(std::time::Duration::from_secs(20), runtime.stop())
+            .await
+            .expect("a pending update check does not delay shutdown")
+            .unwrap();
     }
 
     async fn request(address: SocketAddr, request: &str) -> String {

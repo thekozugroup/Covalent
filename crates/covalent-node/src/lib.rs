@@ -16,6 +16,7 @@ mod sync_delivery;
 #[cfg(unix)]
 pub mod sync_engine;
 pub mod transport;
+pub mod update_check;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -543,6 +544,7 @@ pub struct AppState {
     restore_plan_lock: Arc<Mutex<()>>,
     engine_job_permits: Arc<Semaphore>,
     recovery_state: Option<Arc<RecoveryStateStore>>,
+    update_check: Arc<update_check::UpdateCheck>,
     #[cfg(unix)]
     folder_sync: sync_engine::FolderSyncRuntimeState,
 }
@@ -604,9 +606,19 @@ impl AppState {
             restore_plan_lock: Arc::new(Mutex::new(())),
             engine_job_permits: Arc::new(Semaphore::new(MAX_CONCURRENT_ENGINE_JOBS)),
             recovery_state: None,
+            update_check: Arc::new(update_check::UpdateCheck::new(
+                update_check::UpdateCheckPolicy::Disabled,
+            )),
             #[cfg(unix)]
             folder_sync: sync_engine::FolderSyncRuntimeState::default(),
         })
+    }
+
+    /// Shares the runtime's in-memory update snapshot with the status route.
+    #[must_use]
+    pub fn with_update_check(mut self, update_check: Arc<update_check::UpdateCheck>) -> Self {
+        self.update_check = update_check;
+        self
     }
 
     /// Connects durable, secret-free owner-loss recovery progress to the API.
@@ -1352,6 +1364,7 @@ pub fn router(state: AppState) -> Router {
         .route("/healthz", get(health))
         .route("/api/v1/status", get(status))
         .route("/api/v1/sync/status", get(sync_api::status))
+        .route("/api/v1/sync/run-failures", get(sync_api::run_failures))
         .route("/api/v1/sync/display-names", post(sync_api::display_name))
         .route("/api/v1/sync/folders", post(sync_api::offer))
         .route("/api/v1/sync/accept", post(sync_api::accept))
@@ -1992,14 +2005,40 @@ async fn health() -> impl IntoResponse {
     )
 }
 
-async fn status(State(state): State<AppState>) -> Result<axum::Json<NodeStatus>, ApiError> {
+/// The shared status contract plus what only a running node knows about
+/// itself. The additions are local API fields; peers never exchange them.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StatusResponse {
+    #[serde(flatten)]
+    status: NodeStatus,
+    /// Software version of this node, for example `0.2.12`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    version: Option<&'static str>,
+    /// In-memory result of the notify-only release check.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    update: Option<update_check::UpdateStatus>,
+}
+
+async fn status(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<axum::Json<StatusResponse>, ApiError> {
     let config = state.engine.config().map_err(ApiError::from_core)?;
-    Ok(axum::Json(NodeStatus {
-        device_name: config.device_name,
-        protocol_version: PROTOCOL_VERSION,
-        lan_discovery: config.lan_discovery_enabled,
-        platform_tier: state.platform_tier,
-        state: "ready".to_owned(),
+    // The route stays public, but which release runs here and whether it can
+    // reach GitHub are told only to a caller holding the access token. Without
+    // one, or with a wrong one, the answer is exactly what v0.2.12 sent.
+    let owner = authorize(&state, &headers).is_ok();
+    Ok(axum::Json(StatusResponse {
+        status: NodeStatus {
+            device_name: config.device_name,
+            protocol_version: PROTOCOL_VERSION,
+            lan_discovery: config.lan_discovery_enabled,
+            platform_tier: state.platform_tier,
+            state: "ready".to_owned(),
+        },
+        version: owner.then_some(update_check::NODE_VERSION),
+        update: owner.then(|| state.update_check.status()),
     }))
 }
 
@@ -6797,6 +6836,292 @@ mod tests {
             .to_bytes();
         let status: RecoveryStatus = serde_json::from_slice(&body).expect("status");
         assert_eq!(status.phase, RecoveryPhase::NotConfigured);
+    }
+
+    async fn read_status(app: Router, token: Option<&str>) -> serde_json::Value {
+        let mut request = Request::builder().uri("/api/v1/status");
+        if let Some(token) = token {
+            request = request.header(header::AUTHORIZATION, format!("Bearer {token}"));
+        }
+        let response = app
+            .oneshot(request.body(Body::empty()).expect("request"))
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes();
+        serde_json::from_slice(&body).expect("status JSON")
+    }
+
+    /// Text of one named schema in the published contract.
+    fn openapi_schema(name: &str) -> &'static str {
+        const OPENAPI: &str = include_str!("../../../docs/api/openapi.yaml");
+        let heading = format!("\n    {name}:\n");
+        let start = OPENAPI
+            .find(&heading)
+            .unwrap_or_else(|| panic!("OpenAPI schema {name} is missing"))
+            + heading.len();
+        let rest = &OPENAPI[start..];
+        let end = rest
+            .match_indices("\n    ")
+            .find(|(index, _)| !rest[index + 5..].starts_with(' '))
+            .map_or(rest.len(), |(index, _)| index);
+        &rest[..end]
+    }
+
+    fn schema_required(schema_name: &str) -> Vec<&'static str> {
+        let mut required: Vec<&str> = openapi_schema(schema_name)
+            .lines()
+            .find_map(|line| line.trim().strip_prefix("required: ["))
+            .and_then(|line| line.strip_suffix(']'))
+            .unwrap_or_else(|| panic!("{schema_name} has no required list"))
+            .split(", ")
+            .collect();
+        required.sort_unstable();
+        required
+    }
+
+    fn emitted_keys(value: &serde_json::Value) -> Vec<&str> {
+        let mut emitted: Vec<&str> = value
+            .as_object()
+            .expect("JSON object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        emitted.sort_unstable();
+        emitted
+    }
+
+    /// Every key the node sent is described, and every required key was sent.
+    fn assert_schema_describes(schema_name: &str, value: &serde_json::Value) {
+        let schema = openapi_schema(schema_name);
+        let emitted = emitted_keys(value);
+        for key in schema_required(schema_name) {
+            assert!(emitted.contains(&key), "{schema_name} requires {key}");
+        }
+        for key in emitted {
+            assert!(
+                schema.contains(&format!("\n        {key}:\n")),
+                "{schema_name} does not describe {key}"
+            );
+        }
+        assert!(schema.contains("additionalProperties: false"));
+    }
+
+    /// As above, and the node sent nothing beyond the required keys.
+    fn assert_schema_lists_exactly(schema_name: &str, value: &serde_json::Value) {
+        assert_schema_describes(schema_name, value);
+        assert_eq!(
+            emitted_keys(value),
+            schema_required(schema_name),
+            "{schema_name} required fields"
+        );
+    }
+
+    #[tokio::test]
+    async fn status_tells_only_the_token_holder_the_version_and_update_check() {
+        let directory = TempDir::new().expect("directory");
+        let app = router(test_state(&directory));
+
+        // Without the token, or with a wrong one, the public answer is exactly
+        // what v0.2.12 sent, and the strict shared contract type still reads it.
+        for token in [None, Some("not-the-local-api-token-but-long-enough-to-try")] {
+            let public = read_status(app.clone(), token).await;
+            assert_schema_lists_exactly("Status", &public);
+            assert!(public.get("version").is_none(), "{token:?}");
+            assert!(public.get("update").is_none(), "{token:?}");
+            let earlier: NodeStatus = serde_json::from_value(public).expect("v0.2.12 status shape");
+            assert_eq!(earlier.protocol_version, PROTOCOL_VERSION);
+            assert_eq!(earlier.state, "ready");
+        }
+
+        let owner = read_status(app, Some(TEST_TOKEN)).await;
+        assert_eq!(owner["version"], env!("CARGO_PKG_VERSION"));
+        // A host that never asked for the check makes none and says so.
+        assert_eq!(
+            owner["update"],
+            serde_json::json!({
+                "state": "disabled",
+                "latestVersion": null,
+                "releaseUrl": null,
+                "checkedAtUnixMs": null,
+                "failure": null,
+            })
+        );
+        // Everything that was there before is still there, unchanged.
+        let mut earlier = owner.clone();
+        let fields = earlier.as_object_mut().expect("status object");
+        assert!(fields.remove("version").is_some());
+        assert!(fields.remove("update").is_some());
+        let earlier: NodeStatus = serde_json::from_value(earlier).expect("earlier status shape");
+        assert_eq!(earlier.protocol_version, PROTOCOL_VERSION);
+    }
+
+    #[tokio::test]
+    async fn status_answers_normally_while_the_update_check_is_pending_or_failing() {
+        let directory = TempDir::new().expect("directory");
+        let check = Arc::new(update_check::UpdateCheck::new(
+            update_check::UpdateCheckPolicy::Enabled,
+        ));
+        let app = router(test_state(&directory).with_update_check(Arc::clone(&check)));
+
+        let pending = read_status(app.clone(), Some(TEST_TOKEN)).await;
+        assert_eq!(pending["state"], "ready");
+        assert_eq!(pending["update"]["state"], "pending");
+
+        check.record_failure_for_test(update_check::UpdateCheckFailureCode::Network);
+        let failed = read_status(app.clone(), Some(TEST_TOKEN)).await;
+        assert_eq!(failed["state"], "ready");
+        assert_eq!(failed["version"], env!("CARGO_PKG_VERSION"));
+        assert_eq!(failed["update"]["state"], "checkFailed");
+        assert_eq!(failed["update"]["failure"]["code"], "network");
+        assert!(
+            failed["update"]["failure"]["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("GitHub"))
+        );
+        assert_eq!(failed["update"]["latestVersion"], serde_json::Value::Null);
+        assert_eq!(failed["update"]["releaseUrl"], serde_json::Value::Null);
+        // A failing check is not visible to a caller without the token.
+        let public = read_status(app, None).await;
+        assert_eq!(public["state"], "ready");
+        assert!(public.get("update").is_none());
+    }
+
+    #[tokio::test]
+    async fn status_fields_and_update_values_match_the_openapi_contract() {
+        let directory = TempDir::new().expect("directory");
+        let check = Arc::new(update_check::UpdateCheck::new(
+            update_check::UpdateCheckPolicy::Enabled,
+        ));
+        check.record_failure_for_test(update_check::UpdateCheckFailureCode::Timeout);
+        let status = read_status(
+            router(test_state(&directory).with_update_check(check)),
+            Some(TEST_TOKEN),
+        )
+        .await;
+
+        assert_schema_describes("Status", &status);
+        assert!(status.get("version").is_some() && status.get("update").is_some());
+        assert_schema_lists_exactly("UpdateStatus", &status["update"]);
+        assert_schema_lists_exactly("UpdateCheckFailure", &status["update"]["failure"]);
+
+        let states = openapi_schema("UpdateStatus");
+        assert!(states.contains(
+            "enum: [disabled, unsupported, pending, upToDate, updateAvailable, checkFailed]"
+        ));
+        let codes = openapi_schema("UpdateCheckFailure");
+        assert!(codes.contains(
+            "enum: [network, timeout, secureConnection, rateLimited, unexpectedResponse]"
+        ));
+        let operation = include_str!("../../../docs/api/openapi.yaml");
+        assert!(operation.contains(update_check::LATEST_RELEASE_URL));
+        assert!(operation.contains("COVALENT_UPDATE_CHECK=false"));
+    }
+
+    #[tokio::test]
+    async fn run_failures_need_the_token_and_are_empty_when_nothing_failed() {
+        let directory = TempDir::new().expect("directory");
+        let app = router(test_state(&directory));
+        let unauthorized = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/sync/run-failures")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/sync/run-failures")
+                    .header(header::AUTHORIZATION, format!("Bearer {TEST_TOKEN}"))
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes();
+        let body: serde_json::Value = serde_json::from_slice(&body).expect("JSON");
+        assert_eq!(
+            body,
+            serde_json::json!({ "schemaVersion": 1, "failures": [] })
+        );
+        assert_schema_lists_exactly("SyncRunFailures", &body);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn explained_run_failures_match_the_openapi_contract_for_every_code() {
+        use crate::sync_engine::{LocalRunFailure, RunFailureCode, RunFailureRole};
+
+        let folder_id = uuid::Uuid::from_u128(7);
+        let mut spellings = Vec::new();
+        for code in [
+            RunFailureCode::NoSpace,
+            RunFailureCode::PermissionDenied,
+            RunFailureCode::ReadOnly,
+            RunFailureCode::IntegrityMismatch,
+            RunFailureCode::NotFound,
+            RunFailureCode::Network,
+            RunFailureCode::Timeout,
+            RunFailureCode::SourceChanged,
+            RunFailureCode::FolderUnavailable,
+            RunFailureCode::RecoveryRequired,
+            RunFailureCode::WorkerUnavailable,
+            RunFailureCode::Unknown,
+        ] {
+            let entry = serde_json::to_value(sync_api::run_failure_response(LocalRunFailure {
+                folder_id,
+                generation: 3,
+                role: RunFailureRole::Destination,
+                code,
+                ended_at_unix_ms: 1_794_360_000_000,
+            }))
+            .expect("failure JSON");
+            assert_schema_lists_exactly("SyncRunFailure", &entry);
+            assert_eq!(
+                entry,
+                serde_json::json!({
+                    "folderId": folder_id,
+                    "generation": 3,
+                    "role": "destination",
+                    "code": code,
+                    "message": code.message(),
+                    "endedAtUnixMs": 1_794_360_000_000_u64,
+                })
+            );
+            spellings.push(entry["code"].as_str().expect("code").to_owned());
+        }
+        let schema = openapi_schema("SyncRunFailure");
+        assert!(
+            schema.contains(&format!("enum: [{}]", spellings.join(", "))),
+            "OpenAPI lists different failure codes than the node emits"
+        );
+        assert!(schema.contains("enum: [source, destination]"));
+        let source = serde_json::to_value(sync_api::run_failure_response(LocalRunFailure {
+            folder_id,
+            generation: 1,
+            role: RunFailureRole::Source,
+            code: RunFailureCode::FolderUnavailable,
+            ended_at_unix_ms: 1,
+        }))
+        .expect("failure JSON");
+        assert_eq!(source["role"], "source");
     }
 
     #[tokio::test]

@@ -21,6 +21,7 @@ use tokio::task::JoinHandle;
 use uuid::Uuid;
 
 use super::controller::InitialScanTask;
+use super::run_failure::{LocalRunFailure, RunFailureCode, RunFailureRole};
 use super::{
     EngineInstallation, EnginePeerConnection, EnginePeerConnectionState, EngineSessionError,
     EngineSessionSettings, FolderHealth, FolderSharingJournal, ManagedEngineSession, ShareSummary,
@@ -393,6 +394,18 @@ struct ServiceShared {
     inner: Mutex<ServiceInner>,
     launcher: Launcher,
     engine: Arc<Engine>,
+    /// This device's latest failed attempt per folder, for the local API to
+    /// explain. Memory only, never part of a decision, and behind its own lock
+    /// so reading it cannot wait on or delay a transfer.
+    run_failures: std::sync::Mutex<BTreeMap<Uuid, LocalRunFailure>>,
+}
+
+impl ServiceShared {
+    fn run_failures(&self) -> std::sync::MutexGuard<'_, BTreeMap<Uuid, LocalRunFailure>> {
+        self.run_failures
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
 }
 
 /// One owner for durable sharing decisions and the exact engine worker.
@@ -475,6 +488,7 @@ impl FolderSyncService {
             }),
             launcher,
             engine,
+            run_failures: std::sync::Mutex::new(BTreeMap::new()),
         });
         let weak = Arc::downgrade(&shared);
         let health_task = tokio::runtime::Handle::try_current()
@@ -1057,6 +1071,17 @@ impl FolderSyncService {
             peer_connections: inner.peer_connections.clone(),
             connection_freshness: inner.connection_freshness,
         })
+    }
+
+    /// Why this device's latest attempt at each share failed, oldest first.
+    ///
+    /// An entry is dropped when a later attempt at the same folder succeeds or
+    /// when the node restarts. Reading never waits on a running transfer.
+    #[must_use]
+    pub fn run_failures(&self) -> Vec<LocalRunFailure> {
+        let mut failures: Vec<_> = self.shared.run_failures().values().copied().collect();
+        failures.sort_by_key(|failure| (failure.ended_at_unix_ms, failure.folder_id));
+        failures
     }
 
     async fn mutate<T>(
@@ -1666,6 +1691,22 @@ async fn advance_run_completion(shared: &ServiceShared, inner: &mut ServiceInner
                 if !run_still_active(inner, folder_id, generation) {
                     continue;
                 }
+                let failure = LocalRunFailure {
+                    folder_id,
+                    generation,
+                    role: match &item {
+                        super::LinkRunWorkItem::PrepareSource { .. } => RunFailureRole::Source,
+                        super::LinkRunWorkItem::ObserveDestination { .. } => {
+                            RunFailureRole::Destination
+                        }
+                    },
+                    code: if error == RunObservationError::FolderUnavailable {
+                        RunFailureCode::FolderUnavailable
+                    } else {
+                        RunFailureCode::RecoveryRequired
+                    },
+                    ended_at_unix_ms: crate::now_unix_ms(),
+                };
                 let outcome = match item {
                     super::LinkRunWorkItem::PrepareSource { .. }
                         if error == RunObservationError::PendingCopyRecoveryRequired =>
@@ -1687,7 +1728,10 @@ async fn advance_run_completion(shared: &ServiceShared, inner: &mut ServiceInner
                         .map(|_| ()),
                 };
                 match outcome {
-                    Ok(()) => changed = true,
+                    Ok(()) => {
+                        shared.run_failures().insert(folder_id, failure);
+                        changed = true;
+                    }
                     Err(SharingError::RunConflict) => {}
                     Err(_) => {
                         let _ = quiesce(
@@ -1702,6 +1746,9 @@ async fn advance_run_completion(shared: &ServiceShared, inner: &mut ServiceInner
                 continue;
             }
         };
+        // What to remember about this device's own attempt if the journal
+        // accepts the outcome below: `None` clears an earlier explanation.
+        let mut explanation = None;
         let outcome = match item {
             super::LinkRunWorkItem::PrepareSource { .. } => {
                 let Some(index) = observed.local_index else {
@@ -1732,6 +1779,20 @@ async fn advance_run_completion(shared: &ServiceShared, inner: &mut ServiceInner
                 if !run_still_active(inner, folder_id, generation) {
                     continue;
                 }
+                let ended_at_unix_ms = crate::now_unix_ms();
+                if result == super::LinkRunDestinationResult::Failed {
+                    explanation = Some(LocalRunFailure {
+                        folder_id,
+                        generation,
+                        role: RunFailureRole::Destination,
+                        code: observed
+                            .failure_codes
+                            .get(&source_engine_id)
+                            .copied()
+                            .unwrap_or(RunFailureCode::Unknown),
+                        ended_at_unix_ms,
+                    });
+                }
                 inner
                     .journal
                     .complete_link_run(
@@ -1739,13 +1800,21 @@ async fn advance_run_completion(shared: &ServiceShared, inner: &mut ServiceInner
                         generation,
                         source_index,
                         result,
-                        crate::now_unix_ms(),
+                        ended_at_unix_ms,
                     )
                     .map(|_| ())
             }
         };
         match outcome {
-            Ok(()) => changed = true,
+            Ok(()) => {
+                let mut failures = shared.run_failures();
+                match explanation {
+                    Some(failure) => failures.insert(folder_id, failure),
+                    None => failures.remove(&folder_id),
+                };
+                drop(failures);
+                changed = true;
+            }
             Err(SharingError::RunConflict) => {}
             Err(_) => {
                 let _ = quiesce(

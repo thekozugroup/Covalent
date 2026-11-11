@@ -1,6 +1,10 @@
 #!/bin/zsh
 set -euo pipefail
 
+# Every node this script starts inherits this: tests never ask GitHub for the
+# latest release (the node's check would otherwise run 60 s after `serve`).
+export COVALENT_UPDATE_CHECK=false
+
 script_dir=${0:A:h}
 apple_dir=${script_dir:h}
 repo_root=${apple_dir:h:h}

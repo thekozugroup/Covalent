@@ -445,16 +445,22 @@ impl ManagedEngineSession {
                         local_index: None,
                         completions: BTreeMap::from([(source, index)]),
                         failures: BTreeSet::new(),
+                        failure_codes: BTreeMap::new(),
                     })
                 }
                 // A completed attempt has failed. Preserve its recovery state
                 // and report failure instead of silently restarting the job.
                 Err(error) => {
                     super::rclone::report_transfer_error("destination", error);
+                    // Explanation only; the failure itself is reported as before.
+                    let code = self.runtime.take_failure_code(folder).unwrap_or(
+                        super::run_failure::RunFailureCode::from_session_error(error),
+                    );
                     Ok(super::run_observation::EngineRunObservation {
                         local_index: None,
                         completions: BTreeMap::new(),
-                        failures: BTreeSet::from([source]),
+                        failures: BTreeSet::from([source.clone()]),
+                        failure_codes: BTreeMap::from([(source, code)]),
                     })
                 }
             };
