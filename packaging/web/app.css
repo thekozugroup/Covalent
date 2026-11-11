@@ -6,6 +6,12 @@
    fall back to the platform serif and sans. */
 * { box-sizing:border-box; }
 body { margin:0; min-height:100dvh; background:var(--canvas); }
+/* The sidebar is fixed to the viewport, so its column is also painted on the body itself, the full height of the
+   page. Otherwise anything taller than one screen (a full-page capture, an overscroll bounce, a mobile browser whose
+   toolbar resizes the viewport) shows the column ending partway down. flow-root keeps the last child's margin inside
+   the body, so the column reaches the very bottom. --rail follows the sidebar's resting width. */
+body { --rail:224px; display:flow-root; background:linear-gradient(to right, var(--sidebar) calc(var(--rail) - 1px), var(--line) calc(var(--rail) - 1px), var(--line) var(--rail), var(--canvas) var(--rail)); }
+body.sidebar-collapsed { --rail:72px; }
 [hidden] { display:none !important; }
 h1,h2,h3,h4,p { margin-top:0; }
 h1,h2,h3,h4 { font-family:var(--font-display); font-weight:600; letter-spacing:-.025em; }
@@ -163,12 +169,15 @@ details.advanced > label + p { margin:12px 0 0; }
 .connection-banner strong { display:block; margin-bottom:4px; color:var(--warning); font-weight:600; }
 .connection-banner p { margin:0; font-size:.9rem; line-height:1.5; }
 .connection-banner button { flex:none; }
-.update-notice { display:flex; align-items:flex-start; justify-content:space-between; flex-wrap:wrap; gap:12px 24px; margin:0 0 24px; padding:16px 20px; border-radius:var(--radius-block); background:var(--info-surface); color:var(--ink); }
-.update-notice > div { flex:1 1 320px; min-width:0; }
+.update-notice { container-type:inline-size; display:flex; align-items:flex-start; justify-content:space-between; flex-wrap:wrap; gap:12px 24px; margin:0 0 24px; padding:16px 20px; border-radius:var(--radius-block); background:var(--info-surface); color:var(--ink); }
+.update-notice > div { flex:1 1 0; min-width:0; }
 .update-notice strong { display:block; margin-bottom:4px; font-weight:600; }
 .update-notice p { margin:0; font-size:.9rem; line-height:1.5; }
 .update-notice p + p { margin-top:8px; }
-.update-notice button { flex:none; }
+.update-notice button { flex:none; margin:-8px -12px 0 0; }
+/* Beside the text, Dismiss sits on the heading's line. Where the notice is too narrow for that, it moves below the
+   text and its label lines up with the text's left edge rather than with its own padding. */
+@container (max-width:480px) { .update-notice > div { flex-basis:100%; } .update-notice button { margin:0 0 -8px -16px; } }
 a { color:var(--accent-text); text-underline-offset:2px; }
 pre { max-height:260px; overflow:auto; padding:16px; border-radius:var(--radius-block); background:#151619; color:#F5F6F8; font-size:.8rem; }
 code,pre { font-family:var(--font-mono); }
@@ -200,6 +209,7 @@ html { scrollbar-color:var(--control-border) var(--canvas); }
 @media (max-width:1000px) { .console-workspace { padding-inline:28px; } .panel-heading { align-items:flex-start; } .panel-heading > .button-row { justify-content:flex-end; } }
 @media (max-width:700px) {
   .console-workspace,.sidebar-collapsed .console-workspace { margin-left:72px; padding:0 18px; }
+  body { --rail:72px; }
   [data-slot="sidebar"] { padding-top:20px; gap:24px; }
   [data-slot="sidebar"][data-state="expanded"] { box-shadow:0 12px 32px -6px rgb(15 16 18 / 0.10), 0 2px 6px rgb(15 16 18 / 0.06); }
   header { padding:26px 0 22px; gap:8px; align-items:flex-start; }
