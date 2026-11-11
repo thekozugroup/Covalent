@@ -108,8 +108,8 @@ test("only a server that gave no answer is described as unanswered", () => {
   }
   assert.ok(!copy.SUMMARIES.includes(copy.UNANSWERED_ACTION), "the action note is not a headline of its own");
   assert.ok(!copy.SUMMARIES.includes(copy.UNANSWERED_READ));
-  assert.match(copy.UNANSWERED_ACTION, /didn't answer, so that change may not have gone through. Check before repeating it./);
-  assert.match(copy.UNANSWERED_READ, /didn't answer, so that information couldn't be loaded. Choose Try again/);
+  assert.ok(copy.UNANSWERED_ACTION.includes("didn't answer, so that change may not have gone through. Check before repeating it."));
+  assert.ok(copy.UNANSWERED_READ.includes("didn't answer, so that information couldn't be loaded. Choose Try again"));
   assert.doesNotMatch(copy.UNANSWERED_READ, /gone through|repeat/, "a read changed nothing, so it says nothing about repeating");
 });
 
@@ -229,7 +229,7 @@ test("the connection notice follows the server: raised when unanswered, cleared 
   respond = () => { throw new TypeError("Failed to fetch"); };
   await assert.rejects(api("/api/v1/status"), TypeError, "the caller still receives the failure");
   assert.equal(connection.hidden, false);
-  assert.match(connectionText.textContent, /couldn't reach this server/);
+  assert.ok(connectionText.textContent.includes("couldn't reach this server"));
   assert.equal(serverState.textContent, "Not connected", "the header must not say Connected above the notice");
 
   // Polling repeats the same failure every few seconds.
