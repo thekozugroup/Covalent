@@ -24,6 +24,19 @@ alpine_lock="$repo_root/packaging/docker/alpine/runtime-source-lock.json"
 alpine_packaged_lock="$repo_root/packaging/docker/alpine/packaged-evidence-lock.json"
 runtime_digest="sha256:fd791d74b68913cbb027c6546007b3f0d3bc45125f797758156952bc2d6daf40"
 
+# Catch stale reference data before spending a full multi-architecture build.
+python3 -B - "$alpine_lock" "$alpine_packaged_lock" <<'PY'
+import hashlib
+import json
+from pathlib import Path
+import sys
+
+source, packaged = map(Path, sys.argv[1:])
+reviewed = json.loads(packaged.read_bytes())
+if reviewed.get("sourceLockSHA256") != hashlib.sha256(source.read_bytes()).hexdigest():
+    raise SystemExit("Alpine source and packaged evidence locks differ; regenerate both reference targets")
+PY
+
 require_text() {
   expected=$1
   path=$2
@@ -48,7 +61,7 @@ require_text "FROM alpine:3.23@$runtime_digest" "$dockerfile"
 # v2.11.4 runtime. The full delta is recorded in the security analysis.
 # The toolchain, snapshot, and module bumps are pinned by digest or exact
 # version, and go.sum must exist or -mod=readonly has nothing to verify.
-require_text "FROM golang:1.26.7-alpine3.23@sha256:" "$dockerfile"
+require_text "FROM golang:1.26.10-alpine3.23@sha256:" "$dockerfile"
 require_text "GOTOOLCHAIN=local" "$dockerfile"
 require_text "GOFLAGS=-mod=readonly" "$dockerfile"
 require_text "github.com/caddyserver/caddy/v2 v2.11.5-0.20260711231708-b2693fb63a30" "$caddy_gomod"
@@ -71,17 +84,34 @@ if grep -Fq 'github.com/caddyserver/caddy/v2/modules/standard' "$caddy_main"; th
   echo "configured Caddy build unexpectedly imports the full standard module set" >&2
   exit 1
 fi
-# Eight stdlib advisories are fixed in go1.26.6; GOTOOLCHAIN=local makes this
+# Current stdlib advisories require go1.26.10; GOTOOLCHAIN=local makes this
 # directive the floor the compiler itself enforces. Lowering it re-opens them.
-require_text "go 1.26.7" "$caddy_gomod"
+require_text "go 1.26.10" "$caddy_gomod"
+require_text "github.com/go-jose/go-jose/v3 v3.0.6-0.20261030183946-0e502b87c7aa // indirect" "$caddy_gomod"
+require_text "github.com/go-jose/go-jose/v4 v4.1.7 // indirect" "$caddy_gomod"
+require_text '$2 == "github.com/go-jose/go-jose/v3" && $3 == "v3.0.6-0.20261030183946-0e502b87c7aa"' "$dockerfile"
+require_text '$2 == "github.com/go-jose/go-jose/v4" && $3 == "v4.1.7"' "$dockerfile"
+require_text 'COPY packaging/docker/caddy/security_test.go ./' "$dockerfile"
+require_text "RUN go test -count=1 -timeout=30s -run '^TestJWKSecurityBoundaries$' ." "$dockerfile"
 require_text "google.golang.org/grpc v1.83.2 // indirect" "$caddy_gomod"
 require_text '$2 == "google.golang.org/grpc" && $3 == "v1.83.2"' "$dockerfile"
 require_text "grpc drifted from reviewed v1.83.2" "$dockerfile"
-require_text "golang.org/x/text v0.41.0" "$caddy_gomod"
-require_text "go.opentelemetry.io/otel v1.44.0" "$caddy_gomod"
+require_text "golang.org/x/text v0.43.0" "$caddy_gomod"
+require_text "go.opentelemetry.io/otel v1.45.0" "$caddy_gomod"
 require_text "github.com/google/cel-go v0.30.0" "$caddy_gomod"
-require_text "golang.org/x/crypto v0.56.0" "$caddy_gomod"
-require_text "x/crypto drifted from reviewed v0.56.0" "$dockerfile"
+require_text "golang.org/x/crypto v0.58.0" "$caddy_gomod"
+require_text "x/crypto drifted from reviewed v0.58.0" "$dockerfile"
+require_text '"go1.26.10"' "$dockerfile"
+require_text "golang.org/x/net v0.62.0" "$caddy_gomod"
+require_text "x/net drifted from reviewed v0.62.0" "$dockerfile"
+require_text "go.opentelemetry.io/otel/sdk/log v0.21.0" "$caddy_gomod"
+require_text "OTel log SDK drifted from reviewed v0.21.0" "$dockerfile"
+require_text "go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc v0.21.0" "$caddy_gomod"
+require_text "OTel log gRPC exporter drifted from reviewed v0.21.0" "$dockerfile"
+require_text "go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.45.0" "$caddy_gomod"
+require_text "go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.45.0" "$caddy_gomod"
+require_text "go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.45.0" "$caddy_gomod"
+require_text "OTel trace exporter drifted from reviewed v1.45.0" "$dockerfile"
 require_text "github.com/klauspost/compress v1.18.7" "$caddy_gomod"
 require_text "cel-go drifted from reviewed v0.30.0" "$dockerfile"
 require_text "klauspost/compress drifted from reviewed v1.18.7" "$dockerfile"
@@ -103,6 +133,11 @@ require_text 'FROM caddy-evidence AS alpine-evidence' "$dockerfile"
 require_text 'COPY --from=runtime-patched /lib/apk/db/installed /tmp/alpine-runtime-installed' "$dockerfile"
 require_text 'COPY --from=caddy /lib/apk/db/installed /tmp/alpine-builder-installed' "$dockerfile"
 require_text 'COPY --from=caddy /etc/ssl/certs/ca-certificates.crt /tmp/alpine-ca.crt' "$dockerfile"
+require_text 'ADD --checksum=sha256:a4c5de1bf37652cd98cbe71aec209512ae0508a964961957a6c9650f795e46c4 https://dl-cdn.alpinelinux.org/alpine/v3.23/main/x86_64/ca-certificates-bundle-20261020-r0.apk /ca-bundle.apk' "$dockerfile"
+require_text 'apk --no-network del ca-certificates' "$dockerfile"
+require_text 'apk --keys-dir /usr/share/apk/keys add --no-cache --no-network /tmp/ca-bundle.apk' "$dockerfile"
+require_text "apk info -e 'ca-certificates-bundle=20261020-r0'" "$dockerfile"
+require_text 'COPY --chmod=0444 packaging/docker/alpine/ca-certificates-20261020/ca-certificates-20261020.tar.bz2 /tmp/alpine-source-cache/ca-certificates/ca-certificates-20261020.tar.bz2' "$dockerfile"
 require_text 'collect-alpine-runtime-evidence --arch "$TARGETARCH"' "$dockerfile"
 require_text 'COPY --from=alpine-evidence /alpine-evidence/ /usr/local/share/covalent/alpine/' "$dockerfile"
 require_text 'exact Alpine package database and copied CA' "$documentation"

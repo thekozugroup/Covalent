@@ -1,4 +1,10 @@
-FROM golang:1.26.7-alpine3.23@sha256:b17af760035fc2f338eed92d448a6c67f2d45438844fc6c60678fa5f99e44b57 AS sync-engine-worker
+# Alpine's noarch CA package reached the x86 mirror before the ARM index.
+# Fetch exactly the same signed bytes for both targets. ADD checks the download;
+# apk checks its signature using Alpine's bundled official keys per command.
+FROM scratch AS ca-bundle-input
+ADD --checksum=sha256:a4c5de1bf37652cd98cbe71aec209512ae0508a964961957a6c9650f795e46c4 https://dl-cdn.alpinelinux.org/alpine/v3.23/main/x86_64/ca-certificates-bundle-20261020-r0.apk /ca-bundle.apk
+
+FROM golang:1.26.10-alpine3.23@sha256:a07f231c19b03e6106cf442f02a5bcf262147e744d15b7b5e4b6d81d420c70a0 AS sync-engine-worker
 ARG TARGETARCH
 ENV CGO_ENABLED=0 \
     GOTOOLCHAIN=local \
@@ -46,11 +52,10 @@ COPY --from=sync-engine-worker /engine-notices /engine-notices
 RUN build-linux-sync-engine package \
       /engine-worker /tmp/engine-guardian.c /engine-notices /sync-engine "$TARGETARCH"
 
-# Caddy is compiled here rather than lifted out of caddy:2.11.4-alpine, whose
-# published binary is linked against go1.26.3. That toolchain accounted for ten
-# of the twelve high/critical findings the Grype gate reported, and no Caddy tag
-# fixes it: 2.11.4 is the newest x.y.z-alpine upstream publishes, so the only
-# lever left is to control the toolchain ourselves.
+# Caddy is compiled here with the reviewed toolchain and dependency overrides.
+# The original caddy:2.11.4-alpine binary used go1.26.3, which accounted for ten
+# of twelve high/critical findings in the original scan. Newer Caddy tags alone
+# still leave the JOSE v3 branch affected; pin the official security backport.
 #
 # This is not a fork. packaging/docker/caddy imports the upstream modules used
 # by the shipped Caddyfile and runtime checks, without unrelated standard
@@ -68,10 +73,19 @@ RUN build-linux-sync-engine package \
 #   - the Caddy source version and the entire module graph by
 #     packaging/docker/caddy/go.mod + go.sum, built with -mod=readonly so any
 #     drift from the committed checksums is a build failure, not a silent swap;
-#   - GOTOOLCHAIN=local, so the `go 1.26.7` directive in that go.mod is enforced
+#   - GOTOOLCHAIN=local, so the `go 1.26.10` directive in that go.mod is enforced
 #     by the image's own compiler instead of being papered over by an automatic
 #     toolchain download from the network.
-FROM golang:1.26.7-alpine3.23@sha256:b17af760035fc2f338eed92d448a6c67f2d45438844fc6c60678fa5f99e44b57 AS caddy
+FROM golang:1.26.10-alpine3.23@sha256:a07f231c19b03e6106cf442f02a5bcf262147e744d15b7b5e4b6d81d420c70a0 AS caddy
+COPY --from=ca-bundle-input /ca-bundle.apk /tmp/ca-bundle.apk
+# The old generator owns older source certificates and can regenerate an old
+# bundle during later apk operations. Caddy needs only the pre-generated file.
+# Remove the unused generator before installing the reviewed noarch bundle.
+RUN apk --no-network del ca-certificates \
+    && apk --keys-dir /usr/share/apk/keys add --no-cache --no-network /tmp/ca-bundle.apk \
+    && apk info -e 'ca-certificates-bundle=20261020-r0' \
+    && echo '5961c0a3c65459931c023e0075c09733f09aea4ca439cb85bc4a08bb4f3f568b  /etc/ssl/certs/ca-certificates.crt' | sha256sum -c - \
+    && rm /tmp/ca-bundle.apk
 ENV CGO_ENABLED=0 \
     GOTOOLCHAIN=local \
     GOFLAGS=-mod=readonly
@@ -79,6 +93,8 @@ WORKDIR /build
 COPY packaging/docker/caddy/go.mod packaging/docker/caddy/go.sum ./
 RUN go mod download
 COPY packaging/docker/caddy/main.go ./
+COPY packaging/docker/caddy/security_test.go ./
+RUN go test -count=1 -timeout=30s -run '^TestJWKSecurityBoundaries$' .
 # -trimpath keeps absolute build paths out of the binary so the two release
 # runners produce the same bytes; -s -w drops the symbol and DWARF tables, which
 # keeps the combined runtime within its reviewed image budget.
@@ -89,20 +105,34 @@ RUN go build -buildvcs=false -trimpath -ldflags "-s -w" -o /caddy.unprivileged .
 # careless `go mod tidy` fails the build here rather than reaching a scanner.
 RUN set -eu; \
     go version -m /caddy.unprivileged > /tmp/buildinfo; \
-    grep -q 'go1\.26\.[6-9]' /tmp/buildinfo || grep -q 'go1\.2[7-9]\.' /tmp/buildinfo \
-      || { echo 'caddy was linked with a toolchain older than go1.26.6' >&2; exit 1; }; \
+    awk 'NR == 1 && $NF == "go1.26.10" { found = 1 } END { exit !found }' /tmp/buildinfo \
+      || { echo 'caddy toolchain drifted from reviewed go1.26.10' >&2; exit 1; }; \
     grep -q 'github.com/caddyserver/caddy/v2[[:space:]]\+v2\.11\.5-0\.20260711231708-b2693fb63a30' /tmp/buildinfo \
       || { echo 'caddy source snapshot drifted from v2.11.5-0.20260711231708-b2693fb63a30' >&2; exit 1; }; \
+    awk '$1 == "dep" && $2 == "github.com/go-jose/go-jose/v3" && $3 == "v3.0.6-0.20261030183946-0e502b87c7aa" { found = 1 } END { exit !found }' /tmp/buildinfo \
+      || { echo 'JOSE v3 drifted from upstream RSA/JWK security backport 0e502b87c7aa' >&2; exit 1; }; \
+    awk '$1 == "dep" && $2 == "github.com/go-jose/go-jose/v4" && $3 == "v4.1.7" { found = 1 } END { exit !found }' /tmp/buildinfo \
+      || { echo 'JOSE v4 drifted from reviewed v4.1.7' >&2; exit 1; }; \
     awk '$1 == "dep" && $2 == "google.golang.org/grpc" && $3 == "v1.83.2" { found = 1 } END { exit !found }' /tmp/buildinfo \
       || { echo 'grpc drifted from reviewed v1.83.2 (GHSA-hrxh-6v49-42gf, GHSA-vp52-pcj8-j9qc, GHSA-2v4p-qf9q-27wj)' >&2; exit 1; }; \
-    grep -q 'golang.org/x/text[[:space:]]\+v0\.\(39\|[4-9][0-9]\)\.' /tmp/buildinfo \
-      || { echo 'x/text regressed below v0.39.0 (GO-2026-5970)' >&2; exit 1; }; \
-    grep -q 'go.opentelemetry.io/otel[[:space:]]\+v1\.\(4[4-9]\|[5-9][0-9]\)\.' /tmp/buildinfo \
-      || { echo 'OpenTelemetry regressed below v1.44.0 (GO-2026-5158)' >&2; exit 1; }; \
+    grep -q 'golang.org/x/text[[:space:]]\+v0\.43\.0' /tmp/buildinfo \
+      || { echo 'x/text drifted from reviewed v0.43.0 (GO-2026-5970)' >&2; exit 1; }; \
+    grep -q 'go.opentelemetry.io/otel[[:space:]]\+v1\.45\.0' /tmp/buildinfo \
+      || { echo 'OpenTelemetry drifted from reviewed v1.45.0 (GO-2026-5158)' >&2; exit 1; }; \
     grep -q 'github.com/google/cel-go[[:space:]]\+v0\.30\.0' /tmp/buildinfo \
       || { echo 'cel-go drifted from reviewed v0.30.0 (GO-2026-6094)' >&2; exit 1; }; \
-    grep -q 'golang.org/x/crypto[[:space:]]\+v0\.56\.0' /tmp/buildinfo \
-      || { echo 'x/crypto drifted from reviewed v0.56.0 (GO-2026-6354/6355)' >&2; exit 1; }; \
+    grep -q 'golang.org/x/crypto[[:space:]]\+v0\.58\.0' /tmp/buildinfo \
+      || { echo 'x/crypto drifted from reviewed v0.58.0 (GO-2026-6354/6355)' >&2; exit 1; }; \
+    awk '$1 == "dep" && $2 == "golang.org/x/net" && $3 == "v0.62.0" { found = 1 } END { exit !found }' /tmp/buildinfo \
+      || { echo 'x/net drifted from reviewed v0.62.0 (GO-2026-6612/6860/6866)' >&2; exit 1; }; \
+    awk '$1 == "dep" && $2 == "go.opentelemetry.io/otel/sdk/log" && $3 == "v0.21.0" { found = 1 } END { exit !found }' /tmp/buildinfo \
+      || { echo 'OTel log SDK drifted from reviewed v0.21.0 (GHSA-hjf4-fphr-2h65)' >&2; exit 1; }; \
+    awk '$1 == "dep" && $2 == "go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc" && $3 == "v0.21.0" { found = 1 } END { exit !found }' /tmp/buildinfo \
+      || { echo 'OTel log gRPC exporter drifted from reviewed v0.21.0 (GHSA-hjf4-fphr-2h65)' >&2; exit 1; }; \
+    for otel_module in go.opentelemetry.io/otel/exporters/otlp/otlptrace go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp; do \
+      awk -v module="$otel_module" '$1 == "dep" && $2 == module && $3 == "v1.45.0" { found = 1 } END { exit !found }' /tmp/buildinfo \
+        || { echo 'OTel trace exporter drifted from reviewed v1.45.0 (GHSA-8wmf-6v46-5gfg)' >&2; exit 1; }; \
+    done; \
     grep -q 'github.com/klauspost/compress[[:space:]]\+v1\.18\.7' /tmp/buildinfo \
       || { echo 'klauspost/compress drifted from reviewed v1.18.7 (GO-2026-5841)' >&2; exit 1; }; \
     /caddy.unprivileged version
@@ -197,17 +227,18 @@ RUN abuild-keygen -a -i -n \
     && test "$(find /home/package-builder/output/keys -type f -name '*.rsa.pub' | wc -l)" -eq 1
 
 FROM alpine:3.23@sha256:fd791d74b68913cbb027c6546007b3f0d3bc45125f797758156952bc2d6daf40 AS runtime-base
+COPY --from=ca-bundle-input /ca-bundle.apk /tmp/ca-bundle.apk
 # Alpine published the fixed OpenSSL security revision after the pinned 3.23.5
-# base image was assembled. Install only those two signed repository packages
-# at exact versions: a future repository change can fail this build, but cannot
-# silently select a different runtime. Both libraries are retained because
+# base image was assembled. Install the reviewed OpenSSL and musl security
+# packages at exact versions: a future repository change can fail this build,
+# but cannot silently select a different runtime. Both libraries are retained because
 # apk-tools and BusyBox ssl_client require them even though Covalent and Caddy
 # are statically linked and do not load OpenSSL. BusyBox ssl_client retains both.
-# Upgrading OpenSSL also upgrades its musl dependency to the repository's only
-# published revision, so musl and musl-utils are pinned together at that exact
-# revision and stay on one reviewed aports commit.
-RUN apk add --no-cache --upgrade \
-      ca-certificates-bundle=20260611-r0 \
+RUN apk --keys-dir /usr/share/apk/keys add --no-cache --no-network /tmp/ca-bundle.apk \
+    && apk info -e 'ca-certificates-bundle=20261020-r0' \
+    && echo '5961c0a3c65459931c023e0075c09733f09aea4ca439cb85bc4a08bb4f3f568b  /etc/ssl/certs/ca-certificates.crt' | sha256sum -c - \
+    && rm /tmp/ca-bundle.apk \
+    && apk add --no-cache --upgrade \
       libcrypto3=3.5.9-r0 \
       libssl3=3.5.9-r0 \
       musl=1.2.5-r24 \
@@ -279,6 +310,10 @@ COPY --from=caddy /lib/apk/db/installed /tmp/alpine-builder-installed
 COPY --from=caddy /etc/ssl/certs/ca-certificates.crt /tmp/alpine-ca.crt
 COPY --chmod=0555 scripts/collect-alpine-runtime-evidence.py /usr/local/bin/collect-alpine-runtime-evidence
 COPY packaging/docker/alpine/ /alpine-source/
+# Preserve the exact small CA source archive locally: its upstream GitLab
+# endpoint need not be reachable from a release runner. The collector still
+# requires the locked size, SHA256 and original APKBUILD SHA512.
+COPY --chmod=0444 packaging/docker/alpine/ca-certificates-20261020/ca-certificates-20261020.tar.bz2 /tmp/alpine-source-cache/ca-certificates/ca-certificates-20261020.tar.bz2
 RUN collect-alpine-runtime-evidence --arch "$TARGETARCH" \
       --lock /alpine-source/runtime-source-lock.json \
       --installed /tmp/alpine-runtime-installed \

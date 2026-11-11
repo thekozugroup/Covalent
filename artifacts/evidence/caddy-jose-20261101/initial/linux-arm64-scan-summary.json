@@ -1,0 +1,130 @@
+{
+  "target": "linux-arm64",
+  "binarySha256": "fe2bd0c9cb07f8cf1450572de9d84c6145466cfd1048efcf8c6906fd9f357f34",
+  "sbomSha256": "4232c917850747a04057c037d68533f528d9aa50eccf3bd10a00698f1ab0c70b",
+  "sbomPackageCount": 149,
+  "JOSE": {
+    "github.com/go-jose/go-jose/v3": "v3.0.6-0.20261030183946-0e502b87c7aa",
+    "github.com/go-jose/go-jose/v4": "v4.1.7"
+  },
+  "scanExit": 0,
+  "reportSha256": "f02aeb4c3221ce16547c7acb10097030a05164c8f8da15d80869577cdc4e533b",
+  "findings": {
+    "Unknown": 3
+  },
+  "database": {
+    "status": {
+      "schemaVersion": "v6.1.10",
+      "from": "https://grype.anchore.io/databases/v6/vulnerability-db_v6.1.10_2026-11-01T00:24:34Z_1793514012.tar.zst?checksum=sha256%3Ad0e1af9e6491440e1a671d0a0aafc32c5c7cb5cda787dcec3482799ef298f31c",
+      "built": "2026-11-01T06:20:12Z",
+      "path": "/private/tmp/ai-development/caddy-security-refresh-1793551697040573000-67364-0/grypedb/6/vulnerability.db",
+      "valid": true
+    },
+    "providers": {
+      "alma": {
+        "captured": "2026-11-01T00:24:39Z",
+        "input": "xxh64:d398731e6455b022"
+      },
+      "alpine": {
+        "captured": "2026-11-01T00:24:47Z",
+        "input": "xxh64:c40c8985935df81b"
+      },
+      "amazon": {
+        "captured": "2026-11-01T00:24:37Z",
+        "input": "xxh64:ee129200b14d5c8a"
+      },
+      "arch": {
+        "captured": "2026-11-01T00:24:47Z",
+        "input": "xxh64:14f6c24dd6cd12c8"
+      },
+      "bitnami": {
+        "captured": "2026-11-01T00:24:34Z",
+        "input": "xxh64:971619846357ae10"
+      },
+      "chainguard": {
+        "captured": "2026-11-01T00:24:48Z",
+        "input": "xxh64:dfbf78c7fc58a603"
+      },
+      "chainguard-libraries": {
+        "captured": "2026-11-01T00:24:50Z",
+        "input": "xxh64:db9c34dd1b7bc8d0"
+      },
+      "debian": {
+        "captured": "2026-11-01T00:24:52Z",
+        "input": "xxh64:078c82a49c8cb529"
+      },
+      "echo": {
+        "captured": "2026-11-01T00:24:41Z",
+        "input": "xxh64:1d0df98736854a48"
+      },
+      "eol": {
+        "captured": "2026-11-01T00:24:59Z",
+        "input": "xxh64:0f2164b3e62ba44b"
+      },
+      "epss": {
+        "captured": "2026-11-01T00:25:00Z",
+        "input": "xxh64:0d4c3b8d2c2e5188"
+      },
+      "fedora": {
+        "captured": "2026-11-01T00:24:40Z",
+        "input": "xxh64:28fe3d1d8ae41f9b"
+      },
+      "github": {
+        "captured": "2026-11-01T00:24:57Z",
+        "input": "xxh64:076a86d2dc5c9e83"
+      },
+      "govulndb": {
+        "captured": "2026-11-01T00:24:45Z",
+        "input": "xxh64:56e169604e12196e"
+      },
+      "hummingbird": {
+        "captured": "2026-11-01T00:27:26Z",
+        "input": "xxh64:e86abd0466410fb6"
+      },
+      "kev": {
+        "captured": "2026-11-01T00:25:06Z",
+        "input": "xxh64:cb0f4041bd51c379"
+      },
+      "mariner": {
+        "captured": "2026-11-01T00:24:56Z",
+        "input": "xxh64:003337efdc7e1888"
+      },
+      "minimos": {
+        "captured": "2026-11-01T00:24:56Z",
+        "input": "xxh64:219c30ffded7a12c"
+      },
+      "nvd": {
+        "captured": "2026-11-01T00:25:41Z",
+        "input": "xxh64:75e41eec415fdb0a"
+      },
+      "oracle": {
+        "captured": "2026-11-01T00:24:42Z",
+        "input": "xxh64:0546c2dd11a85c07"
+      },
+      "photon": {
+        "captured": "2026-11-01T00:24:37Z",
+        "input": "xxh64:8dbfd0c521fd470a"
+      },
+      "rhel": {
+        "captured": "2026-11-01T01:08:40Z",
+        "input": "xxh64:57c5e6a7f9f134ff"
+      },
+      "secureos": {
+        "captured": "2026-11-01T00:24:34Z",
+        "input": "xxh64:ac7fa7f44e8ed7dd"
+      },
+      "sles": {
+        "captured": "2026-11-01T00:26:56Z",
+        "input": "xxh64:025a1565b2cc7cdf"
+      },
+      "ubuntu": {
+        "captured": "2026-11-01T00:25:58Z",
+        "input": "xxh64:9ab4d29f0ea6275d"
+      },
+      "wolfi": {
+        "captured": "2026-11-01T00:25:02Z",
+        "input": "xxh64:d27b08e998baab8e"
+      }
+    }
+  }
+}

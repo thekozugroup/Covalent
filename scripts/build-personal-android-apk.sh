@@ -210,7 +210,7 @@ export ANDROID_HOME="$android_sdk"
 export ANDROID_SDK_ROOT="$android_sdk"
 export COVALENT_ANDROID_NDK_HOME="$android_sdk/ndk/$ndk_version"
 
-command -v go >/dev/null 2>&1 || fail "install Go 1.26.7 to build the folder sync engine"
+command -v go >/dev/null 2>&1 || fail "install Go 1.26.10 to build the folder sync engine"
 test -f "$repo_root/packaging/rclone/go.mod" || fail "restricted rclone module is missing"
 
 mkdir -p "$output_dir"

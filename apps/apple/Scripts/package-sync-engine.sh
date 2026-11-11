@@ -70,7 +70,7 @@ xcrun clang -std=c11 -Os -Wall -Wextra -Werror -arch arm64 \
   -mmacosx-version-min=15.0 "$guardian_source" -o "$guardian"
 ditto "$worker_source" "$worker"
 test "$(shasum -a 256 "$worker" | awk '{print $1}')" = \
-  d606a368fe4b83b81080aa9913d9f24b382c601e995d25f63ab80a49e2c8dee9 || {
+  f68c6ae032f8af37e4977197e581a67f45e1e67a0b22fe172e1f0ec7e5cb5d74 || {
   echo "copied sync-engine executable differs from the reviewed source build" >&2; exit 1
 }
 chmod 755 "$guardian" "$worker"

@@ -1,0 +1,38 @@
+{
+  "cwd": "/Users/michaelwong/Developer/Covalent",
+  "argv": [
+    "/Users/michaelwong/Library/Caches/AI-Development/toolchains/go1.26.10/bin/go",
+    "-C",
+    "/private/tmp/ai-development/caddy-security-refresh-1793551697040573000-67364-0/source",
+    "test",
+    "-mod=readonly",
+    "-count=1",
+    "-timeout=60s",
+    "golang.org/x/net/html"
+  ],
+  "plannedOutput": "/private/tmp/ai-development/caddy-security-refresh-1793551697040573000-67364-0/logs/html-upstream-tests.log",
+  "processes": [
+    {
+      "pid": 84236,
+      "ppid": 83958,
+      "start": "Sun Nov 1 12:04:08 2026",
+      "command": "<defunct>"
+    },
+    {
+      "pid": 84255,
+      "ppid": 84236,
+      "start": "Sun Nov 1 12:04:09 2026",
+      "command": "(compile)"
+    },
+    {
+      "pid": 84272,
+      "ppid": 84236,
+      "start": "Sun Nov 1 12:04:09 2026",
+      "command": "/private/tmp/ai-development/caddy-security-refresh-1793551697040573000-67364-0/tmp/go-build77910378/b001/html.test"
+    }
+  ],
+  "state": "exited",
+  "exit": 0,
+  "seconds": 0.854,
+  "logSha256": "e872f5a3e4dd12ae8aa0ed6f980912c4a52386a984980baab4e106a39caa04cb"
+}

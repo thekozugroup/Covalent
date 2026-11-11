@@ -51,7 +51,7 @@ dd if=/dev/zero of="$fixture/worker/covalent-rclone" \
 chmod 0555 "$fixture/worker/covalent-rclone"
 cp "$repo_root/packaging/rclone/LICENSE.rclone" "$fixture/worker/rclone-LICENSE.txt"
 printf '{"ImportPath":"example"}\n' > "$fixture/worker/go-target-deps.ndjson"
-printf 'path\tgithub.com/thekozugroup/Covalent/packaging/rclone\nbuild\tgo1.26.7\n' \
+printf 'path\tgithub.com/thekozugroup/Covalent/packaging/rclone\nbuild\tgo1.26.10\n' \
   > "$fixture/worker/go-version.txt"
 cat > "$fixture/worker/target-license-inventory.json" <<'EOF'
 {

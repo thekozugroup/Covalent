@@ -1,5 +1,15 @@
 # Alpine runtime source and notices
 
+Current October 20 follow-up: both runtime and Go builder explicitly install the
+checksum-pinned, official signed CA 20261020-r0 bundle; the old build-stage
+certificate generator is removed. The full recipe and original GitLab archive
+are hash-bound together. `architectureByTarget` is allowed only for this CA
+package and its measured apk 3.0.8 metadata (`amd64: x86_64`, `arm64: noarch`).
+All other architecture overrides retain their existing strict rules. The
+packaged-evidence lock holds regenerated review pins, not a claim that either
+complete runtime image passed. Full native image checks remain mandatory.
+
+
 Covalent's Docker image includes Alpine packages in addition to the separately
 built Rust node, Caddy and rclone worker. The image's MIT label describes
 Covalent; it does not relicense those dependencies.
@@ -7,10 +17,8 @@ Covalent; it does not relicense those dependencies.
 `packaging/docker/alpine/runtime-source-lock.json` records the exact thirteen
 installed packages, their eight source origins, architecture, version, declared
 license and base aports provenance. It applies the two pinned OpenSSL 3.5.9-r0
-updates, musl and musl-utils pinned together at 1.2.5-r24 (aports
-`fd05fc094264bce4fb76efc6c7f61ba4abfcb609`, the only revision Alpine still
-publishes, which the OpenSSL upgrade pulls in) and the three Covalent-local
-BusyBox 1.37.0-r1000 packages to the pinned Alpine 3.23.5 base. Schema 2 declares those three local packages explicitly:
+updates and the three Covalent-local BusyBox 1.37.0-r1000 packages to the pinned
+Alpine 3.23.5 base. Schema 2 declares those three local packages explicitly:
 their `installedDatabaseCommit` is null because their actual APK records omit
 `c`, and only `busybox-binsh` overrides the target architecture with `noarch`.
 The other ten package identities retain their upstream requirements.

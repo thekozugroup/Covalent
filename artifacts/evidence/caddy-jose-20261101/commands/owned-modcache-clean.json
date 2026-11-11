@@ -1,0 +1,21 @@
+{
+  "cwd": "/Users/michaelwong/Developer/Covalent",
+  "argv": [
+    "/Users/michaelwong/Library/Caches/AI-Development/toolchains/go1.26.10/bin/go",
+    "clean",
+    "-modcache"
+  ],
+  "plannedOutput": "/private/tmp/ai-development/caddy-security-refresh-1793551697040573000-67364-0/logs/owned-modcache-clean.log",
+  "processes": [
+    {
+      "pid": 85705,
+      "ppid": 85589,
+      "start": "Sun Nov 1 12:08:39 2026",
+      "command": "<defunct>"
+    }
+  ],
+  "state": "exited",
+  "exit": 0,
+  "seconds": 3.275,
+  "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

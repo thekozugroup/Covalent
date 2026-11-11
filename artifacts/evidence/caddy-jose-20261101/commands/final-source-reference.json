@@ -1,0 +1,21 @@
+{
+  "cwd": "/Users/michaelwong/Developer/Covalent",
+  "argv": [
+    "python3",
+    "-B",
+    "/private/tmp/ai-development/caddy-security-refresh-1793551697040573000-67364-0/harnesses/reference.py"
+  ],
+  "plannedOutput": "/private/tmp/ai-development/caddy-security-refresh-1793551697040573000-67364-0/logs/final-source-reference.log",
+  "processes": [
+    {
+      "pid": 83952,
+      "ppid": 83841,
+      "start": "Sun Nov 1 12:04:07 2026",
+      "command": "(python3.11)"
+    }
+  ],
+  "state": "exited",
+  "exit": 0,
+  "seconds": 1.144,
+  "logSha256": "2fa8577100f4b5e728129c55148a8756b9b3680236e5e175fb4c3a5a7013737f"
+}

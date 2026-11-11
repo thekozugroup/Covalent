@@ -101,13 +101,13 @@ if [ ! -s "$repo_root/apps/apple/Package.resolved" ]; then
 fi
 
 printf '%s\n' "Preparing the private Go toolchain..."
-go_archive="$build_dir/go1.26.7.darwin-arm64.tar.gz"
+go_archive="$build_dir/go1.26.10.darwin-arm64.tar.gz"
 curl --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 \
   --connect-timeout 15 --max-time 300 --max-filesize 67108864 \
-  --output "$go_archive" https://go.dev/dl/go1.26.7.darwin-arm64.tar.gz
+  --output "$go_archive" https://go.dev/dl/go1.26.10.darwin-arm64.tar.gz
 if [ "$(shasum -a 256 "$go_archive" | awk '{print $1}')" != \
-  020a1e8224811be75163e920bc77e0926a1390a6aeea19bdcf23f74b9d749f6d ] || \
-  [ "$(wc -c < "$go_archive" | tr -d '[:space:]')" -ne 64772572 ]; then
+  0b5183492292ada170f9b561a834863808dd02edba599e4ad0e89899330020b3 ] || \
+  [ "$(wc -c < "$go_archive" | tr -d '[:space:]')" -ne 64669745 ]; then
   fail "The private Go toolchain did not match its pinned checksum and size."
 fi
 COVALENT_GO_ARCHIVE="$go_archive"

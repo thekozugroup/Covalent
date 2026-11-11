@@ -1,0 +1,43 @@
+{
+  "owner": "Covalent Caddy security remediation; actual compiled graph and non-waived release gate",
+  "sourceRepo": "/Users/michaelwong/Developer/Covalent",
+  "scratch": "/private/tmp/ai-development/caddy-security-refresh-1793551697040573000-67364-0",
+  "estimatedPeakBytes": 8000000000,
+  "preFreeBytes": 468807593984,
+  "ownedTemporary": [
+    "tmp",
+    "logs",
+    "harnesses",
+    "source",
+    "reports",
+    "bin",
+    "gomodcache",
+    "gocache",
+    "gopath",
+    "grypedb",
+    "syftcache",
+    "reference",
+    "ca-input",
+    "runtime",
+    "initial-reports",
+    "initial-reference"
+  ],
+  "preserve": [
+    "all source/dirty work",
+    "Pi/phone/accounts/media/journals",
+    "existing complete/recovery candidates",
+    "shared Go1.26.10 and SDKs",
+    "shared Docker/VM services, containers, images and caches if present"
+  ],
+  "containers": "No new container/VM/image until separately identified and recorded",
+  "cleanup": "Retain exact code/graph/security/test receipts; go clean only owned module cache; remove owned processes/artifacts via exact CleanOS task and verify absence",
+  "approach": "Use official v3 security backport exact0e502b87 and v4.1.7 only; preserve current Caddy snapshot and other reviewed overrides unless testing proves an incompatible requirement; include x/netv0.62.0 because current scan exposed newly fixed compiled HTML advisories",
+  "dockerServerObserved": "Unavailable /var/run/docker.sock; no engine started",
+  "sharedTools": {
+    "go": "/Users/michaelwong/Library/Caches/AI-Development/toolchains/go1.26.10/bin/go",
+    "grype": "/opt/homebrew/bin/grype"
+  },
+  "scanner": "Shared grype0.117.0/syft1.51.1, current DB only in task cache; no ignore or severity changes",
+  "qualificationLimits": "Linux ELF source/scan proof; local CA provenance modeled from unchanged reviewed record only. Full native image install/checks still required; no Docker engine started.",
+  "runtimePlan": "Task-only host Caddy/HTTP backend using ephemeral loopback ports, task XDG roots. Harness records exact ports/PIDs/start before requests and cleans in finally."
+}

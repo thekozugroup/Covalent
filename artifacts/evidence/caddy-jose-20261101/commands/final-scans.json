@@ -1,0 +1,47 @@
+{
+  "cwd": "/Users/michaelwong/Developer/Covalent",
+  "argv": [
+    "python3",
+    "-B",
+    "/private/tmp/ai-development/caddy-security-refresh-1793551697040573000-67364-0/harnesses/scan.py",
+    "linux-amd64",
+    "linux-arm64"
+  ],
+  "plannedOutput": "/private/tmp/ai-development/caddy-security-refresh-1793551697040573000-67364-0/logs/final-scans.log",
+  "processes": [
+    {
+      "pid": 84188,
+      "ppid": 83960,
+      "start": "Sun Nov 1 12:04:08 2026",
+      "command": "<defunct>"
+    },
+    {
+      "pid": 84207,
+      "ppid": 84188,
+      "start": "Sun Nov 1 12:04:08 2026",
+      "command": "syft"
+    },
+    {
+      "pid": 84276,
+      "ppid": 84188,
+      "start": "Sun Nov 1 12:04:09 2026",
+      "command": "grype"
+    },
+    {
+      "pid": 84301,
+      "ppid": 84188,
+      "start": "Sun Nov 1 12:04:10 2026",
+      "command": "(syft)"
+    },
+    {
+      "pid": 84306,
+      "ppid": 84188,
+      "start": "Sun Nov 1 12:04:11 2026",
+      "command": "grype"
+    }
+  ],
+  "state": "exited",
+  "exit": 0,
+  "seconds": 3.855,
+  "logSha256": "4db7d40615fc96c865e716901caed4ebbc740c79c4bd986bc7d222213c7240e8"
+}

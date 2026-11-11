@@ -120,7 +120,7 @@ grep -Fq 'nativeStart' "$native"
 test "$(shasum -a 256 "$sync_guardian" | awk '{print $1}')" = \
   c50b5cf10a287c4c061b7891978fd2681b5c96910eb2c69c922beae349140579
 grep -Fq 'engine_commit=687d264b689b8c49a67e2e52a8a5e0caa01c04ce' "$sync_builder"
-grep -Fq "expected_go='go version go1.26.7 '" "$sync_builder"
+grep -Fq "expected_go='go version go1.26.10 '" "$sync_builder"
 grep -Fq 'expected_ndk=27.1.12297006' "$sync_builder"
 grep -Fq 'packaging/rclone' "$sync_builder"
 grep -Fq "export GOFLAGS='-buildvcs=false -mod=readonly -trimpath'" "$sync_builder"

@@ -172,7 +172,7 @@ fn validate_manifest(manifest: &PackageManifest) -> Result<(), LinuxHostError> {
         || manifest.engine.version != ENGINE_VERSION
         || manifest.engine.commit != ENGINE_COMMIT
         || manifest.engine.source_state != SOURCE_STATE
-        || manifest.engine.go_version != "go1.26.7"
+        || manifest.engine.go_version != "go1.26.10"
         || manifest.guardian.source_sha256 != GUARDIAN_SOURCE_SHA256
         || manifest.notices.license_sha256 != LICENSE_SHA256
         || manifest.notices.third_party_status != "target-texts-collected-review-required"
@@ -565,7 +565,7 @@ mod tests {
                     "version": ENGINE_VERSION,
                     "commit": ENGINE_COMMIT,
                     "sourceState": SOURCE_STATE,
-                    "goVersion": "go1.26.7",
+                    "goVersion": "go1.26.10",
                 },
                 "guardian": { "sourceSha256": GUARDIAN_SOURCE_SHA256 },
                 "notices": {

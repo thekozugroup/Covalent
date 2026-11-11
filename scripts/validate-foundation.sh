@@ -86,8 +86,8 @@ scripts/test-android-native-library-directory.py
 scripts/test-collect-android-native-link-provenance.py
 scripts/container-folder-sync-e2e.py
 scripts/test-collect-sync-engine-notices.py
-docs/licenses/sync-engine/Go-1.26.7-LICENSE.txt
-docs/licenses/sync-engine/Go-1.26.7-PATENTS.txt
+docs/licenses/sync-engine/Go-1.26.10-LICENSE.txt
+docs/licenses/sync-engine/Go-1.26.10-PATENTS.txt
 scripts/test-android-native-package.sh
 scripts/test-personal-android-apk-builder.sh
 scripts/test-android-jni-build-command.sh

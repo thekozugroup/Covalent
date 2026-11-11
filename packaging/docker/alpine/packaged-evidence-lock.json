@@ -1,29 +1,29 @@
 {
   "schema": 1,
-  "sourceLockSHA256": "f0019ee634ac4632c6c3e0e49544c5f49d189521c6e6aa4ac18790dd789414f4",
+  "sourceLockSHA256": "4eaffcec7b7ee1f01ec36267b5f731895c2a721c7c1c6a6cd0f5706b487d0a50",
   "targets": {
     "amd64": {
       "noticeBundle": {
         "path": "THIRD-PARTY-NOTICES.txt",
-        "bytes": 130550,
-        "sha256": "14e87d6eede92e6192ed3f7e18055d2cb50248d82e7c9146c2d340fcc3855d2c"
+        "bytes": 130945,
+        "sha256": "fd22d9aae5a91344b8a331fe5bf58037dc3ea499864c1360493f5a4f1ce74db0"
       },
       "sourceReadmeSHA256": "ce088c422e53653cc1f2c77feeb01e740629194499d745b4464f5f949b4a5686",
-      "sourceManifestSHA256": "101e416454f21c54e5e704c48ed6b5ae0f02aad913f30a34f3102a8f6e35baaa",
+      "sourceManifestSHA256": "03cecc5e2686fc9af5fc0adda204e06150776bcd3699a2240940879c2a1b2507",
       "sourceFiles": 156,
-      "builderInstalledDatabaseSHA256": "ee901a1bd0ac592eb270ad6ff62f09ef9205bbc076ae8c2302e3ae0fb20bd664"
+      "builderInstalledDatabaseSHA256": "42cfd3516bf53219c041785cc5319b4951484c3d1562d0e18838e81f5e1c60bd"
     },
     "arm64": {
       "noticeBundle": {
         "path": "THIRD-PARTY-NOTICES.txt",
-        "bytes": 130562,
-        "sha256": "8b82610c8b9823041f52094f6f30a786507535c7e83c3ddbbbedba6ca7882228"
+        "bytes": 130956,
+        "sha256": "c15a208bac276d95fcb38ae2ee6061a965baec6fb7b074fae9a53dd4bd81c308"
       },
       "sourceReadmeSHA256": "ce088c422e53653cc1f2c77feeb01e740629194499d745b4464f5f949b4a5686",
-      "sourceManifestSHA256": "101e416454f21c54e5e704c48ed6b5ae0f02aad913f30a34f3102a8f6e35baaa",
+      "sourceManifestSHA256": "03cecc5e2686fc9af5fc0adda204e06150776bcd3699a2240940879c2a1b2507",
       "sourceFiles": 156,
-      "builderInstalledDatabaseSHA256": "4eca637e7036de8f5e9d90689853e2bf8b9bbc7d3a5f810a7a902c6d4f9505b2"
+      "builderInstalledDatabaseSHA256": "e5a0daace4fae865d4c7525f7f6d36f0c29d48f397ad3c37ae4eeb0c1dc36f85"
     }
   },
-  "scope": "Reviewed OpenSSL 3.5.9 source/recipe checksums and unchanged license texts. musl and musl-utils move to 1.2.5-r24 (aports fd05fc094264bce4fb76efc6c7f61ba4abfcb609); the musl recipe tree, inputs and notice hashes were regenerated with the unchanged collector, whose method reproduced the prior 1.2.5-r23 records exactly. Builder identities are unchanged; final cold images require separate runtime contract validation."
+  "scope": "Expected notices and corresponding-source bytes regenerated from complete hash-verified CA 20261020 source and recipes, using locked package declarations. Builder APK database identities come from signature-checked CA upgrades and removal of the unused old generator on digest-verified Go 1.26.10 base layers. These are review pins, not final runtime acceptance: both complete images must pass independent installed-database, source, notice, payload, functional and vulnerability checks."
 }

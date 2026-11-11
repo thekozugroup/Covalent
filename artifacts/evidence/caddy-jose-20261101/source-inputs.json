@@ -1,0 +1,12 @@
+{
+  "packaging/docker/Dockerfile": "450f42ca3f1727a979a13fc645d427080c5deb596620d732e6f537f457368bb6",
+  "packaging/docker/Caddyfile": "703e7ba99c4af09d365fe77e61841ef2dcff6faaf2bae09ded7d6c8e7942d7d4",
+  "packaging/docker/caddy/go.mod": "837870e0807b2c944892e1fc10698f3ee60e924a0e1e1eb02e83f4ebc15242cf",
+  "packaging/docker/caddy/go.sum": "07a9fd7f73b22ae99e4b0571318d35daee57e8d2de7eac39da88af48480f1f82",
+  "packaging/docker/caddy/main.go": "427a8c81a8341f6d60eed09afa2248052701ca1a2c7b6e41cf15b402bff2dd78",
+  "packaging/docker/caddy/security_test.go": "6739237a049e380756f80f348175bbadb8ac1a709dd0d4d84bf237cc689a1906",
+  "scripts/check-container-contract.sh": "7c4692c21285ed32d95d1203e7a1652d4d3651b299119c9878a3ec4a101ef5e1",
+  "scripts/collect-caddy-distribution-evidence.py": "80fbde6a814da0541b05ba8f5ad357383563d122ef09dad887864afb17a0c920",
+  "scripts/verify-caddy-distribution-evidence.py": "92139a204b753c46179e0971e762bbcfb694b91b45ba0554bb38150505e92721",
+  "LICENSE": "ff9bc316792502655bcae384b8e5a4604da93385fda00552b77d85c334b94acd"
+}

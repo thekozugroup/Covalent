@@ -1,0 +1,39 @@
+{
+  "cwd": "/Users/michaelwong/Developer/Covalent",
+  "argv": [
+    "python3",
+    "-B",
+    "/private/tmp/ai-development/caddy-security-refresh-1793551697040573000-67364-0/harnesses/runtime.py"
+  ],
+  "plannedOutput": "/private/tmp/ai-development/caddy-security-refresh-1793551697040573000-67364-0/logs/final-host-tls-restart.log",
+  "processes": [
+    {
+      "pid": 84256,
+      "ppid": 83959,
+      "start": "Sun Nov 1 12:04:09 2026",
+      "command": "<defunct>"
+    },
+    {
+      "pid": 84260,
+      "ppid": 84256,
+      "start": "Sun Nov 1 12:04:09 2026",
+      "command": "/private/tmp/ai-development/caddy-security-refresh-1793551697040573000-67364-0/bin/caddy-darwin-arm64"
+    },
+    {
+      "pid": 84280,
+      "ppid": 84256,
+      "start": "Sun Nov 1 12:04:09 2026",
+      "command": "/private/tmp/ai-development/caddy-security-refresh-1793551697040573000-67364-0/bin/caddy-darwin-arm64"
+    },
+    {
+      "pid": 84285,
+      "ppid": 84256,
+      "start": "Sun Nov 1 12:04:09 2026",
+      "command": "(caddy-darwin-arm)"
+    }
+  ],
+  "state": "exited",
+  "exit": 0,
+  "seconds": 1.446,
+  "logSha256": "68f4c65a1d7842c9b1188ac1c35005aa0416f607cafc4541d490f652b65bddef"
+}

@@ -1,0 +1,18 @@
+{
+  "referenceOnly": true,
+  "target": "linux-arm64",
+  "packageCount": 949,
+  "moduleCount": 148,
+  "inventorySha256": "334a6719aeda65b69cf2deaff799e39f003451ecd435448436f5fca88f2e36c8",
+  "noticeSha256": "e0d4c4038811b7a94a803cb8d527f0ebf5b4477de8f36395eabffdc6d509a960",
+  "binarySha256": "79e23a1bc9e7ac7650418b7fa0c5963618948cb841e8c0ba019fcad6e505cf27",
+  "unclassified": [],
+  "licenseFamilyModuleCounts": {
+    "Apache-2.0": 61,
+    "BSD-2-Clause": 4,
+    "BSD-3-Clause": 56,
+    "CC0-1.0": 1,
+    "MIT": 56,
+    "MPL-2.0": 1
+  }
+}

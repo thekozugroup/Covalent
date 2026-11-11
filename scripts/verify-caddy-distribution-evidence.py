@@ -20,14 +20,14 @@ CADDY_VERSION = "v2.11.5-0.20260711231708-b2693fb63a30"
 CADDY_COMMIT = "b2693fb63a30e6d7be0972c3645e9a2c0a500e93"
 CONSUMER_RECORD = {
     "module": "covalent.local/caddy",
-    "goModSha256": "a5191a03243552503f0604e196b4292b412807142dbfbb351fb09fca5c42105c",
-    "goSumSha256": "4e5f62a6782d38008bd14336a038a7d1002eeb66ae6644e096b3d214cdc9445c",
+    "goModSha256": "837870e0807b2c944892e1fc10698f3ee60e924a0e1e1eb02e83f4ebc15242cf",
+    "goSumSha256": "07a9fd7f73b22ae99e4b0571318d35daee57e8d2de7eac39da88af48480f1f82",
     "mainGoSha256": "427a8c81a8341f6d60eed09afa2248052701ca1a2c7b6e41cf15b402bff2dd78",
     "license": "MIT",
     "licenseSha256": "ff9bc316792502655bcae384b8e5a4604da93385fda00552b77d85c334b94acd",
 }
 GO_TOOLCHAIN_RECORD = {
-    "version": "go1.26.7",
+    "version": "go1.26.10",
     "files": [
         {
             "sourcePath": "LICENSE", "bytes": 1_453,
@@ -45,31 +45,31 @@ GO_TOOLCHAIN_RECORD = {
 }
 EXPECTED_TARGET_RECORDS = {
     "linux-amd64": {
-        "packageCount": 942,
+        "packageCount": 951,
         "moduleCount": 148,
-        "inventorySha256": "0b63cfb29263a52b10ea4955883f3235eb06acd99440a10e057e5988cd63c458",
-        "noticeSha256": "942969c1df28ba3c3b1a4ca3000efcbafdfdb7ed744adcc50755a4540c1224f7",
-        "binarySha256": "3c7629687e30f40c82173cf6f1163f9e3e24a04df0a58fccd805626911af43e0"
+        "inventorySha256": "86302590d98cc732a94ec15008422747d291302b431364a62b6201f6371ff9de",
+        "noticeSha256": "e0d4c4038811b7a94a803cb8d527f0ebf5b4477de8f36395eabffdc6d509a960",
+        "binarySha256": "1449b3d1b0aafc65327906fdcaee0267aa83d5dddde53f421c42b93bedd87d9a"
     },
     "linux-arm64": {
-        "packageCount": 940,
+        "packageCount": 949,
         "moduleCount": 148,
-        "inventorySha256": "b09c6c05789e2729c739e8e447a8738724a26aa936f19f43ff249e207584b3d5",
-        "noticeSha256": "942969c1df28ba3c3b1a4ca3000efcbafdfdb7ed744adcc50755a4540c1224f7",
-        "binarySha256": "0c60398f8fcfd42fa6c6e585f0213dd975a32fa40f5790693163255e851d95a3"
+        "inventorySha256": "334a6719aeda65b69cf2deaff799e39f003451ecd435448436f5fca88f2e36c8",
+        "noticeSha256": "e0d4c4038811b7a94a803cb8d527f0ebf5b4477de8f36395eabffdc6d509a960",
+        "binarySha256": "79e23a1bc9e7ac7650418b7fa0c5963618948cb841e8c0ba019fcad6e505cf27"
     }
 }
 MYSQL_SOURCE_MEMBER_MANIFEST_SHA256 = "4a565566abcab4711cb605658718e7fa8b86c5b8d436a4b11387b6d11a607110"
 CA_RECORD = {
-    "sourceStage": "golang:1.26.7-alpine3.23",
+    "sourceStage": "golang:1.26.10-alpine3.23",
     "package": "ca-certificates-bundle",
-    "version": "20260611-r0",
+    "version": "20261020-r0",
     "origin": "ca-certificates",
     "declaredLicense": "MPL-2.0 AND MIT",
-    "aportsCommit": "6e30aafe4fa807ba70797509731f1e7d644dc8f3",
+    "aportsCommit": "ac857c298f6fd212498ce76bb87836d940cdba2d",
     "bundlePath": "/etc/ssl/certs/ca-certificates.crt",
-    "bytes": 179_359,
-    "sha256": "b8d837841b88bfaa1a0fa827cbca8e2576418dd47c9fc4bb7f1f9d89c83111b9",
+    "bytes": 178_791,
+    "sha256": "5961c0a3c65459931c023e0075c09733f09aea4ca439cb85bc4a08bb4f3f568b",
     "reviewStatus": "metadata-bound-source-review-required",
 }
 MAX_JSON = 24 * 1024 * 1024
@@ -371,7 +371,7 @@ def verify(
     ca = manifest.get("copiedCaCertificateBundle")
     expected_ca = {
         **CA_RECORD,
-        "architecture": "x86_64" if expected_target == "linux-amd64" else "aarch64",
+        "architecture": "x86_64" if expected_target == "linux-amd64" else "noarch",
     }
     if (
         ca != expected_ca
